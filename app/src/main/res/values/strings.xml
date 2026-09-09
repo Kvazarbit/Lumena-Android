@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Lumena</string>
+    <string name="accessibility_description">Lumena screen agent. Reads visible UI structure and executes only user-approved actions.</string>
+</resources>
