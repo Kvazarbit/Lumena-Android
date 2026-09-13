@@ -1,0 +1,715 @@
+diff --git a/Snapcast/build.gradle b/Snapcast/build.gradle
+index 2e8838c..54f234f 100644
+--- a/Snapcast/build.gradle
++++ b/Snapcast/build.gradle
+@@ -4,11 +4,11 @@ android {
+     compileSdk 35
+ 
+     defaultConfig {
+-        applicationId "de.badaix.snapcast"
++        applicationId "de.badaix.snapcast.gateway"
+         minSdkVersion 21
+         targetSdkVersion 35
+-        versionCode 2900
+-        versionName '0.29.0.0'
++        versionCode 2901
++        versionName '0.29.0.1-gateway'
+         multiDexEnabled true
+         vectorDrawables.useSupportLibrary = true
+         externalNativeBuild {
+diff --git a/Snapcast/src/main/AndroidManifest.xml b/Snapcast/src/main/AndroidManifest.xml
+index 039450b..0313c39 100644
+--- a/Snapcast/src/main/AndroidManifest.xml
++++ b/Snapcast/src/main/AndroidManifest.xml
+@@ -11,6 +11,7 @@
+ 
+     <uses-permission android:name="android.permission.WAKE_LOCK" />
+     <uses-permission android:name="android.permission.INTERNET" />
++    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+diff --git a/Snapcast/src/main/java/de/badaix/snapcast/BroadcastReceiver.java b/Snapcast/src/main/java/de/badaix/snapcast/BroadcastReceiver.java
+index c4253ce..04d3925 100644
+--- a/Snapcast/src/main/java/de/badaix/snapcast/BroadcastReceiver.java
++++ b/Snapcast/src/main/java/de/badaix/snapcast/BroadcastReceiver.java
+@@ -24,6 +24,7 @@ import android.os.Build;
+ import android.text.TextUtils;
+ 
+ import de.badaix.snapcast.utils.Settings;
++import de.badaix.snapcast.utils.WifiGatewayResolver;
+ 
+ /**
+  * Created by johannes on 05.05.16.
+@@ -55,9 +56,19 @@ public class BroadcastReceiver extends android.content.BroadcastReceiver {
+         i.setAction(action);
+ 
+         if (action == SnapclientService.ACTION_START) {
+-            String host = Settings.getInstance(context).getHost();
+-            int port = Settings.getInstance(context).getStreamPort();
+-            if (TextUtils.isEmpty(host))
++            Settings settings = Settings.getInstance(context);
++            String host = settings.getHost();
++            int port = settings.getStreamPort();
++            if (settings.isUseWifiGateway()) {
++                String gateway = WifiGatewayResolver.resolve(context);
++                if (!TextUtils.isEmpty(gateway)) {
++                    host = gateway;
++                    port = WifiGatewayResolver.STREAM_PORT;
++                    settings.setHost(gateway, WifiGatewayResolver.STREAM_PORT,
++                            WifiGatewayResolver.CONTROL_PORT);
++                }
++            }
++            if (TextUtils.isEmpty(host) && !settings.isUseWifiGateway())
+                 return;
+ 
+             i.putExtra(SnapclientService.EXTRA_HOST, host);
+@@ -71,4 +82,3 @@ public class BroadcastReceiver extends android.content.BroadcastReceiver {
+         }
+     }
+ }
+-
+diff --git a/Snapcast/src/main/java/de/badaix/snapcast/MainActivity.java b/Snapcast/src/main/java/de/badaix/snapcast/MainActivity.java
+index 68a8ed0..67420f1 100644
+--- a/Snapcast/src/main/java/de/badaix/snapcast/MainActivity.java
++++ b/Snapcast/src/main/java/de/badaix/snapcast/MainActivity.java
+@@ -64,6 +64,7 @@ import de.badaix.snapcast.control.json.Stream;
+ import de.badaix.snapcast.control.json.Volume;
+ import de.badaix.snapcast.utils.NsdHelper;
+ import de.badaix.snapcast.utils.Settings;
++import de.badaix.snapcast.utils.WifiGatewayResolver;
+ 
+ public class MainActivity extends AppCompatActivity implements GroupItem.GroupItemListener, RemoteControl.RemoteControlListener, SnapclientService.SnapclientListener, NsdHelper.NsdHelperListener {
+ 
+@@ -202,6 +203,7 @@ public class MainActivity extends AppCompatActivity implements GroupItem.GroupIt
+         if (id == R.id.action_settings) {
+             ServerDialogFragment serverDialogFragment = new ServerDialogFragment();
+             serverDialogFragment.setHost(Settings.getInstance(this).getHost(), Settings.getInstance(this).getStreamPort(), Settings.getInstance(this).getControlPort());
++            serverDialogFragment.setUseWifiGateway(Settings.getInstance(this).isUseWifiGateway());
+             serverDialogFragment.setAutoStart(Settings.getInstance(this).isAutostart());
+             serverDialogFragment.setListener(new ServerDialogFragment.ServerDialogListener() {
+                 @Override
+@@ -210,6 +212,16 @@ public class MainActivity extends AppCompatActivity implements GroupItem.GroupIt
+                     startRemoteControl();
+                 }
+ 
++                @Override
++                public void onUseWifiGatewayChanged(boolean useWifiGateway) {
++                    Settings.getInstance(MainActivity.this).setUseWifiGateway(useWifiGateway);
++                    if (useWifiGateway) {
++                        applyWifiGateway();
++                        if (bound)
++                            snapclientService.refreshWifiGateway();
++                    }
++                }
++
+                 @Override
+                 public void onAutoStartChanged(boolean autoStart) {
+                     Settings.getInstance(MainActivity.this).setAutostart(autoStart);
+@@ -266,7 +278,8 @@ public class MainActivity extends AppCompatActivity implements GroupItem.GroupIt
+     }
+ 
+     private void startSnapclient() {
+-        if (TextUtils.isEmpty(host))
++        applyWifiGateway();
++        if (TextUtils.isEmpty(host) && !Settings.getInstance(this).isUseWifiGateway())
+             return;
+ 
+         Intent i = new Intent(this, SnapclientService.class);
+@@ -303,6 +316,7 @@ public class MainActivity extends AppCompatActivity implements GroupItem.GroupIt
+     @Override
+     public void onResume() {
+         super.onResume();
++        applyWifiGateway();
+         startRemoteControl();
+     }
+ 
+@@ -310,7 +324,9 @@ public class MainActivity extends AppCompatActivity implements GroupItem.GroupIt
+     public void onStart() {
+         super.onStart();
+ 
+-        if (TextUtils.isEmpty(Settings.getInstance(this).getHost()))
++        if (applyWifiGateway()) {
++            // The current Wi-Fi router is now the configured Snapserver.
++        } else if (TextUtils.isEmpty(Settings.getInstance(this).getHost()))
+             NsdHelper.getInstance(this).startListening("_snapcast._tcp.", SERVICE_NAME, this);
+         else
+             setHost(Settings.getInstance(this).getHost(), Settings.getInstance(this).getStreamPort(), Settings.getInstance(this).getControlPort());
+@@ -462,12 +478,29 @@ public class MainActivity extends AppCompatActivity implements GroupItem.GroupIt
+         if (TextUtils.isEmpty(host))
+             return;
+ 
++        boolean changed = !TextUtils.equals(this.host, host) ||
++                (this.port != streamPort) || (this.controlPort != controlPort);
++        if (changed)
++            stopRemoteControl();
+         this.host = host;
+         this.port = streamPort;
+         this.controlPort = controlPort;
+         Settings.getInstance(this).setHost(host, streamPort, controlPort);
+     }
+ 
++    private boolean applyWifiGateway() {
++        Settings settings = Settings.getInstance(this);
++        if (!settings.isUseWifiGateway())
++            return false;
++
++        String gateway = WifiGatewayResolver.resolve(this);
++        if (TextUtils.isEmpty(gateway))
++            return false;
++
++        setHost(gateway, WifiGatewayResolver.STREAM_PORT, WifiGatewayResolver.CONTROL_PORT);
++        return true;
++    }
++
+     public void updateMenuItems(final boolean connected) {
+         this.runOnUiThread(new Runnable() {
+             @Override
+diff --git a/Snapcast/src/main/java/de/badaix/snapcast/ServerDialogFragment.java b/Snapcast/src/main/java/de/badaix/snapcast/ServerDialogFragment.java
+index 05b171a..b140ce7 100644
+--- a/Snapcast/src/main/java/de/badaix/snapcast/ServerDialogFragment.java
++++ b/Snapcast/src/main/java/de/badaix/snapcast/ServerDialogFragment.java
+@@ -24,6 +24,7 @@ import android.content.Context;
+ import android.content.DialogInterface;
+ import android.net.nsd.NsdServiceInfo;
+ import android.os.Bundle;
++import android.text.TextUtils;
+ import android.util.Log;
+ import android.view.LayoutInflater;
+ import android.view.View;
+@@ -32,12 +33,14 @@ import android.widget.Button;
+ import android.widget.CheckBox;
+ import android.widget.EditText;
+ import android.widget.Spinner;
++import android.widget.Toast;
+ 
+ import androidx.appcompat.app.AlertDialog;
+ import androidx.fragment.app.DialogFragment;
+ 
+ import de.badaix.snapcast.utils.NsdHelper;
+ import de.badaix.snapcast.utils.Settings;
++import de.badaix.snapcast.utils.WifiGatewayResolver;
+ 
+ /**
+  * Created by johannes on 21.02.16.
+@@ -49,12 +52,14 @@ public class ServerDialogFragment extends DialogFragment implements View.OnClick
+     private EditText editHost;
+     private EditText editStreamPort;
+     private EditText editControlPort;
++    private CheckBox checkBoxUseWifiGateway;
+     private CheckBox checkBoxAutoStart;
+     private CheckBox checkBoxResample;
+     private Spinner spinnerAudioEngine;
+     private String host = "";
+     private int streamPort = 1704;
+     private int controlPort = 1705;
++    private boolean useWifiGateway = true;
+     private boolean autoStart = false;
+     private ServerDialogListener listener = null;
+ 
+@@ -77,7 +82,14 @@ public class ServerDialogFragment extends DialogFragment implements View.OnClick
+         editHost = view.findViewById(R.id.host);
+         editStreamPort = view.findViewById(R.id.stream_port);
+         editControlPort = view.findViewById(R.id.control_port);
++        checkBoxUseWifiGateway = view.findViewById(R.id.checkBoxUseWifiGateway);
+         checkBoxAutoStart = view.findViewById(R.id.checkBoxAutoStart);
++        checkBoxUseWifiGateway.setOnCheckedChangeListener((buttonView, isChecked) -> {
++            useWifiGateway = isChecked;
++            updateGatewayMode();
++            if (isChecked && TextUtils.isEmpty(WifiGatewayResolver.resolve(getContext())))
++                Toast.makeText(getContext(), R.string.wifi_gateway_unavailable, Toast.LENGTH_SHORT).show();
++        });
+ 
+         spinnerAudioEngine = view.findViewById(R.id.audio_engine);
+         ArrayAdapter<CharSequence> adapter = ArrayAdapter.createFromResource(getContext(),
+@@ -93,7 +105,14 @@ public class ServerDialogFragment extends DialogFragment implements View.OnClick
+                 .setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
+                     @Override
+                     public void onClick(DialogInterface dialog, int id) {
+-                        // sign in the user ...
++                        useWifiGateway = checkBoxUseWifiGateway.isChecked();
++                        if (useWifiGateway) {
++                            String gateway = WifiGatewayResolver.resolve(getContext());
++                            if (!TextUtils.isEmpty(gateway))
++                                editHost.setText(gateway);
++                            editStreamPort.setText(Integer.toString(WifiGatewayResolver.STREAM_PORT));
++                            editControlPort.setText(Integer.toString(WifiGatewayResolver.CONTROL_PORT));
++                        }
+                         host = editHost.getText().toString();
+                         try {
+                             streamPort = Integer.parseInt(editStreamPort.getText().toString());
+@@ -102,6 +121,7 @@ public class ServerDialogFragment extends DialogFragment implements View.OnClick
+                             e.printStackTrace();
+                         }
+                         if (listener != null) {
++                            listener.onUseWifiGatewayChanged(useWifiGateway);
+                             listener.onHostChanged(host, streamPort, controlPort);
+                             listener.onAutoStartChanged(checkBoxAutoStart.isChecked());
+                         }
+@@ -120,6 +140,7 @@ public class ServerDialogFragment extends DialogFragment implements View.OnClick
+ 
+     @Override
+     public void onClick(View v) {
++        checkBoxUseWifiGateway.setChecked(false);
+         NsdHelper.getInstance(getContext()).startListening("_snapcast._tcp.", "Snapcast", new NsdHelper.NsdHelperListener() {
+             @Override
+             public void onResolved(NsdHelper nsdHelper, NsdServiceInfo serviceInfo) {
+@@ -152,7 +173,9 @@ public class ServerDialogFragment extends DialogFragment implements View.OnClick
+                         editHost.setText(host);
+                         editStreamPort.setText(Integer.toString(streamPort));
+                         editControlPort.setText(Integer.toString(controlPort));
++                        checkBoxUseWifiGateway.setChecked(useWifiGateway);
+                         checkBoxAutoStart.setChecked(autoStart);
++                        updateGatewayMode();
+                         for (int i = 0; i < spinnerAudioEngine.getCount(); ++i) {
+                             if (spinnerAudioEngine.getItemAtPosition(i).toString().equals(Settings.getInstance(getContext()).getAudioEngine())) {
+                                 spinnerAudioEngine.setSelection(i);
+@@ -182,10 +205,35 @@ public class ServerDialogFragment extends DialogFragment implements View.OnClick
+         update();
+     }
+ 
++    public void setUseWifiGateway(boolean useWifiGateway) {
++        this.useWifiGateway = useWifiGateway;
++        update();
++    }
++
++    private void updateGatewayMode() {
++        if ((editHost == null) || (editStreamPort == null) || (editControlPort == null) ||
++                (checkBoxUseWifiGateway == null))
++            return;
++
++        boolean automatic = checkBoxUseWifiGateway.isChecked();
++        if (automatic) {
++            String gateway = WifiGatewayResolver.resolve(getContext());
++            if (!TextUtils.isEmpty(gateway))
++                editHost.setText(gateway);
++            editStreamPort.setText(Integer.toString(WifiGatewayResolver.STREAM_PORT));
++            editControlPort.setText(Integer.toString(WifiGatewayResolver.CONTROL_PORT));
++        }
++        editHost.setEnabled(!automatic);
++        editStreamPort.setEnabled(!automatic);
++        editControlPort.setEnabled(!automatic);
++    }
++
+ 
+     public interface ServerDialogListener {
+         void onHostChanged(String host, int streamPort, int controlPort);
+ 
++        void onUseWifiGatewayChanged(boolean useWifiGateway);
++
+         void onAutoStartChanged(boolean autoStart);
+     }
+ }
+diff --git a/Snapcast/src/main/java/de/badaix/snapcast/SnapclientService.java b/Snapcast/src/main/java/de/badaix/snapcast/SnapclientService.java
+index 25fe786..923a878 100644
+--- a/Snapcast/src/main/java/de/badaix/snapcast/SnapclientService.java
++++ b/Snapcast/src/main/java/de/badaix/snapcast/SnapclientService.java
+@@ -32,12 +32,18 @@ import android.content.Intent;
+ import android.content.SharedPreferences;
+ import android.content.res.Configuration;
+ import android.media.AudioManager;
++import android.net.ConnectivityManager;
++import android.net.LinkProperties;
++import android.net.Network;
++import android.net.NetworkCapabilities;
++import android.net.NetworkRequest;
+ import android.net.wifi.WifiManager;
+ import android.os.Binder;
+ import android.os.Build;
+ import android.os.Handler;
+ import android.os.IBinder;
+ import android.os.PowerManager;
++import android.text.TextUtils;
+ import android.util.Log;
+ 
+ import androidx.core.app.NotificationCompat;
+@@ -50,6 +56,7 @@ import java.util.Map;
+ import java.util.UUID;
+ 
+ import de.badaix.snapcast.utils.Settings;
++import de.badaix.snapcast.utils.WifiGatewayResolver;
+ 
+ /**
+  * Created by johannes on 01.01.16.
+@@ -72,17 +79,25 @@ public class SnapclientService extends Service {
+     private java.lang.Process process = null;
+     private PowerManager.WakeLock wakeLock = null;
+     private WifiManager.WifiLock wifiWakeLock = null;
+-    private final Thread reader = null;
++    private Thread reader = null;
+     private boolean running = false;
++    private boolean shouldRun = false;
+     private SnapclientListener listener = null;
+     private boolean logReceived;
+     private final Handler restartHandler = new Handler();
+     private Runnable restartRunnable = null;
+     private String host = null;
+     private int port = 0;
++    private ConnectivityManager connectivityManager = null;
++    private ConnectivityManager.NetworkCallback gatewayNetworkCallback = null;
+ 
+     public boolean isRunning() {
+-        return running;
++        return running || shouldRun;
++    }
++
++    public void refreshWifiGateway() {
++        registerGatewayNetworkCallback();
++        applyWifiGateway();
+     }
+ 
+     public void setListener(SnapclientListener listener) {
+@@ -119,6 +134,19 @@ public class SnapclientService extends Service {
+         } else if (ACTION_START.equals(intent.getAction())) {
+             String host = intent.getStringExtra(EXTRA_HOST);
+             int port = intent.getIntExtra(EXTRA_PORT, 1704);
++            shouldRun = true;
++            registerGatewayNetworkCallback();
++
++            Settings settings = Settings.getInstance(this);
++            if (settings.isUseWifiGateway()) {
++                String gateway = WifiGatewayResolver.resolve(this);
++                if (!TextUtils.isEmpty(gateway)) {
++                    host = gateway;
++                    port = WifiGatewayResolver.STREAM_PORT;
++                    settings.setHost(gateway, WifiGatewayResolver.STREAM_PORT,
++                            WifiGatewayResolver.CONTROL_PORT);
++                }
++            }
+ 
+             Intent stopIntent = new Intent(this, SnapclientService.class);
+             stopIntent.setAction(ACTION_STOP);
+@@ -130,7 +158,8 @@ public class SnapclientService extends Service {
+                             .setTicker(getText(R.string.ticker_text))
+                             .setContentTitle(getText(R.string.notification_title))
+                             .setContentText(getText(R.string.notification_text))
+-                            .setContentInfo(host)
++                            .setContentInfo(TextUtils.isEmpty(host)
++                                    ? getString(R.string.waiting_for_wifi_gateway) : host)
+                             .setStyle(new NotificationCompat.BigTextStyle().bigText(getText(R.string.notification_text)))
+                             .addAction(R.drawable.ic_media_stop, getString(R.string.stop), piStop);
+ 
+@@ -155,7 +184,8 @@ public class SnapclientService extends Service {
+             final Notification notification = builder.build();
+             startForeground(123, notification);
+ 
+-            start(host, port);
++            if (!TextUtils.isEmpty(host))
++                start(host, port);
+             return START_STICKY;
+         }
+         return START_NOT_STICKY;
+@@ -179,6 +209,7 @@ public class SnapclientService extends Service {
+ 
+     private void stopService() {
+         Log.d(TAG, "stopService");
++        shouldRun = false;
+         stop();
+         stopForeground(true);
+         NotificationManager mNotificationManager =
+@@ -249,13 +280,14 @@ public class SnapclientService extends Service {
+             env.put("SAMPLE_RATE", rate);
+         if (fpb != null)
+             env.put("FRAMES_PER_BUFFER", fpb);
+-        process = pb.start();
++        final java.lang.Process startedProcess = pb.start();
++        process = startedProcess;
+ 
+-        Thread reader = new Thread(new Runnable() {
++        reader = new Thread(new Runnable() {
+             @Override
+             public void run() {
+                 BufferedReader bufferedReader = new BufferedReader(
+-                        new InputStreamReader(process.getInputStream()));
++                        new InputStreamReader(startedProcess.getInputStream()));
+                 String line;
+                 try {
+                     while ((line = bufferedReader.readLine()) != null) {
+@@ -275,7 +307,7 @@ public class SnapclientService extends Service {
+         Log.d(TAG, "start host: " + host + ", port: " + port);
+         try {
+             //https://code.google.com/p/android/issues/detail?id=22763
+-            if (running)
++            if (running || (process != null))
+                 return;
+             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
+ 
+@@ -357,15 +389,100 @@ public class SnapclientService extends Service {
+         try {
+             if (reader != null)
+                 reader.interrupt();
+-            if (process != null)
+-                process.destroy();
++            reader = null;
++            java.lang.Process oldProcess = process;
++            process = null;
++            if (oldProcess != null)
++                oldProcess.destroy();
+         } catch (Exception e) {
+             e.printStackTrace();
+         }
+     }
+ 
++    private void registerGatewayNetworkCallback() {
++        if (!Settings.getInstance(this).isUseWifiGateway() ||
++                (gatewayNetworkCallback != null))
++            return;
++
++        connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
++        if (connectivityManager == null)
++            return;
++
++        gatewayNetworkCallback = new ConnectivityManager.NetworkCallback() {
++            @Override
++            public void onAvailable(Network network) {
++                applyWifiGateway();
++            }
++
++            @Override
++            public void onLinkPropertiesChanged(Network network, LinkProperties linkProperties) {
++                applyWifiGateway();
++            }
++        };
++
++        try {
++            NetworkRequest request = new NetworkRequest.Builder()
++                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
++                    .build();
++            connectivityManager.registerNetworkCallback(request, gatewayNetworkCallback);
++        } catch (Exception e) {
++            Log.w(TAG, "Cannot monitor Wi-Fi gateway", e);
++            gatewayNetworkCallback = null;
++        }
++    }
++
++    private synchronized void applyWifiGateway() {
++        if (!shouldRun || !Settings.getInstance(this).isUseWifiGateway())
++            return;
++
++        String gateway = WifiGatewayResolver.resolve(this);
++        if (TextUtils.isEmpty(gateway))
++            return;
++
++        Settings.getInstance(this).setHost(gateway, WifiGatewayResolver.STREAM_PORT,
++                WifiGatewayResolver.CONTROL_PORT);
++        if (gateway.equals(host) && (process != null))
++            return;
++
++        Log.i(TAG, "Using Wi-Fi gateway as Snapserver: " + gateway);
++        boolean restart = process != null;
++        host = gateway;
++        port = WifiGatewayResolver.STREAM_PORT;
++
++        if (!restart) {
++            start(host, port);
++            return;
++        }
++
++        restartHandler.removeCallbacksAndMessages(null);
++        restartRunnable = null;
++        stopProcess();
++        running = false;
++        try {
++            startProcess();
++        } catch (IOException e) {
++            Log.e(TAG, "Cannot restart Snapclient for new Wi-Fi gateway", e);
++            if (listener != null)
++                listener.onError(this, e.getMessage(), e);
++        }
++    }
++
++    private void unregisterGatewayNetworkCallback() {
++        if ((connectivityManager == null) || (gatewayNetworkCallback == null))
++            return;
++        try {
++            connectivityManager.unregisterNetworkCallback(gatewayNetworkCallback);
++        } catch (Exception e) {
++            Log.w(TAG, "Cannot stop Wi-Fi gateway monitoring", e);
++        }
++        gatewayNetworkCallback = null;
++        connectivityManager = null;
++    }
++
+     private void stop() {
+         Log.d(TAG, "stop");
++        shouldRun = false;
++        unregisterGatewayNetworkCallback();
+         try {
+             stopProcess();
+             if ((wakeLock != null) && wakeLock.isHeld())
+@@ -403,7 +520,3 @@ public class SnapclientService extends Service {
+     }
+ 
+ }
+-
+-
+-
+-
+diff --git a/Snapcast/src/main/java/de/badaix/snapcast/utils/Settings.java b/Snapcast/src/main/java/de/badaix/snapcast/utils/Settings.java
+index d8664b4..115bfe6 100644
+--- a/Snapcast/src/main/java/de/badaix/snapcast/utils/Settings.java
++++ b/Snapcast/src/main/java/de/badaix/snapcast/utils/Settings.java
+@@ -123,6 +123,10 @@ public class Settings {
+         return getBoolean("autoStart", false);
+     }
+ 
++    public boolean isUseWifiGateway() {
++        return getBoolean("useWifiGateway", true);
++    }
++
+     public String getAudioEngine() {
+         return "Auto"; // getString("audioEngine", "Auto");
+     }
+@@ -135,6 +139,10 @@ public class Settings {
+         put("autoStart", autoStart);
+     }
+ 
++    public void setUseWifiGateway(boolean useWifiGateway) {
++        put("useWifiGateway", useWifiGateway);
++    }
++
+     public void setAudioEngine(String engine, boolean resample) {
+         put("audioEngine", engine);
+         put("resample", resample);
+diff --git a/Snapcast/src/main/java/de/badaix/snapcast/utils/WifiGatewayResolver.java b/Snapcast/src/main/java/de/badaix/snapcast/utils/WifiGatewayResolver.java
+new file mode 100644
+index 0000000..5df3a45
+--- /dev/null
++++ b/Snapcast/src/main/java/de/badaix/snapcast/utils/WifiGatewayResolver.java
+@@ -0,0 +1,87 @@
++/*
++ *     This file is part of snapcast
++ *
++ *     This program is free software: you can redistribute it and/or modify
++ *     it under the terms of the GNU General Public License as published by
++ *     the Free Software Foundation, either version 3 of the License, or
++ *     (at your option) any later version.
++ */
++
++package de.badaix.snapcast.utils;
++
++import android.content.Context;
++import android.net.ConnectivityManager;
++import android.net.LinkProperties;
++import android.net.Network;
++import android.net.NetworkCapabilities;
++import android.net.RouteInfo;
++import android.os.Build;
++import android.text.TextUtils;
++
++import java.net.Inet4Address;
++import java.net.InetAddress;
++
++/** Resolves the IPv4 router of the currently connected Wi-Fi network. */
++public final class WifiGatewayResolver {
++    public static final int STREAM_PORT = 1704;
++    public static final int CONTROL_PORT = 1705;
++
++    private WifiGatewayResolver() {
++    }
++
++    public static String resolve(Context context) {
++        if (context == null)
++            return null;
++
++        ConnectivityManager manager =
++                (ConnectivityManager) context.getApplicationContext()
++                        .getSystemService(Context.CONNECTIVITY_SERVICE);
++        if (manager == null)
++            return null;
++
++        // Prefer Android's active network, but also inspect all Wi-Fi networks.
++        // The latter matters when Android keeps mobile data as the default route
++        // while connected to a hotspot that has temporarily lost internet access.
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
++            String gateway = resolve(manager, manager.getActiveNetwork());
++            if (!TextUtils.isEmpty(gateway))
++                return gateway;
++        }
++
++        for (Network network : manager.getAllNetworks()) {
++            String gateway = resolve(manager, network);
++            if (!TextUtils.isEmpty(gateway))
++                return gateway;
++        }
++        return null;
++    }
++
++    private static String resolve(ConnectivityManager manager, Network network) {
++        if (network == null)
++            return null;
++
++        NetworkCapabilities capabilities = manager.getNetworkCapabilities(network);
++        if ((capabilities == null) ||
++                !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI))
++            return null;
++
++        LinkProperties properties = manager.getLinkProperties(network);
++        if (properties == null)
++            return null;
++
++        // A default IPv4 route is the hotspot/router address we need.
++        for (RouteInfo route : properties.getRoutes()) {
++            InetAddress gateway = route.getGateway();
++            if (route.isDefaultRoute() && (gateway instanceof Inet4Address))
++                return gateway.getHostAddress();
++        }
++
++        // Defensive fallback for vendor-specific route tables.
++        for (RouteInfo route : properties.getRoutes()) {
++            InetAddress gateway = route.getGateway();
++            if (gateway instanceof Inet4Address)
++                return gateway.getHostAddress();
++        }
++        return null;
++    }
++}
+diff --git a/Snapcast/src/main/res/layout/dialog_server.xml b/Snapcast/src/main/res/layout/dialog_server.xml
+index 19e3d41..da9b2d0 100644
+--- a/Snapcast/src/main/res/layout/dialog_server.xml
++++ b/Snapcast/src/main/res/layout/dialog_server.xml
+@@ -121,6 +121,16 @@
+             android:visibility="gone" />
+ 
+ 
++        <CheckBox
++            android:id="@+id/checkBoxUseWifiGateway"
++            android:layout_width="match_parent"
++            android:layout_height="wrap_content"
++            android:layout_marginBottom="3dp"
++            android:layout_marginTop="3dp"
++            android:checked="true"
++            android:text="@string/use_wifi_gateway"
++            android:textAppearance="?android:attr/textAppearanceMedium" />
++
+         <CheckBox
+             android:id="@+id/checkBoxAutoStart"
+             android:layout_width="match_parent"
+@@ -139,4 +149,4 @@
+         android:layout_marginTop="5dip"
+         android:text="@string/action_scan" />
+ 
+-</LinearLayout>
+\ No newline at end of file
++</LinearLayout>
+diff --git a/Snapcast/src/main/res/values/strings.xml b/Snapcast/src/main/res/values/strings.xml
+index e148dcd..8f92533 100644
+--- a/Snapcast/src/main/res/values/strings.xml
++++ b/Snapcast/src/main/res/values/strings.xml
+@@ -1,5 +1,5 @@
+ <resources>
+-    <string name="app_name">Snapcast</string>
++    <string name="app_name">Snapdroid Gateway</string>
+     <string name="ticker_text">Snapclient started</string>
+     <string name="notification_title">Snapclient</string>
+     <string name="notification_text">Snapclient is running…</string>
+@@ -50,6 +50,8 @@
+     <string name="audio_engine">audio engine</string>
+     <string name="resample_audio">resample audio stream</string>
+     <string name="auto_start">Auto start Snapclient</string>
++    <string name="use_wifi_gateway">Use current Wi-Fi gateway automatically (ports 1704/1705)</string>
++    <string name="wifi_gateway_unavailable">Connect to the server phone hotspot first</string>
++    <string name="waiting_for_wifi_gateway">Waiting for Wi-Fi gateway</string>
+     <string name="connect">Connect</string>
+ </resources>
+-
