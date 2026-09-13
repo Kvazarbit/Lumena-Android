@@ -1,0 +1,67 @@
+name: Build Snapdroid Gateway
+
+on:
+  push:
+    branches:
+      - build/snapdroid-gateway
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout build files
+        uses: actions/checkout@v4
+
+      - name: Checkout upstream Snapdroid
+        run: git clone --branch develop --recurse-submodules https://github.com/snapcast/snapdroid.git snapdroid
+
+      - name: Apply Wi-Fi gateway changes
+        run: |
+          cd snapdroid
+          git apply --check ../snapdroid-gateway.patch
+          git apply ../snapdroid-gateway.patch
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build tools
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;27.0.12077973"
+
+      - name: Download native dependencies
+        working-directory: snapdroid
+        run: |
+          mkdir -p Snapcast/libs
+          base=https://github.com/badaix/snapcast-deps/releases/download/v0.29.0
+          for file in             boost-1.85.0.aar             flac-1.4.2.aar             oboe-1.9.0.aar             ogg-1.3.5.aar             opus-1.1.2.aar             soxr-0.1.3.aar             tremor-1.0.1.aar             vorbis-1.3.7.aar
+          do
+            curl --fail --location --retry 3 "$base/$file" --output "Snapcast/libs/$file"
+          done
+
+      - name: Build installable debug APK
+        working-directory: snapdroid
+        env:
+          GITHUB_USER: Kvazarbit
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          chmod +x gradlew
+          ./gradlew :Snapcast:assembleDebug --stacktrace --no-daemon
+
+      - name: Archive APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Snapdroid-Gateway-debug
+          path: snapdroid/Snapcast/build/outputs/apk/debug/Snapcast-debug.apk
+          if-no-files-found: error
+          retention-days: 14
