@@ -15,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.LumenaAccessibilityService
+import com.lumena.android.agent.local.AgentPanel
 
 class MainActivity : ComponentActivity() {
 
@@ -87,7 +88,7 @@ class MainActivity : ComponentActivity() {
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     Text("Lumena Android", style = MaterialTheme.typography.headlineMedium)
-                    Text("Screen Agent v0.2 — accessibility diagnostics + transparent control")
+                    Text("Screen Agent v0.3 — accessibility + local Termux/Python tools")
 
                     Text(
                         if (enabled || LumenaAccessibilityService.instance != null)
@@ -135,6 +136,8 @@ class MainActivity : ComponentActivity() {
 
                     Text(snapshotText, style = MaterialTheme.typography.bodySmall)
 
+                    AgentPanel()
+
                     Spacer(Modifier.height(24.dp))
                     Text(
                         "If Lumena is greyed out in Accessibility, open Lumena app settings and use the three-dot menu for 'Allow restricted settings' when your Android firmware provides that option.",
@@ -142,7 +145,7 @@ class MainActivity : ComponentActivity() {
                     )
 
                     Text(
-                        "Lumena never silently performs sensitive actions. Actions that can alter another app require explicit approval.",
+                        "Lumena never silently performs sensitive actions. Actions that can alter another app or execute code require an explicit gate.",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
