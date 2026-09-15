@@ -19,6 +19,10 @@ jobs:
         with:
           gradle-version: '8.9'
       - uses: android-actions/setup-android@v3
+      - name: Validate Termux bridge
+        run: |
+          python -m py_compile termux/bridge.py
+          bash -n termux/install_bridge.sh
       - name: Install SDK
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
       - name: Build debug APK
