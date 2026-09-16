@@ -1,5 +1,7 @@
 package com.lumena.android.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,9 +37,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.local.TermuxBridgeClient
+import com.lumena.android.chat.ChatBackend
+import com.lumena.android.chat.EmbeddedLlamaBackend
+import com.lumena.android.chat.EmbeddedModelFile
+import com.lumena.android.chat.EmbeddedModelStore
+import com.lumena.android.chat.OllamaChatBackend
+import com.lumena.android.chat.humanFileSize
 import com.lumena.android.ollama.LocalWorkflowAgent
 import com.lumena.android.ollama.OllamaClient
 import com.lumena.android.ollama.OllamaMessage
@@ -46,6 +55,9 @@ import com.lumena.android.ollama.WorkflowOutcome
 import com.lumena.android.ollama.WorkflowRunner
 import kotlinx.coroutines.launch
 
+private const val PROVIDER_EMBEDDED = "embedded"
+private const val PROVIDER_OLLAMA = "ollama"
+
 private data class ChatBubble(
     val role: String,
     val text: String
@@ -53,57 +65,117 @@ private data class ChatBubble(
 
 @Composable
 fun WorkflowChatScreen() {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    val modelStore = remember { EmbeddedModelStore(context.applicationContext) }
+
     val bubbles = remember {
         mutableStateListOf(
             ChatBubble(
                 "assistant",
-                "Lumena local agent is ready. Connect Ollama, choose a model, then talk normally. I can also use approved Termux/Python/Git tools."
+                "Lumena workspace is ready. I can collaborate on projects through approved files, Git and Python tools. Choose an embedded GGUF or an Ollama model and talk normally."
             )
         )
     }
 
     var input by rememberSaveable { mutableStateOf("") }
+    var provider by rememberSaveable { mutableStateOf(PROVIDER_EMBEDDED) }
     var ollamaUrl by rememberSaveable { mutableStateOf("http://127.0.0.1:11434") }
     var bridgeUrl by rememberSaveable { mutableStateOf("http://127.0.0.1:8765") }
     var bridgeToken by rememberSaveable { mutableStateOf("") }
-    var selectedModel by rememberSaveable { mutableStateOf("") }
-    var models by remember { mutableStateOf<List<String>>(emptyList()) }
-    var status by remember { mutableStateOf("Ollama not checked") }
+    var selectedOllamaModel by rememberSaveable { mutableStateOf("") }
+    var selectedEmbeddedPath by rememberSaveable { mutableStateOf("") }
+
+    var ollamaModels by remember { mutableStateOf<List<String>>(emptyList()) }
+    var embeddedModels by remember { mutableStateOf<List<EmbeddedModelFile>>(emptyList()) }
+    var ollamaStatus by remember { mutableStateOf("Ollama: checking…") }
+    var embeddedStatus by remember { mutableStateOf("Embedded: scanning…") }
     var busy by remember { mutableStateOf(false) }
+    var importing by remember { mutableStateOf(false) }
     var showSettings by rememberSaveable { mutableStateOf(true) }
     var pending by remember { mutableStateOf<PendingWorkflowTool?>(null) }
     var history by remember {
-        mutableStateOf(
-            listOf(OllamaMessage("system", LocalWorkflowAgent.systemPrompt))
-        )
+        mutableStateOf(listOf(OllamaMessage("system", LocalWorkflowAgent.systemPrompt)))
     }
 
     fun bridgeOrNull(): TermuxBridgeClient? = bridgeToken
         .takeIf { it.isNotBlank() }
         ?.let { TermuxBridgeClient(bridgeUrl, it) }
 
-    fun refreshModels() {
-        busy = true
-        scope.launch {
-            val result = try {
-                OllamaClient(ollamaUrl).listModels()
-            } catch (t: Throwable) {
-                Result.failure(t)
-            }
-            result.onSuccess { found ->
-                models = found
-                if (selectedModel.isBlank() || selectedModel !in found) {
-                    selectedModel = found.firstOrNull().orEmpty()
-                }
-                status = if (found.isEmpty()) "Ollama online · no local models" else "Ollama online · ${found.size} model(s)"
-            }.onFailure {
-                models = emptyList()
-                status = "Ollama offline · ${it.message ?: it::class.simpleName}"
-            }
-            busy = false
+    suspend fun scanEmbeddedModels() {
+        val found = modelStore.listModels()
+        embeddedModels = found
+        if (selectedEmbeddedPath.isBlank() || found.none { it.path == selectedEmbeddedPath }) {
+            selectedEmbeddedPath = found.firstOrNull()?.path.orEmpty()
         }
+        embeddedStatus = if (found.isEmpty()) {
+            "Embedded: no imported GGUF"
+        } else {
+            "Embedded: ${found.size} model(s)"
+        }
+    }
+
+    suspend fun scanOllamaModels() {
+        val result = try {
+            OllamaClient(ollamaUrl).listModels()
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
+        result.onSuccess { found ->
+            ollamaModels = found
+            if (selectedOllamaModel.isBlank() || selectedOllamaModel !in found) {
+                selectedOllamaModel = found.firstOrNull().orEmpty()
+            }
+            ollamaStatus = if (found.isEmpty()) {
+                "Ollama: online · no models"
+            } else {
+                "Ollama: online · ${found.size} model(s)"
+            }
+            if (embeddedModels.isEmpty() && found.isNotEmpty() && selectedEmbeddedPath.isBlank()) {
+                provider = PROVIDER_OLLAMA
+            }
+        }.onFailure {
+            ollamaModels = emptyList()
+            ollamaStatus = "Ollama: offline · ${it.message ?: it::class.simpleName}"
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            importing = true
+            scope.launch {
+                modelStore.importModel(uri)
+                    .onSuccess { imported ->
+                        scanEmbeddedModels()
+                        selectedEmbeddedPath = imported.path
+                        provider = PROVIDER_EMBEDDED
+                        bubbles += ChatBubble(
+                            "status",
+                            "✓ Imported ${imported.name} (${imported.sizeBytes.humanFileSize()}) for embedded llama.cpp"
+                        )
+                    }
+                    .onFailure {
+                        bubbles += ChatBubble("error", "Model import failed: ${it.message ?: it}")
+                    }
+                importing = false
+            }
+        }
+    }
+
+    fun selectedEmbedded(): EmbeddedModelFile? =
+        embeddedModels.firstOrNull { it.path == selectedEmbeddedPath }
+
+    fun currentBackend(): ChatBackend? = when (provider) {
+        PROVIDER_EMBEDDED -> selectedEmbedded()?.let { model ->
+            EmbeddedLlamaBackend(context.applicationContext, model.path, model.name)
+        }
+        PROVIDER_OLLAMA -> selectedOllamaModel.takeIf { it.isNotBlank() }?.let { model ->
+            OllamaChatBackend(OllamaClient(ollamaUrl), model)
+        }
+        else -> null
     }
 
     fun applyOutcome(outcome: WorkflowOutcome) {
@@ -119,17 +191,28 @@ fun WorkflowChatScreen() {
                     "Approval required: ${outcome.pending.plan.request.tool} · ${outcome.pending.plan.reason}"
                 )
             }
-            is WorkflowOutcome.Failed -> {
-                bubbles += ChatBubble("error", outcome.message)
-            }
+            is WorkflowOutcome.Failed -> bubbles += ChatBubble("error", outcome.message)
         }
     }
 
+    fun runnerFor(backend: ChatBackend): WorkflowRunner = WorkflowRunner(
+        backend = backend,
+        bridge = bridgeOrNull(),
+        onEvent = { event -> bubbles += ChatBubble("status", event) }
+    )
+
     fun send() {
         val text = input.trim()
-        if (text.isBlank() || busy) return
-        if (selectedModel.isBlank()) {
-            bubbles += ChatBubble("error", "No Ollama model selected. Open Local model settings and refresh models.")
+        if (text.isBlank() || busy || importing) return
+        val backend = currentBackend()
+        if (backend == null) {
+            bubbles += ChatBubble(
+                "error",
+                if (provider == PROVIDER_EMBEDDED)
+                    "No embedded GGUF selected. Import a GGUF model or switch to Ollama."
+                else
+                    "No Ollama model selected. Start Ollama or switch to Embedded."
+            )
             return
         }
 
@@ -141,16 +224,25 @@ fun WorkflowChatScreen() {
 
         scope.launch {
             val outcome = runCatching {
-                val ollama = OllamaClient(ollamaUrl)
-                WorkflowRunner(ollama, bridgeOrNull(), selectedModel).run(turnHistory)
+                runnerFor(backend).run(turnHistory)
             }.getOrElse { WorkflowOutcome.Failed(it.message ?: it.toString()) }
             applyOutcome(outcome)
             busy = false
         }
     }
 
+    LaunchedEffect(Unit) {
+        scanEmbeddedModels()
+        scanOllamaModels()
+    }
+
     LaunchedEffect(bubbles.size) {
         if (bubbles.isNotEmpty()) listState.animateScrollToItem(bubbles.lastIndex)
+    }
+
+    val activeModelLabel = when (provider) {
+        PROVIDER_EMBEDDED -> selectedEmbedded()?.let { "Embedded · ${it.name}" } ?: embeddedStatus
+        else -> selectedOllamaModel.takeIf { it.isNotBlank() }?.let { "Ollama · $it" } ?: ollamaStatus
     }
 
     Column(
@@ -165,16 +257,16 @@ fun WorkflowChatScreen() {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text("Lumena", style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    if (selectedModel.isBlank()) status else "$status · $selectedModel",
+                    activeModelLabel,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             TextButton(onClick = { showSettings = !showSettings }) {
-                Text(if (showSettings) "Hide setup" else "Local model")
+                Text(if (showSettings) "Hide setup" else "Models")
             }
         }
 
@@ -187,13 +279,45 @@ fun WorkflowChatScreen() {
             ) {
                 Column(
                     modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(9.dp)
                 ) {
-                    Text("Local Ollama sidecar", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Ollama stays on this phone at 127.0.0.1. Lumena never connects this provider to Wi-Fi addresses.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                    Text("Model engine", style = MaterialTheme.typography.titleMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (provider == PROVIDER_EMBEDDED) {
+                            Button(onClick = {}) { Text("Embedded llama.cpp") }
+                            OutlinedButton(onClick = { provider = PROVIDER_OLLAMA }) { Text("Ollama") }
+                        } else {
+                            OutlinedButton(onClick = { provider = PROVIDER_EMBEDDED }) { Text("Embedded llama.cpp") }
+                            Button(onClick = { provider = PROVIDER_OLLAMA }) { Text("Ollama") }
+                        }
+                    }
+
+                    Text(embeddedStatus, style = MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            enabled = !importing && !busy,
+                            onClick = { importLauncher.launch(arrayOf("*/*")) }
+                        ) {
+                            Text(if (importing) "Importing…" else "Import GGUF")
+                        }
+                        if (embeddedModels.size > 1) {
+                            TextButton(onClick = {
+                                val current = embeddedModels.indexOfFirst { it.path == selectedEmbeddedPath }
+                                    .coerceAtLeast(0)
+                                selectedEmbeddedPath = embeddedModels[(current + 1) % embeddedModels.size].path
+                                provider = PROVIDER_EMBEDDED
+                            }) { Text("Next embedded") }
+                        }
+                    }
+                    selectedEmbedded()?.let { model ->
+                        Text(
+                            "${model.name} · ${model.sizeBytes.humanFileSize()}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+
+                    HorizontalDivider()
+                    Text(ollamaStatus, style = MaterialTheme.typography.bodySmall)
                     OutlinedTextField(
                         value = ollamaUrl,
                         onValueChange = { ollamaUrl = it },
@@ -202,34 +326,31 @@ fun WorkflowChatScreen() {
                         modifier = Modifier.fillMaxWidth()
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(enabled = !busy, onClick = { refreshModels() }) {
-                            Text("Refresh models")
-                        }
-                        if (models.isNotEmpty()) {
+                        OutlinedButton(enabled = !busy, onClick = {
+                            scope.launch { scanOllamaModels() }
+                        }) { Text("Refresh Ollama") }
+                        if (ollamaModels.size > 1) {
                             TextButton(onClick = {
-                                val current = models.indexOf(selectedModel).coerceAtLeast(0)
-                                selectedModel = models[(current + 1) % models.size]
-                            }) {
-                                Text("Next model")
-                            }
+                                val current = ollamaModels.indexOf(selectedOllamaModel).coerceAtLeast(0)
+                                selectedOllamaModel = ollamaModels[(current + 1) % ollamaModels.size]
+                                provider = PROVIDER_OLLAMA
+                            }) { Text("Next Ollama") }
                         }
                     }
-                    OutlinedTextField(
-                        value = selectedModel,
-                        onValueChange = { selectedModel = it },
-                        label = { Text("Model") },
-                        supportingText = {
-                            if (models.isNotEmpty()) Text(models.joinToString(" · "))
-                        },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    if (selectedOllamaModel.isNotBlank()) {
+                        Text("Selected: $selectedOllamaModel", style = MaterialTheme.typography.bodySmall)
+                    }
+
                     HorizontalDivider()
-                    Text("Termux tools", style = MaterialTheme.typography.titleSmall)
+                    Text("Workspace tools", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "Read-only inspection can run automatically. File writes, project creation, Git changes and Python execution always ask before running.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                     OutlinedTextField(
                         value = bridgeUrl,
                         onValueChange = { bridgeUrl = it },
-                        label = { Text("Bridge URL") },
+                        label = { Text("Termux bridge URL") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -241,6 +362,18 @@ fun WorkflowChatScreen() {
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TextButton(onClick = { input = "Покажи структуру workspace і коротко поясни, над якими проєктами ми можемо працювати." }) {
+                            Text("Workspace")
+                        }
+                        TextButton(onClick = { input = "Створи новий Python-проєкт. Спочатку запропонуй коротку назву та структуру, потім створи його через project.create." }) {
+                            Text("New project")
+                        }
+                        TextButton(onClick = { input = "Перевір git status активного проєкту і скажи, що варто зробити далі." }) {
+                            Text("Git")
+                        }
+                    }
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -254,9 +387,7 @@ fun WorkflowChatScreen() {
                 .padding(horizontal = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(bubbles) { bubble ->
-                MessageBubble(bubble)
-            }
+            items(bubbles) { bubble -> MessageBubble(bubble) }
             if (busy) {
                 item {
                     Text(
@@ -281,10 +412,10 @@ fun WorkflowChatScreen() {
                 onValueChange = { input = it },
                 label = { Text("Message Lumena") },
                 minLines = 1,
-                maxLines = 4,
+                maxLines = 5,
                 modifier = Modifier.weight(1f)
             )
-            Button(enabled = !busy && input.isNotBlank(), onClick = { send() }) {
+            Button(enabled = !busy && !importing && input.isNotBlank(), onClick = { send() }) {
                 Text("Send")
             }
         }
@@ -293,7 +424,7 @@ fun WorkflowChatScreen() {
     pending?.let { requested ->
         AlertDialog(
             onDismissRequest = { pending = null },
-            title = { Text("Allow local action?") },
+            title = { Text("Allow workspace action?") },
             text = {
                 Text(
                     "${requested.plan.reason}\n\nTool: ${requested.plan.request.tool}\nArgs: ${requested.plan.request.args}"
@@ -301,12 +432,17 @@ fun WorkflowChatScreen() {
             },
             confirmButton = {
                 TextButton(onClick = {
+                    val backend = currentBackend()
+                    if (backend == null) {
+                        pending = null
+                        bubbles += ChatBubble("error", "The selected model is no longer available.")
+                        return@TextButton
+                    }
                     pending = null
                     busy = true
                     scope.launch {
                         val outcome = runCatching {
-                            val ollama = OllamaClient(ollamaUrl)
-                            WorkflowRunner(ollama, bridgeOrNull(), selectedModel).approve(requested)
+                            runnerFor(backend).approve(requested)
                         }.getOrElse { WorkflowOutcome.Failed(it.message ?: it.toString()) }
                         applyOutcome(outcome)
                         busy = false
