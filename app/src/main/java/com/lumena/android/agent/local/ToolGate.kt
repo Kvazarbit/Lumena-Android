@@ -3,6 +3,7 @@ package com.lumena.android.agent.local
 object ToolGate {
     private val readOnlyTools = setOf(
         "health",
+        "workspace.list",
         "file.read",
         "git.status",
         "git.diff",
@@ -10,13 +11,18 @@ object ToolGate {
         "ollama.status"
     )
 
-    private val executableTools = setOf(
+    private val mutatingTools = setOf(
+        "project.create",
+        "dir.create",
+        "file.write",
+        "git.add",
+        "git.commit",
         "python.run",
         "ollama.start",
         "ollama.pull"
     )
 
-    private val knownTools = readOnlyTools + executableTools
+    private val knownTools = readOnlyTools + mutatingTools
 
     fun plan(decision: PlannerDecision): PlannedTool {
         val known = decision.request.tool in knownTools
