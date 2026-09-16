@@ -18,7 +18,8 @@ sealed interface WorkflowOutcome {
 
 class WorkflowRunner(
     private val backend: ChatBackend,
-    private val bridge: TermuxBridgeClient?
+    private val bridge: TermuxBridgeClient?,
+    private val onEvent: (String) -> Unit = {}
 ) {
     suspend fun run(history: List<OllamaMessage>, maxSteps: Int = 6): WorkflowOutcome {
         var current = history
@@ -49,7 +50,13 @@ class WorkflowRunner(
                     }
                     val localBridge = bridge
                         ?: return WorkflowOutcome.Failed("Bridge token is required for ${plan.request.tool}")
+
+                    onEvent("Running ${plan.request.tool}…")
                     val result = localBridge.execute(plan.request)
+                    onEvent(
+                        if (result.ok) "✓ ${plan.request.tool} completed"
+                        else "✕ ${plan.request.tool} failed${result.error?.let { ": $it" } ?: ""}"
+                    )
                     current = current +
                         OllamaMessage("assistant", parsed.raw) +
                         LocalWorkflowAgent.toolResultMessage(
@@ -69,7 +76,12 @@ class WorkflowRunner(
     suspend fun approve(pending: PendingWorkflowTool): WorkflowOutcome {
         val localBridge = bridge
             ?: return WorkflowOutcome.Failed("Bridge token is required for ${pending.plan.request.tool}")
+        onEvent("Running ${pending.plan.request.tool}…")
         val result = localBridge.execute(pending.plan.request)
+        onEvent(
+            if (result.ok) "✓ ${pending.plan.request.tool} completed"
+            else "✕ ${pending.plan.request.tool} failed${result.error?.let { ": $it" } ?: ""}"
+        )
         val next = pending.history + LocalWorkflowAgent.toolResultMessage(
             tool = pending.plan.request.tool,
             ok = result.ok,
