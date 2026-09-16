@@ -20,17 +20,21 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.lumena.android.settings.LumenaPreferences
 import kotlinx.coroutines.launch
 
 @Composable
 fun AgentPanel() {
     val planner = remember { RulePlanner() }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val initial = remember { LumenaPreferences.load(context) }
 
-    var bridgeUrl by rememberSaveable { mutableStateOf("http://127.0.0.1:8765") }
-    var token by rememberSaveable { mutableStateOf("") }
+    var bridgeUrl by rememberSaveable { mutableStateOf(initial.bridgeUrl) }
+    var token by rememberSaveable { mutableStateOf(initial.bridgeToken) }
     var instruction by rememberSaveable { mutableStateOf("health") }
     var output by remember { mutableStateOf("Agent idle") }
     var busy by remember { mutableStateOf(false) }
@@ -58,20 +62,26 @@ fun AgentPanel() {
         HorizontalDivider()
         Text("Local Agent", style = MaterialTheme.typography.titleLarge)
         Text(
-            "Termux/Python bridge v0.3. Read-only tools run directly; Python execution asks for approval.",
+            "Termux/Python bridge v0.7. Connection settings are shared automatically across Companion, Local and Tools.",
             style = MaterialTheme.typography.bodySmall
         )
 
         OutlinedTextField(
             value = bridgeUrl,
-            onValueChange = { bridgeUrl = it },
+            onValueChange = {
+                bridgeUrl = it
+                LumenaPreferences.saveBridgeUrl(context, it)
+            },
             label = { Text("Bridge URL") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
         OutlinedTextField(
             value = token,
-            onValueChange = { token = it },
+            onValueChange = {
+                token = it
+                LumenaPreferences.saveBridgeToken(context, it)
+            },
             label = { Text("Bridge token") },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
@@ -100,7 +110,7 @@ fun AgentPanel() {
                 onClick = {
                     val decision = planner.plan(instruction)
                     if (decision == null) {
-                        output = "No local rule matched. v0.3 accepts health/read/git/python commands; a local LLM planner is the next layer."
+                        output = "No local rule matched. The deterministic agent core is available; the LLM AgentController is the next layer."
                     } else {
                         val plan = ToolGate.plan(decision)
                         when {
