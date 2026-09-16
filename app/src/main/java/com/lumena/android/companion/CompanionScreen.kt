@@ -1,6 +1,5 @@
 package com.lumena.android.companion
 
-import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
@@ -35,10 +34,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.LumenaAccessibilityService
-import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.TermuxBridgeClient
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
+import com.lumena.android.settings.LumenaPreferences
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -46,12 +45,10 @@ import kotlinx.coroutines.launch
 fun CompanionScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val prefs = remember { context.getSharedPreferences("lumena_companion", Context.MODE_PRIVATE) }
+    val initial = remember { LumenaPreferences.load(context) }
 
-    var bridgeUrl by rememberSaveable {
-        mutableStateOf(prefs.getString("bridge_url", "http://127.0.0.1:8765") ?: "http://127.0.0.1:8765")
-    }
-    var token by rememberSaveable { mutableStateOf(prefs.getString("bridge_token", "") ?: "") }
+    var bridgeUrl by rememberSaveable { mutableStateOf(initial.bridgeUrl) }
+    var token by rememberSaveable { mutableStateOf(initial.bridgeToken) }
     var detected by remember { mutableStateOf<CompanionCommand?>(null) }
     var handledFingerprint by remember { mutableStateOf<String?>(null) }
     var lastResult by remember { mutableStateOf("") }
@@ -59,7 +56,8 @@ fun CompanionScreen() {
     var busy by remember { mutableStateOf(false) }
 
     fun persistConnection() {
-        prefs.edit().putString("bridge_url", bridgeUrl).putString("bridge_token", token).apply()
+        LumenaPreferences.saveBridgeUrl(context, bridgeUrl)
+        LumenaPreferences.saveBridgeToken(context, token)
     }
 
     fun refreshCommand(force: Boolean = false) {
@@ -173,16 +171,26 @@ fun CompanionScreen() {
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("2 · Local bridge", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Bridge settings are shared automatically with Local and Tools.",
+                    style = MaterialTheme.typography.bodySmall
+                )
                 OutlinedTextField(
                     value = bridgeUrl,
-                    onValueChange = { bridgeUrl = it },
+                    onValueChange = {
+                        bridgeUrl = it
+                        LumenaPreferences.saveBridgeUrl(context, it)
+                    },
                     label = { Text("Bridge URL") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
                     value = token,
-                    onValueChange = { token = it },
+                    onValueChange = {
+                        token = it
+                        LumenaPreferences.saveBridgeToken(context, it)
+                    },
                     label = { Text("Bridge token") },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
