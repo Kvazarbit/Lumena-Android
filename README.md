@@ -1,30 +1,32 @@
 # Lumena Android
 
-Experimental Android co-pilot / computer-use client built with Kotlin + Jetpack Compose.
+Android co-pilot / local-agent client built with Kotlin + Jetpack Compose.
 
-## v0.3 architecture
+## v0.4 architecture
 
-`User -> Planner -> ToolGate -> localhost bridge -> Termux/Python/Git -> result -> UI`
+`User -> dark workflow chat -> local Ollama model -> ToolGate -> localhost bridge -> Termux/Python/Git -> result -> local model -> reply`
 
 The existing screen-agent path remains available:
 
 `Screen -> Accessibility UI tree -> ScreenSnapshot -> ActionGate -> Executor -> Verification`
 
-### Included
-- Jetpack Compose shell
+### Included in v0.4
+- dark Material 3 interface
+- chat-first workflow shell with separate **Chat** and **Tools** tabs
+- loopback-only Ollama provider at `127.0.0.1:11434`
+- local model discovery through `/api/tags`
+- multi-step local workflow runner (up to 4 tool/model steps per turn)
+- JSON tool protocol for local models
+- explicit confirmation for executable actions
 - AccessibilityService-based visible UI reader
-- structured screen snapshot
-- basic click / text-input executor
-- explicit action gate
-- local agent panel
-- local-only Termux bridge on `127.0.0.1:8765`
+- Termux bridge on `127.0.0.1:8765`
 - bearer-token authentication
 - workspace path confinement
-- read-only tools: `health`, `file.read`, `git.status`, `git.diff`, `git.log`
-- confirmed executable tool: `python.run`
+- read-only tools: `health`, `file.read`, `git.status`, `git.diff`, `git.log`, `ollama.status`
+- confirmed executable tools: `python.run`, `ollama.start`, `ollama.pull`
 - GitHub Actions APK build
 
-## Termux setup
+## Termux bridge setup
 
 Clone this repository in Termux, then run:
 
@@ -33,7 +35,7 @@ bash termux/install_bridge.sh
 python ~/.lumena/bridge.py
 ```
 
-The bridge prints a token on startup. Paste it into the **Local Agent** section in Lumena Android.
+The bridge prints a token on startup. Paste it into **Chat -> Local model -> Termux tools** or into the advanced **Tools** tab.
 
 Default workspace:
 
@@ -41,25 +43,38 @@ Default workspace:
 ~/lumena-workspace
 ```
 
-Examples accepted by the v0.3 rule planner:
+All file/Git/Python paths are resolved inside this workspace. The bridge intentionally binds only to `127.0.0.1`, not `0.0.0.0`, so other devices on the same Wi-Fi cannot connect to it.
 
-```text
-health
-git status my-project
-git diff my-project
-git log my-project
-read notes.txt
-python scripts/test.py --fast
+## Ollama sidecar
+
+Lumena integrates Ollama as a local sidecar rather than exposing it over Wi-Fi. The Android client accepts only loopback URLs (`localhost`, `127.0.0.1`, `::1`).
+
+If an `ollama` executable is already available in the Termux environment:
+
+```bash
+bash termux/ollama_sidecar.sh status
+bash termux/ollama_sidecar.sh serve
+bash termux/ollama_sidecar.sh pull MODEL_NAME
 ```
 
-All paths are resolved inside the configured workspace. The bridge intentionally binds only to `127.0.0.1`, not `0.0.0.0`, so other devices on the same Wi-Fi cannot connect to it.
+You can also let the local model request `ollama.status`, `ollama.start`, or `ollama.pull`. Starting the service or downloading a model requires user confirmation in the app.
 
-### Safety and control
-Lumena is designed as a co-pilot, not a hidden automation layer. The app does not attempt to bypass Android security, banking protections, DRM, app authentication, or server-side model safeguards. Unknown tools are blocked. Read-only local tools can run directly; code execution requires an explicit confirmation in the app.
+> The APK does **not** bundle the official Ollama binary. Ollama is not a normal Android library module; keeping it as a same-phone loopback sidecar is currently the more reliable integration path. The UI and agent workflow treat it as one local system.
 
-## Next agent layer
+## Chat workflow
 
-v0.3 deliberately uses a deterministic rule planner so the execution path can be tested independently from a language model. The next layer is a `PlannerEngine` backed by a small local GGUF model through llama.cpp/JNI; it will emit the same `ToolRequest` schema and therefore reuse the existing ToolGate and Termux bridge.
+The local model receives a system prompt with the allow-listed tools. When it needs a tool it must emit exactly one JSON object, for example:
+
+```json
+{"tool":"git.status","args":{"cwd":"my-project"},"reason":"Check the repository before editing"}
+```
+
+Read-only requests can execute automatically. Python execution, Ollama start, and model pulls always require an explicit confirmation. Tool output is returned to the local model so it can continue the same turn.
+
+## Safety and control
+
+Lumena is designed as a co-pilot, not a hidden automation layer. It does not attempt to bypass Android security, banking protections, DRM, app authentication, or server-side model safeguards. Unknown tools are blocked. Ollama and Termux clients reject non-loopback hosts.
 
 ## Build
-Open in Android Studio with JDK 17 and Android SDK 35, or use the `Android CI` workflow. Pull requests build a debug APK artifact automatically.
+
+Open in Android Studio with JDK 17 and Android SDK 35, or use the `Android CI` workflow. Pull requests targeting `main` build a debug APK artifact automatically.
