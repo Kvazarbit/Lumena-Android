@@ -25,6 +25,7 @@ jobs:
         run: |
           python -m py_compile termux/bridge.py
           bash -n termux/install_bridge.sh
+          bash -n termux/ollama_sidecar.sh
       - name: Install Android SDK packages
         run: |
           SDKMANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
