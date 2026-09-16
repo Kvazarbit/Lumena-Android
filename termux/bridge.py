@@ -1,8 +1,8 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.3
+Lumena Termux Bridge v0.4
 
-A tiny local-only HTTP bridge between Lumena Android and Termux.
+Local-only bridge between Lumena Android and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains file access
 to one workspace, and exposes a small allow-listed tool surface.
 """
@@ -10,22 +10,30 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import shlex
+import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("LUMENA_BRIDGE_PORT", "8765"))
+OLLAMA_HOST = "127.0.0.1:11434"
+OLLAMA_API = f"http://{OLLAMA_HOST}"
 HOME = Path.home()
 STATE_DIR = HOME / ".lumena"
 TOKEN_FILE = STATE_DIR / "bridge_token"
+OLLAMA_LOG = STATE_DIR / "ollama.log"
 WORKSPACE = Path(os.environ.get("LUMENA_WORKSPACE", str(HOME / "lumena-workspace"))).expanduser().resolve()
 MAX_BODY = 64 * 1024
 MAX_OUTPUT = 128 * 1024
 DEFAULT_TIMEOUT = 120
+MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 
 
 def ensure_token() -> str:
@@ -45,6 +53,7 @@ def ensure_token() -> str:
 
 TOKEN = os.environ.get("LUMENA_BRIDGE_TOKEN", "").strip() or ensure_token()
 WORKSPACE.mkdir(parents=True, exist_ok=True)
+STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def safe_path(relative: str, *, must_exist: bool = False) -> Path:
@@ -81,6 +90,69 @@ def run_process(argv: list[str], cwd: Path, timeout: int = DEFAULT_TIMEOUT) -> d
         "exitCode": completed.returncode,
         "stdout": clamp(completed.stdout or ""),
         "stderr": clamp(completed.stderr or ""),
+        "error": None,
+    }
+
+
+def ollama_binary() -> str:
+    path = shutil.which("ollama")
+    if not path:
+        raise FileNotFoundError(
+            "ollama executable not found in Termux PATH. Install a compatible Ollama build first."
+        )
+    return path
+
+
+def ollama_status() -> dict[str, Any]:
+    installed = shutil.which("ollama") is not None
+    try:
+        with urllib.request.urlopen(f"{OLLAMA_API}/api/tags", timeout=2) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        models = [m.get("name", "") for m in payload.get("models", []) if m.get("name")]
+        return {
+            "ok": True,
+            "exitCode": 0,
+            "stdout": "installed=%s\nrunning=true\nmodels=%s\n" % (
+                str(installed).lower(),
+                ", ".join(models) if models else "(none)",
+            ),
+            "stderr": "",
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "ok": True,
+            "exitCode": 0,
+            "stdout": "installed=%s\nrunning=false\n" % str(installed).lower(),
+            "stderr": "",
+            "error": None,
+        }
+
+
+def ollama_start() -> dict[str, Any]:
+    binary = ollama_binary()
+    current = ollama_status()
+    if "running=true" in current.get("stdout", ""):
+        return current
+
+    env = os.environ.copy()
+    env["OLLAMA_HOST"] = OLLAMA_HOST
+    log = open(OLLAMA_LOG, "ab", buffering=0)
+    subprocess.Popen(
+        [binary, "serve"],
+        cwd=str(HOME),
+        env=env,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
+    return {
+        "ok": True,
+        "exitCode": 0,
+        "stdout": f"Ollama start requested on {OLLAMA_HOST}\nlog={OLLAMA_LOG}\n",
+        "stderr": "",
         "error": None,
     }
 
@@ -128,11 +200,42 @@ def execute_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
             int(args.get("timeout", DEFAULT_TIMEOUT)),
         )
 
+    if tool == "ollama.status":
+        return ollama_status()
+
+    if tool == "ollama.start":
+        return ollama_start()
+
+    if tool == "ollama.pull":
+        model = str(args.get("model", "")).strip()
+        if not MODEL_RE.fullmatch(model):
+            raise ValueError("Invalid Ollama model name")
+        binary = ollama_binary()
+        env = os.environ.copy()
+        env["OLLAMA_HOST"] = OLLAMA_HOST
+        completed = subprocess.run(
+            [binary, "pull", model],
+            cwd=str(HOME),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=max(60, min(int(args.get("timeout", 600)), 1800)),
+            shell=False,
+            check=False,
+        )
+        return {
+            "ok": completed.returncode == 0,
+            "exitCode": completed.returncode,
+            "stdout": clamp(completed.stdout or ""),
+            "stderr": clamp(completed.stderr or ""),
+            "error": None,
+        }
+
     raise ValueError(f"Unknown or disabled tool: {tool}")
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.3"
+    server_version = "LumenaBridge/0.4"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[bridge] {self.address_string()} - {fmt % args}")
@@ -150,7 +253,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.3"})
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.4"})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
@@ -194,7 +297,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Lumena Termux Bridge v0.3")
+    print("Lumena Termux Bridge v0.4")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")
