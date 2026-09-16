@@ -12,8 +12,8 @@ android {
         applicationId = "com.lumena.android"
         minSdk = 28
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 6
+        versionName = "0.6.0"
     }
 
     compileOptions {
