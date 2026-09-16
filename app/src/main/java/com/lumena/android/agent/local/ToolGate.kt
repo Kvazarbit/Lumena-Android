@@ -6,10 +6,16 @@ object ToolGate {
         "file.read",
         "git.status",
         "git.diff",
-        "git.log"
+        "git.log",
+        "ollama.status"
     )
 
-    private val executableTools = setOf("python.run")
+    private val executableTools = setOf(
+        "python.run",
+        "ollama.start",
+        "ollama.pull"
+    )
+
     private val knownTools = readOnlyTools + executableTools
 
     fun plan(decision: PlannerDecision): PlannedTool {
