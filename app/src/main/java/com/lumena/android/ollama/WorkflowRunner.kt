@@ -3,6 +3,7 @@ package com.lumena.android.ollama
 import com.lumena.android.agent.local.PlannedTool
 import com.lumena.android.agent.local.TermuxBridgeClient
 import com.lumena.android.agent.local.ToolGate
+import com.lumena.android.chat.ChatBackend
 
 data class PendingWorkflowTool(
     val plan: PlannedTool,
@@ -16,16 +17,15 @@ sealed interface WorkflowOutcome {
 }
 
 class WorkflowRunner(
-    private val ollama: OllamaClient,
-    private val bridge: TermuxBridgeClient?,
-    private val model: String
+    private val backend: ChatBackend,
+    private val bridge: TermuxBridgeClient?
 ) {
-    suspend fun run(history: List<OllamaMessage>, maxSteps: Int = 4): WorkflowOutcome {
+    suspend fun run(history: List<OllamaMessage>, maxSteps: Int = 6): WorkflowOutcome {
         var current = history
 
         repeat(maxSteps) {
-            val reply = ollama.chat(model, current).getOrElse { error ->
-                return WorkflowOutcome.Failed(error.message ?: error.toString())
+            val reply = backend.complete(current).getOrElse { error ->
+                return WorkflowOutcome.Failed("${backend.label}: ${error.message ?: error}")
             }
 
             when (val parsed = LocalWorkflowAgent.parse(reply)) {
@@ -63,7 +63,7 @@ class WorkflowRunner(
             }
         }
 
-        return WorkflowOutcome.Failed("Agent reached the local step limit. Try a smaller task.")
+        return WorkflowOutcome.Failed("Agent reached the local step limit. Split the task into a smaller goal.")
     }
 
     suspend fun approve(pending: PendingWorkflowTool): WorkflowOutcome {
