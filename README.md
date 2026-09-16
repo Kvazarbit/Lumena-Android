@@ -32,17 +32,9 @@ bash termux/install_bridge.sh
 python ~/.lumena/bridge.py
 ```
 
-Default bridge:
+Default bridge: `http://127.0.0.1:8765`
 
-```text
-http://127.0.0.1:8765
-```
-
-Default workspace:
-
-```text
-~/lumena-workspace
-```
+Default workspace: `~/lumena-workspace`
 
 The bridge binds only to loopback and uses a bearer token. Paths are confined to the workspace.
 
