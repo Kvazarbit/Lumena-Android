@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -87,11 +88,11 @@ fun WorkflowChatScreen() {
     fun refreshModels() {
         busy = true
         scope.launch {
-            val result = runCatching { OllamaClient(ollamaUrl) }
-                .fold(
-                    onSuccess = { it.listModels() },
-                    onFailure = { Result.failure(it) }
-                )
+            val result = try {
+                OllamaClient(ollamaUrl).listModels()
+            } catch (t: Throwable) {
+                Result.failure(t)
+            }
             result.onSuccess { found ->
                 models = found
                 if (selectedModel.isBlank() || selectedModel !in found) {
