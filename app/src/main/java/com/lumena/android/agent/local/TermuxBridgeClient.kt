@@ -4,6 +4,7 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -14,7 +15,12 @@ class TermuxBridgeClient(
     baseUrl: String,
     private val token: String
 ) {
-    private val endpoint = baseUrl.trim().trimEnd('/') + "/tool"
+    private val endpoint = normalizeLoopbackBaseUrl(baseUrl)
+        ?.newBuilder()
+        ?.addPathSegment("tool")
+        ?.build()
+        ?: throw IllegalArgumentException("Bridge URL must use localhost/127.0.0.1 over http")
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(130, TimeUnit.SECONDS)
@@ -49,4 +55,11 @@ class TermuxBridgeClient(
             ToolResult(ok = false, error = "${t::class.simpleName}: ${t.message}")
         }
     }
+
+    private fun normalizeLoopbackBaseUrl(raw: String) = raw.trim().trimEnd('/')
+        .toHttpUrlOrNull()
+        ?.takeIf { url ->
+            url.scheme == "http" &&
+                (url.host == "127.0.0.1" || url.host == "localhost" || url.host == "::1")
+        }
 }
