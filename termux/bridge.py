@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.6
+Lumena Termux Bridge v0.7
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains file access
@@ -15,6 +15,7 @@ import secrets
 import shlex
 import shutil
 import subprocess
+import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -29,6 +30,7 @@ STATE_DIR = HOME / ".lumena"
 TOKEN_FILE = STATE_DIR / "bridge_token"
 OLLAMA_LOG = STATE_DIR / "ollama.log"
 WORKSPACE = Path(os.environ.get("LUMENA_WORKSPACE", str(HOME / "lumena-workspace"))).expanduser().resolve()
+BACKUP_ROOT = WORKSPACE / ".lumena-backups"
 MAX_BODY = 512 * 1024
 MAX_OUTPUT = 128 * 1024
 DEFAULT_TIMEOUT = 120
@@ -54,6 +56,7 @@ def ensure_token() -> str:
 TOKEN = os.environ.get("LUMENA_BRIDGE_TOKEN", "").strip() or ensure_token()
 WORKSPACE.mkdir(parents=True, exist_ok=True)
 STATE_DIR.mkdir(parents=True, exist_ok=True)
+BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
 
 
 def safe_path(relative: str, *, must_exist: bool = False) -> Path:
@@ -92,6 +95,16 @@ def run_process(argv: list[str], cwd: Path, timeout: int = DEFAULT_TIMEOUT) -> d
         "stderr": clamp(completed.stderr or ""),
         "error": None,
     }
+
+
+def backup_file(path: Path) -> Path:
+    rel = path.relative_to(WORKSPACE)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    ns = time.time_ns() % 1_000_000_000
+    safe_name = "__".join(rel.parts)
+    backup = BACKUP_ROOT / f"{stamp}-{ns:09d}-{safe_name}"
+    shutil.copy2(path, backup)
+    return backup
 
 
 def ollama_binary() -> str:
@@ -161,6 +174,8 @@ def workspace_listing() -> str:
             rel = path.relative_to(WORKSPACE)
         except ValueError:
             continue
+        if rel.parts and rel.parts[0] == BACKUP_ROOT.name:
+            continue
         if len(rel.parts) > 3:
             continue
         suffix = "/" if path.is_dir() else ""
@@ -176,7 +191,7 @@ def execute_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
         return {
             "ok": True,
             "exitCode": 0,
-            "stdout": f"Lumena bridge OK\nworkspace={WORKSPACE}\nversion=0.6\n",
+            "stdout": f"Lumena bridge OK\nworkspace={WORKSPACE}\nversion=0.7\n",
             "stderr": "",
             "error": None,
         }
@@ -216,12 +231,43 @@ def execute_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
         overwrite = str(args.get("overwrite", "true")).lower() in {"1", "true", "yes"}
         if path.exists() and not overwrite:
             raise FileExistsError(str(path))
+        backup = backup_file(path) if path.exists() and path.is_file() else None
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+        backup_line = f"backup={backup.relative_to(WORKSPACE)}\n" if backup else ""
         return {
             "ok": True,
             "exitCode": 0,
-            "stdout": f"wrote={path.relative_to(WORKSPACE)}\nbytes={len(content.encode('utf-8'))}\n",
+            "stdout": f"wrote={path.relative_to(WORKSPACE)}\n{backup_line}bytes={len(content.encode('utf-8'))}\n",
+            "stderr": "",
+            "error": None,
+        }
+
+    if tool == "file.patch":
+        path = safe_path(str(args.get("path", "")).strip(), must_exist=True)
+        if not path.is_file():
+            raise ValueError("file.patch requires a file")
+        old = str(args.get("old", ""))
+        new = str(args.get("new", ""))
+        if not old:
+            raise ValueError("file.patch requires non-empty old text")
+        text = path.read_text(encoding="utf-8", errors="strict")
+        count = text.count(old)
+        if count != 1:
+            raise ValueError(f"file.patch expected exactly one match, found {count}")
+        updated = text.replace(old, new, 1)
+        if len(updated.encode("utf-8")) > 2 * 1024 * 1024:
+            raise ValueError("patched text file exceeds 2 MiB safety limit")
+        backup = backup_file(path)
+        path.write_text(updated, encoding="utf-8")
+        return {
+            "ok": True,
+            "exitCode": 0,
+            "stdout": (
+                f"patched={path.relative_to(WORKSPACE)}\n"
+                f"backup={backup.relative_to(WORKSPACE)}\n"
+                "matches=1\n"
+            ),
             "stderr": "",
             "error": None,
         }
@@ -247,15 +293,29 @@ def execute_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
             argv = ["git", "commit", "-m", message]
         return run_process(argv, cwd, int(args.get("timeout", DEFAULT_TIMEOUT)))
 
-    if tool == "python.run":
+    if tool in {"python.run", "python.syntax_check"}:
         script = safe_path(str(args.get("script", "")), must_exist=True)
         if not script.is_file() or script.suffix.lower() != ".py":
-            raise ValueError("python.run requires an existing .py file inside the workspace")
+            raise ValueError(f"{tool} requires an existing .py file inside the workspace")
         cwd_arg = str(args.get("cwd", "")).strip()
         cwd = safe_path(cwd_arg, must_exist=True) if cwd_arg else script.parent
+        if tool == "python.syntax_check":
+            return run_process(["python", "-m", "py_compile", str(script)], cwd, int(args.get("timeout", 60)))
         argv_text = str(args.get("argv", "")).strip()
         extra = shlex.split(argv_text) if argv_text else []
         return run_process(["python", str(script), *extra], cwd, int(args.get("timeout", DEFAULT_TIMEOUT)))
+
+    if tool == "python.tests":
+        cwd = safe_path(str(args.get("cwd", "")).strip(), must_exist=True)
+        if not cwd.is_dir():
+            raise ValueError("python.tests cwd is not a directory")
+        argv_text = str(args.get("argv", "-q")).strip()
+        extra = shlex.split(argv_text) if argv_text else ["-q"]
+        return run_process(
+            ["python", "-m", "pytest", *extra],
+            cwd,
+            int(args.get("timeout", 300)),
+        )
 
     if tool == "ollama.status":
         return ollama_status()
@@ -292,7 +352,7 @@ def execute_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.6"
+    server_version = "LumenaBridge/0.7"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[bridge] {self.address_string()} - {fmt % args}")
@@ -310,7 +370,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.6"})
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.7"})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
@@ -352,7 +412,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Lumena Termux Bridge v0.6")
+    print("Lumena Termux Bridge v0.7")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")
