@@ -2,6 +2,8 @@ package com.lumena.android.agent
 
 import android.accessibilityservice.AccessibilityService
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.lumena.android.model.AgentAction
@@ -22,12 +24,15 @@ class LumenaAccessibilityService : AccessibilityService() {
             private set
     }
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     override fun onServiceConnected() {
         instance = this
         captureChatGptIfVisible()
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacksAndMessages(null)
         if (instance === this) instance = null
         super.onDestroy()
     }
@@ -46,6 +51,17 @@ class LumenaAccessibilityService : AccessibilityService() {
 
     fun isChatGptActive(): Boolean =
         rootInActiveWindow?.packageName?.toString() == CHATGPT_PACKAGE
+
+    fun scheduleChatGptInsert(text: String, send: Boolean = false, attempts: Int = 14) {
+        fun tryOnce(remaining: Int) {
+            if (fillChatGptComposer(text)) {
+                if (send) mainHandler.postDelayed({ clickChatGptSend() }, 350)
+                return
+            }
+            if (remaining > 0) mainHandler.postDelayed({ tryOnce(remaining - 1) }, 350)
+        }
+        mainHandler.post { tryOnce(attempts) }
+    }
 
     fun fillChatGptComposer(text: String): Boolean {
         val root = rootInActiveWindow ?: return false
@@ -71,17 +87,6 @@ class LumenaAccessibilityService : AccessibilityService() {
         val tokens = listOf("send", "wyślij", "wyslij", "надісл", "отправ", "відправ", "submit")
         val candidate = walk(root)
             .filter { it.isVisibleToUser && it.isEnabled }
-            .sortedByDescending { node ->
-                val label = listOfNotNull(node.text, node.contentDescription)
-                    .joinToString(" ")
-                    .lowercase()
-                when {
-                    tokens.any { label == it } -> 3
-                    tokens.any { label.contains(it) } -> 2
-                    node.isClickable -> 1
-                    else -> 0
-                }
-            }
             .firstOrNull { node ->
                 val label = listOfNotNull(node.text, node.contentDescription)
                     .joinToString(" ")
