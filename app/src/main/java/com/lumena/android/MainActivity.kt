@@ -13,14 +13,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.Button
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.LumenaAccessibilityService
 import com.lumena.android.agent.local.AgentPanel
+import com.lumena.android.companion.CompanionScreen
 import com.lumena.android.ui.LumenaTheme
 import com.lumena.android.ui.WorkflowChatScreen
 
@@ -56,13 +57,8 @@ class MainActivity : ComponentActivity() {
         ComponentName(this, LumenaAccessibilityService::class.java)
 
     private fun isAccessibilityEnabled(): Boolean {
-        val enabled = Settings.Secure.getInt(
-            contentResolver,
-            Settings.Secure.ACCESSIBILITY_ENABLED,
-            0
-        ) == 1
+        val enabled = Settings.Secure.getInt(contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 0) == 1
         if (!enabled) return false
-
         val expected = serviceComponent().flattenToString()
         val services = Settings.Secure.getString(
             contentResolver,
@@ -94,11 +90,17 @@ class MainActivity : ComponentActivity() {
                         selected = tab == 0,
                         onClick = { tab = 0 },
                         icon = { Text("●") },
-                        label = { Text("Chat") }
+                        label = { Text("Companion") }
                     )
                     NavigationBarItem(
                         selected = tab == 1,
                         onClick = { tab = 1 },
+                        icon = { Text("◈") },
+                        label = { Text("Local") }
+                    )
+                    NavigationBarItem(
+                        selected = tab == 2,
+                        onClick = { tab = 2 },
                         icon = { Text("◆") },
                         label = { Text("Tools") }
                     )
@@ -110,9 +112,14 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
-                ) {
-                    WorkflowChatScreen()
-                }
+                ) { CompanionScreen() }
+
+                1 -> Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                ) { WorkflowChatScreen() }
+
                 else -> ToolsScreen(
                     refreshToken = refreshToken,
                     modifier = Modifier.padding(innerPadding)
