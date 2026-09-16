@@ -35,6 +35,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.local.TermuxBridgeClient
@@ -44,6 +45,7 @@ import com.lumena.android.ollama.OllamaMessage
 import com.lumena.android.ollama.PendingWorkflowTool
 import com.lumena.android.ollama.WorkflowOutcome
 import com.lumena.android.ollama.WorkflowRunner
+import com.lumena.android.settings.LumenaPreferences
 import kotlinx.coroutines.launch
 
 private data class ChatBubble(
@@ -55,24 +57,26 @@ private data class ChatBubble(
 fun WorkflowChatScreen() {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    val context = LocalContext.current
+    val initial = remember { LumenaPreferences.load(context) }
     val bubbles = remember {
         mutableStateListOf(
             ChatBubble(
                 "assistant",
-                "Lumena local agent is ready. Connect Ollama, choose a model, then talk normally. I can also use approved Termux/Python/Git tools."
+                "Lumena local agent is ready. Ollama models and bridge settings are restored automatically."
             )
         )
     }
 
     var input by rememberSaveable { mutableStateOf("") }
-    var ollamaUrl by rememberSaveable { mutableStateOf("http://127.0.0.1:11434") }
-    var bridgeUrl by rememberSaveable { mutableStateOf("http://127.0.0.1:8765") }
-    var bridgeToken by rememberSaveable { mutableStateOf("") }
-    var selectedModel by rememberSaveable { mutableStateOf("") }
+    var ollamaUrl by rememberSaveable { mutableStateOf(initial.ollamaUrl) }
+    var bridgeUrl by rememberSaveable { mutableStateOf(initial.bridgeUrl) }
+    var bridgeToken by rememberSaveable { mutableStateOf(initial.bridgeToken) }
+    var selectedModel by rememberSaveable { mutableStateOf(initial.selectedModel) }
     var models by remember { mutableStateOf<List<String>>(emptyList()) }
-    var status by remember { mutableStateOf("Ollama not checked") }
+    var status by remember { mutableStateOf("Checking Ollama…") }
     var busy by remember { mutableStateOf(false) }
-    var showSettings by rememberSaveable { mutableStateOf(true) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
     var pending by remember { mutableStateOf<PendingWorkflowTool?>(null) }
     var history by remember {
         mutableStateOf(
@@ -86,6 +90,7 @@ fun WorkflowChatScreen() {
 
     fun refreshModels() {
         busy = true
+        status = "Checking Ollama…"
         scope.launch {
             val result = try {
                 OllamaClient(ollamaUrl).listModels()
@@ -94,10 +99,20 @@ fun WorkflowChatScreen() {
             }
             result.onSuccess { found ->
                 models = found
-                if (selectedModel.isBlank() || selectedModel !in found) {
-                    selectedModel = found.firstOrNull().orEmpty()
+                val resolvedModel = when {
+                    selectedModel.isNotBlank() && selectedModel in found -> selectedModel
+                    found.isNotEmpty() -> found.first()
+                    else -> selectedModel
                 }
-                status = if (found.isEmpty()) "Ollama online · no local models" else "Ollama online · ${found.size} model(s)"
+                if (resolvedModel != selectedModel) {
+                    selectedModel = resolvedModel
+                    LumenaPreferences.saveSelectedModel(context, resolvedModel)
+                }
+                status = when {
+                    found.isEmpty() -> "Ollama online · no local models"
+                    selectedModel.isBlank() -> "Ollama online · ${found.size} model(s)"
+                    else -> "Ollama online · ${found.size} model(s)"
+                }
             }.onFailure {
                 models = emptyList()
                 status = "Ollama offline · ${it.message ?: it::class.simpleName}"
@@ -129,7 +144,7 @@ fun WorkflowChatScreen() {
         val text = input.trim()
         if (text.isBlank() || busy) return
         if (selectedModel.isBlank()) {
-            bubbles += ChatBubble("error", "No Ollama model selected. Open Local model settings and refresh models.")
+            bubbles += ChatBubble("error", "No Ollama model selected. Start Ollama and refresh models.")
             return
         }
 
@@ -147,6 +162,10 @@ fun WorkflowChatScreen() {
             applyOutcome(outcome)
             busy = false
         }
+    }
+
+    LaunchedEffect(Unit) {
+        refreshModels()
     }
 
     LaunchedEffect(bubbles.size) {
@@ -191,12 +210,15 @@ fun WorkflowChatScreen() {
                 ) {
                     Text("Local Ollama sidecar", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Ollama stays on this phone at 127.0.0.1. Lumena never connects this provider to Wi-Fi addresses.",
+                        "Lumena restores the last model automatically and rechecks Ollama whenever this screen opens.",
                         style = MaterialTheme.typography.bodySmall
                     )
                     OutlinedTextField(
                         value = ollamaUrl,
-                        onValueChange = { ollamaUrl = it },
+                        onValueChange = {
+                            ollamaUrl = it
+                            LumenaPreferences.saveOllamaUrl(context, it)
+                        },
                         label = { Text("Ollama URL") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
@@ -208,7 +230,9 @@ fun WorkflowChatScreen() {
                         if (models.isNotEmpty()) {
                             TextButton(onClick = {
                                 val current = models.indexOf(selectedModel).coerceAtLeast(0)
-                                selectedModel = models[(current + 1) % models.size]
+                                val next = models[(current + 1) % models.size]
+                                selectedModel = next
+                                LumenaPreferences.saveSelectedModel(context, next)
                             }) {
                                 Text("Next model")
                             }
@@ -216,7 +240,10 @@ fun WorkflowChatScreen() {
                     }
                     OutlinedTextField(
                         value = selectedModel,
-                        onValueChange = { selectedModel = it },
+                        onValueChange = {
+                            selectedModel = it
+                            LumenaPreferences.saveSelectedModel(context, it)
+                        },
                         label = { Text("Model") },
                         supportingText = {
                             if (models.isNotEmpty()) Text(models.joinToString(" · "))
@@ -226,16 +253,26 @@ fun WorkflowChatScreen() {
                     )
                     HorizontalDivider()
                     Text("Termux tools", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "Bridge URL and token are shared automatically with Companion and Tools.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                     OutlinedTextField(
                         value = bridgeUrl,
-                        onValueChange = { bridgeUrl = it },
+                        onValueChange = {
+                            bridgeUrl = it
+                            LumenaPreferences.saveBridgeUrl(context, it)
+                        },
                         label = { Text("Bridge URL") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
                         value = bridgeToken,
-                        onValueChange = { bridgeToken = it },
+                        onValueChange = {
+                            bridgeToken = it
+                            LumenaPreferences.saveBridgeToken(context, it)
+                        },
                         label = { Text("Bridge token") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
