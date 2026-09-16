@@ -1,10 +1,10 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.4
+Lumena Termux Bridge v0.6
 
-Local-only bridge between Lumena Android and Termux.
+Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains file access
-to one workspace, and exposes a small allow-listed tool surface.
+to one workspace, and exposes an allow-listed tool surface.
 """
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ import secrets
 import shlex
 import shutil
 import subprocess
-import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,10 +29,11 @@ STATE_DIR = HOME / ".lumena"
 TOKEN_FILE = STATE_DIR / "bridge_token"
 OLLAMA_LOG = STATE_DIR / "ollama.log"
 WORKSPACE = Path(os.environ.get("LUMENA_WORKSPACE", str(HOME / "lumena-workspace"))).expanduser().resolve()
-MAX_BODY = 64 * 1024
+MAX_BODY = 512 * 1024
 MAX_OUTPUT = 128 * 1024
 DEFAULT_TIMEOUT = 120
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+PROJECT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 
 
 def ensure_token() -> str:
@@ -97,9 +97,7 @@ def run_process(argv: list[str], cwd: Path, timeout: int = DEFAULT_TIMEOUT) -> d
 def ollama_binary() -> str:
     path = shutil.which("ollama")
     if not path:
-        raise FileNotFoundError(
-            "ollama executable not found in Termux PATH. Install a compatible Ollama build first."
-        )
+        raise FileNotFoundError("ollama executable not found in Termux PATH")
     return path
 
 
@@ -119,7 +117,7 @@ def ollama_status() -> dict[str, Any]:
             "stderr": "",
             "error": None,
         }
-    except Exception as exc:
+    except Exception:
         return {
             "ok": True,
             "exitCode": 0,
@@ -134,7 +132,6 @@ def ollama_start() -> dict[str, Any]:
     current = ollama_status()
     if "running=true" in current.get("stdout", ""):
         return current
-
     env = os.environ.copy()
     env["OLLAMA_HOST"] = OLLAMA_HOST
     log = open(OLLAMA_LOG, "ab", buffering=0)
@@ -157,15 +154,35 @@ def ollama_start() -> dict[str, Any]:
     }
 
 
+def workspace_listing() -> str:
+    lines: list[str] = []
+    for path in sorted(WORKSPACE.rglob("*")):
+        try:
+            rel = path.relative_to(WORKSPACE)
+        except ValueError:
+            continue
+        if len(rel.parts) > 3:
+            continue
+        suffix = "/" if path.is_dir() else ""
+        lines.append(str(rel) + suffix)
+        if len(lines) >= 400:
+            lines.append("...[listing truncated]...")
+            break
+    return "\n".join(lines) if lines else "(workspace empty)"
+
+
 def execute_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
     if tool == "health":
         return {
             "ok": True,
             "exitCode": 0,
-            "stdout": f"Lumena bridge OK\nworkspace={WORKSPACE}\n",
+            "stdout": f"Lumena bridge OK\nworkspace={WORKSPACE}\nversion=0.6\n",
             "stderr": "",
             "error": None,
         }
+
+    if tool == "workspace.list":
+        return {"ok": True, "exitCode": 0, "stdout": workspace_listing(), "stderr": "", "error": None}
 
     if tool == "file.read":
         path = safe_path(str(args.get("path", "")), must_exist=True)
@@ -174,7 +191,42 @@ def execute_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
         data = path.read_text(encoding="utf-8", errors="replace")
         return {"ok": True, "exitCode": 0, "stdout": clamp(data), "stderr": "", "error": None}
 
-    if tool in {"git.status", "git.diff", "git.log"}:
+    if tool == "project.create":
+        name = str(args.get("name", "")).strip()
+        if not PROJECT_RE.fullmatch(name):
+            raise ValueError("Invalid project name")
+        path = safe_path(name)
+        path.mkdir(parents=True, exist_ok=False)
+        if str(args.get("git", "true")).lower() in {"1", "true", "yes"}:
+            result = run_process(["git", "init"], path)
+            if not result["ok"]:
+                return result
+        return {"ok": True, "exitCode": 0, "stdout": f"created={name}\n", "stderr": "", "error": None}
+
+    if tool == "dir.create":
+        path = safe_path(str(args.get("path", "")).strip())
+        path.mkdir(parents=True, exist_ok=True)
+        return {"ok": True, "exitCode": 0, "stdout": f"created={path.relative_to(WORKSPACE)}\n", "stderr": "", "error": None}
+
+    if tool == "file.write":
+        path = safe_path(str(args.get("path", "")).strip())
+        content = str(args.get("content", ""))
+        if len(content.encode("utf-8")) > 256 * 1024:
+            raise ValueError("file.write content exceeds 256 KiB")
+        overwrite = str(args.get("overwrite", "true")).lower() in {"1", "true", "yes"}
+        if path.exists() and not overwrite:
+            raise FileExistsError(str(path))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return {
+            "ok": True,
+            "exitCode": 0,
+            "stdout": f"wrote={path.relative_to(WORKSPACE)}\nbytes={len(content.encode('utf-8'))}\n",
+            "stderr": "",
+            "error": None,
+        }
+
+    if tool in {"git.status", "git.diff", "git.log", "git.add", "git.commit"}:
         cwd = safe_path(str(args.get("cwd", "")), must_exist=True)
         if not cwd.is_dir():
             raise ValueError("cwd is not a directory")
@@ -182,8 +234,17 @@ def execute_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
             argv = ["git", "status", "--short", "--branch"]
         elif tool == "git.diff":
             argv = ["git", "diff", "--"]
-        else:
+        elif tool == "git.log":
             argv = ["git", "log", "-n", "12", "--oneline", "--decorate"]
+        elif tool == "git.add":
+            raw_paths = str(args.get("paths", ".")).strip() or "."
+            parts = shlex.split(raw_paths)
+            argv = ["git", "add", "--", *parts]
+        else:
+            message = str(args.get("message", "")).strip()
+            if not message or len(message) > 200:
+                raise ValueError("git.commit requires a message up to 200 chars")
+            argv = ["git", "commit", "-m", message]
         return run_process(argv, cwd, int(args.get("timeout", DEFAULT_TIMEOUT)))
 
     if tool == "python.run":
@@ -194,11 +255,7 @@ def execute_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
         cwd = safe_path(cwd_arg, must_exist=True) if cwd_arg else script.parent
         argv_text = str(args.get("argv", "")).strip()
         extra = shlex.split(argv_text) if argv_text else []
-        return run_process(
-            ["python", str(script), *extra],
-            cwd,
-            int(args.get("timeout", DEFAULT_TIMEOUT)),
-        )
+        return run_process(["python", str(script), *extra], cwd, int(args.get("timeout", DEFAULT_TIMEOUT)))
 
     if tool == "ollama.status":
         return ollama_status()
@@ -235,7 +292,7 @@ def execute_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.4"
+    server_version = "LumenaBridge/0.6"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[bridge] {self.address_string()} - {fmt % args}")
@@ -253,7 +310,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.4"})
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.6"})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
@@ -264,13 +321,11 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             self._json(401, {"ok": False, "error": "Unauthorized"})
             return
-
         try:
             length = int(self.headers.get("Content-Length", "0"))
             if length <= 0 or length > MAX_BODY:
                 raise ValueError("Invalid request size")
-            raw = self.rfile.read(length)
-            payload = json.loads(raw.decode("utf-8"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
             tool = str(payload.get("tool", "")).strip()
             args = payload.get("args") or {}
             if not isinstance(args, dict):
@@ -297,7 +352,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Lumena Termux Bridge v0.4")
+    print("Lumena Termux Bridge v0.6")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")
