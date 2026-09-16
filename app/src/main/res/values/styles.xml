@@ -1,3 +1,8 @@
 <resources>
-    <style name="Theme.Lumena" parent="android:style/Theme.Material.Light.NoActionBar" />
+    <style name="Theme.Lumena" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#0D0F14</item>
+        <item name="android:navigationBarColor">#0D0F14</item>
+        <item name="android:windowBackground">#0D0F14</item>
+    </style>
 </resources>
