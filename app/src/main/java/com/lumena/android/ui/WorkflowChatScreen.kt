@@ -38,15 +38,27 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.lumena.android.agent.core.TaskState
+import com.lumena.android.agent.core.TaskStatus
+import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.TermuxBridgeClient
+import com.lumena.android.agent.local.ToolGate
+import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.ollama.LocalWorkflowAgent
 import com.lumena.android.ollama.OllamaClient
 import com.lumena.android.ollama.OllamaMessage
 import com.lumena.android.ollama.PendingWorkflowTool
 import com.lumena.android.ollama.WorkflowOutcome
 import com.lumena.android.ollama.WorkflowRunner
+import com.lumena.android.settings.LocalSessionSnapshot
+import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.settings.LumenaPreferences
+import com.lumena.android.settings.PersistedChatMessage
+import com.lumena.android.settings.PersistedHistoryMessage
+import com.lumena.android.settings.PersistedPendingTool
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 private data class ChatBubble(
     val role: String,
@@ -59,16 +71,26 @@ fun WorkflowChatScreen() {
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val initial = remember { LumenaPreferences.load(context) }
+    val restored = remember { LocalSessionStore.load(context) }
+    val systemMessage = remember { OllamaMessage("system", LocalWorkflowAgent.systemPrompt) }
+
     val bubbles = remember {
-        mutableStateListOf(
-            ChatBubble(
-                "assistant",
-                "Lumena local agent is ready. Ollama models and bridge settings are restored automatically."
-            )
-        )
+        mutableStateListOf<ChatBubble>().apply {
+            val restoredChat = restored.chat.map { ChatBubble(it.role, it.text) }
+            if (restoredChat.isNotEmpty()) {
+                addAll(restoredChat)
+            } else {
+                add(
+                    ChatBubble(
+                        "assistant",
+                        "Lumena local agent is ready. Chat, model and task state are restored automatically."
+                    )
+                )
+            }
+        }
     }
 
-    var input by rememberSaveable { mutableStateOf("") }
+    var input by rememberSaveable { mutableStateOf(restored.inputDraft) }
     var ollamaUrl by rememberSaveable { mutableStateOf(initial.ollamaUrl) }
     var bridgeUrl by rememberSaveable { mutableStateOf(initial.bridgeUrl) }
     var bridgeToken by rememberSaveable { mutableStateOf(initial.bridgeToken) }
@@ -77,11 +99,68 @@ fun WorkflowChatScreen() {
     var status by remember { mutableStateOf("Checking Ollama…") }
     var busy by remember { mutableStateOf(false) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
-    var pending by remember { mutableStateOf<PendingWorkflowTool?>(null) }
+    var currentTask by remember { mutableStateOf(restored.task) }
     var history by remember {
         mutableStateOf(
-            listOf(OllamaMessage("system", LocalWorkflowAgent.systemPrompt))
+            listOf(systemMessage) + restored.history.map { OllamaMessage(it.role, it.content) }
         )
+    }
+
+    val restoredPending = remember {
+        restored.pending?.let { saved ->
+            val plan = ToolGate.plan(
+                PlannerDecision(
+                    request = ToolRequest(saved.tool, saved.args),
+                    reason = saved.reason
+                )
+            )
+            if (plan.allowed) {
+                PendingWorkflowTool(
+                    plan = plan,
+                    history = listOf(systemMessage) + saved.history.map {
+                        OllamaMessage(it.role, it.content)
+                    }
+                )
+            } else {
+                null
+            }
+        }
+    }
+    var pending by remember { mutableStateOf(restoredPending) }
+
+    fun persistSession() {
+        LocalSessionStore.save(
+            context,
+            LocalSessionSnapshot(
+                chat = bubbles.map { PersistedChatMessage(it.role, it.text) },
+                history = history
+                    .filterNot { it.role == "system" }
+                    .map { PersistedHistoryMessage(it.role, it.content) },
+                task = currentTask,
+                pending = pending?.let { active ->
+                    PersistedPendingTool(
+                        tool = active.plan.request.tool,
+                        args = active.plan.request.args,
+                        reason = active.plan.reason,
+                        history = active.history
+                            .filterNot { it.role == "system" }
+                            .map { PersistedHistoryMessage(it.role, it.content) }
+                    )
+                },
+                inputDraft = input
+            )
+        )
+    }
+
+    fun clearConversation() {
+        input = ""
+        pending = null
+        currentTask = null
+        history = listOf(systemMessage)
+        bubbles.clear()
+        bubbles += ChatBubble("assistant", "New local conversation started.")
+        LocalSessionStore.clear(context)
+        persistSession()
     }
 
     fun bridgeOrNull(): TermuxBridgeClient? = bridgeToken
@@ -108,10 +187,10 @@ fun WorkflowChatScreen() {
                     selectedModel = resolvedModel
                     LumenaPreferences.saveSelectedModel(context, resolvedModel)
                 }
-                status = when {
-                    found.isEmpty() -> "Ollama online · no local models"
-                    selectedModel.isBlank() -> "Ollama online · ${found.size} model(s)"
-                    else -> "Ollama online · ${found.size} model(s)"
+                status = if (found.isEmpty()) {
+                    "Ollama online · no local models"
+                } else {
+                    "Ollama online · ${found.size} model(s)"
                 }
             }.onFailure {
                 models = emptyList()
@@ -125,19 +204,38 @@ fun WorkflowChatScreen() {
         when (outcome) {
             is WorkflowOutcome.Finished -> {
                 history = outcome.history
+                pending = null
                 bubbles += ChatBubble("assistant", outcome.text)
+                currentTask = currentTask?.copy(
+                    status = TaskStatus.DONE,
+                    step = (currentTask?.step ?: 0) + 1,
+                    lastResult = outcome.text.take(4_000)
+                )
             }
+
             is WorkflowOutcome.NeedsConfirmation -> {
                 pending = outcome.pending
                 bubbles += ChatBubble(
                     "status",
                     "Approval required: ${outcome.pending.plan.request.tool} · ${outcome.pending.plan.reason}"
                 )
+                currentTask = currentTask?.copy(
+                    status = TaskStatus.WAITING_CONFIRMATION,
+                    step = (currentTask?.step ?: 0) + 1,
+                    lastTool = outcome.pending.plan.request.tool
+                )
             }
+
             is WorkflowOutcome.Failed -> {
+                pending = null
                 bubbles += ChatBubble("error", outcome.message)
+                currentTask = currentTask?.copy(
+                    status = TaskStatus.FAILED,
+                    errors = (currentTask?.errors.orEmpty() + outcome.message).takeLast(8)
+                )
             }
         }
+        persistSession()
     }
 
     fun send() {
@@ -145,14 +243,22 @@ fun WorkflowChatScreen() {
         if (text.isBlank() || busy) return
         if (selectedModel.isBlank()) {
             bubbles += ChatBubble("error", "No Ollama model selected. Start Ollama and refresh models.")
+            persistSession()
             return
         }
 
         input = ""
+        currentTask = TaskState(
+            id = UUID.randomUUID().toString(),
+            projectId = null,
+            goal = text,
+            status = TaskStatus.WAITING_MODEL
+        )
         bubbles += ChatBubble("user", text)
         val turnHistory = history + OllamaMessage("user", text)
         history = turnHistory
         busy = true
+        persistSession()
 
         scope.launch {
             val outcome = runCatching {
@@ -166,6 +272,11 @@ fun WorkflowChatScreen() {
 
     LaunchedEffect(Unit) {
         refreshModels()
+    }
+
+    LaunchedEffect(input) {
+        delay(300)
+        persistSession()
     }
 
     LaunchedEffect(bubbles.size) {
@@ -184,16 +295,28 @@ fun WorkflowChatScreen() {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text("Lumena", style = MaterialTheme.typography.headlineSmall)
                 Text(
                     if (selectedModel.isBlank()) status else "$status · $selectedModel",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                currentTask?.let { task ->
+                    Text(
+                        "Task: ${task.status.name.lowercase().replace('_', ' ')} · ${task.step}/${task.maxSteps}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
-            TextButton(onClick = { showSettings = !showSettings }) {
-                Text(if (showSettings) "Hide setup" else "Local model")
+            Row {
+                TextButton(onClick = { clearConversation() }) {
+                    Text("New")
+                }
+                TextButton(onClick = { showSettings = !showSettings }) {
+                    Text(if (showSettings) "Hide" else "Model")
+                }
             }
         }
 
@@ -329,17 +452,22 @@ fun WorkflowChatScreen() {
 
     pending?.let { requested ->
         AlertDialog(
-            onDismissRequest = { pending = null },
+            onDismissRequest = { },
             title = { Text("Allow local action?") },
             text = {
                 Text(
-                    "${requested.plan.reason}\n\nTool: ${requested.plan.request.tool}\nArgs: ${requested.plan.request.args}"
+                    "${requested.plan.reason}\n\nTool: ${requested.plan.request.tool}\nArgs: ${requested.plan.request.args}\n\nThis request was preserved even if you switched tabs."
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     pending = null
+                    currentTask = currentTask?.copy(
+                        status = TaskStatus.EXECUTING,
+                        lastTool = requested.plan.request.tool
+                    )
                     busy = true
+                    persistSession()
                     scope.launch {
                         val outcome = runCatching {
                             val ollama = OllamaClient(ollamaUrl)
@@ -353,7 +481,9 @@ fun WorkflowChatScreen() {
             dismissButton = {
                 TextButton(onClick = {
                     pending = null
+                    currentTask = currentTask?.copy(status = TaskStatus.CANCELLED)
                     bubbles += ChatBubble("status", "Local action cancelled by user.")
+                    persistSession()
                 }) { Text("Cancel") }
             }
         )
