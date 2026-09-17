@@ -2,29 +2,34 @@ package com.lumena.android.agent.local
 
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 
 class TermuxBridgeClient(
     baseUrl: String,
     private val token: String
 ) {
-    private val endpoint = normalizeLoopbackBaseUrl(baseUrl)
-        ?.newBuilder()
-        ?.addPathSegment("tool")
-        ?.build()
+    private val base: HttpUrl = normalizeLoopbackBaseUrl(baseUrl)
         ?: throw IllegalArgumentException("Bridge URL must use localhost/127.0.0.1 over http")
+    private val endpoint = base.newBuilder().addPathSegment("tool").build()
+    private val cancelEndpoint = base.newBuilder().addPathSegment("cancel").build()
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(3, TimeUnit.SECONDS)
-        .readTimeout(130, TimeUnit.SECONDS)
-        .writeTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.MINUTES)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .callTimeout(11, TimeUnit.MINUTES)
         .build()
 
     private val moshi = Moshi.Builder()
@@ -34,26 +39,79 @@ class TermuxBridgeClient(
     private val resultAdapter = moshi.adapter(ToolResult::class.java)
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
-    suspend fun execute(toolRequest: ToolRequest): ToolResult = withContext(Dispatchers.IO) {
-        try {
-            val json = requestAdapter.toJson(toolRequest)
-            val request = Request.Builder()
-                .url(endpoint)
-                .header("Authorization", "Bearer $token")
-                .post(json.toRequestBody(jsonMediaType))
-                .build()
+    suspend fun execute(toolRequest: ToolRequest): ToolResult = suspendCancellableCoroutine { continuation ->
+        val json = requestAdapter.toJson(toolRequest)
+        val request = Request.Builder()
+            .url(endpoint)
+            .header("Authorization", "Bearer $token")
+            .post(json.toRequestBody(jsonMediaType))
+            .build()
+        val call = client.newCall(request)
 
-            client.newCall(request).execute().use { response ->
-                val body = response.body?.string().orEmpty()
-                val parsed = body.takeIf { it.isNotBlank() }?.let(resultAdapter::fromJson)
-                parsed ?: ToolResult(
-                    ok = false,
-                    error = "Bridge returned HTTP ${response.code} without a readable result."
-                )
-            }
-        } catch (t: Throwable) {
-            ToolResult(ok = false, error = "${t::class.simpleName}: ${t.message}")
+        continuation.invokeOnCancellation {
+            call.cancel()
+            toolRequest.requestId?.takeIf { id -> id.isNotBlank() }?.let(::sendCancelBestEffort)
         }
+
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (continuation.isActive) {
+                    continuation.resume(
+                        ToolResult(ok = false, error = "${e::class.simpleName}: ${e.message}")
+                    )
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val result = try {
+                    response.use {
+                        val body = it.body?.string().orEmpty()
+                        val parsed = body.takeIf { value -> value.isNotBlank() }?.let(resultAdapter::fromJson)
+                        parsed ?: ToolResult(
+                            ok = false,
+                            error = "Bridge returned HTTP ${it.code} without a readable result."
+                        )
+                    }
+                } catch (t: Throwable) {
+                    ToolResult(ok = false, error = "${t::class.simpleName}: ${t.message}")
+                }
+                if (continuation.isActive) continuation.resume(result)
+            }
+        })
+    }
+
+    /**
+     * STOP is best effort because the HTTP call itself may already be cancelled. The Termux
+     * bridge tracks requestId -> child process and terminates the matching process group.
+     */
+    private fun sendCancelBestEffort(requestId: String) {
+        val body = "{\"requestId\":${jsonString(requestId)}}"
+        val request = Request.Builder()
+            .url(cancelEndpoint)
+            .header("Authorization", "Bearer $token")
+            .post(body.toRequestBody(jsonMediaType))
+            .build()
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) = Unit
+            override fun onResponse(call: Call, response: Response) {
+                response.close()
+            }
+        })
+    }
+
+    private fun jsonString(value: String): String = buildString {
+        append('"')
+        value.forEach { ch ->
+            when (ch) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> append(ch)
+            }
+        }
+        append('"')
     }
 
     private fun normalizeLoopbackBaseUrl(raw: String) = raw.trim().trimEnd('/')
