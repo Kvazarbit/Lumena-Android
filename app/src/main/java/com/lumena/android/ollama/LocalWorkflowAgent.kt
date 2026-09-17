@@ -42,8 +42,8 @@ object LocalWorkflowAgent {
         - git.add {\"cwd\":\"project\",\"paths\":\".\"}
         - git.commit {\"cwd\":\"project\",\"message\":\"message\"}
         - python.run {\"script\":\"project/scripts/task.py\",\"cwd\":\"project\",\"argv\":\"--flag value\"}
-        - python.syntax_check {\"path\":\"project/file.py\"}
-        - python.tests {\"cwd\":\"project\",\"target\":\"tests\"}
+        - python.syntax_check {\"script\":\"project/file.py\"}
+        - python.tests {\"cwd\":\"project\",\"argv\":\"-q tests\"}
         - ollama.status {}
         - ollama.start {}
         - ollama.pull {\"model\":\"model-name\"}
