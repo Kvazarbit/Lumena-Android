@@ -27,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -82,6 +83,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun LumenaApp(refreshToken: Int) {
         var tab by remember { mutableIntStateOf(0) }
+        val agentWorkScope = rememberCoroutineScope()
 
         Scaffold(
             bottomBar = {
@@ -118,7 +120,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
-                ) { WorkflowChatScreen() }
+                ) { WorkflowChatScreen(agentWorkScope = agentWorkScope) }
 
                 else -> ToolsScreen(
                     refreshToken = refreshToken,
