@@ -19,6 +19,7 @@ data class PersistedPendingTool(
     val tool: String,
     val args: Map<String, String> = emptyMap(),
     val reason: String = "",
+    val taskPlan: List<String> = emptyList(),
     val history: List<PersistedHistoryMessage> = emptyList()
 )
 
@@ -67,6 +68,7 @@ object LocalSessionStore {
                 .takeLast(MAX_HISTORY_MESSAGES)
                 .map { it.copy(content = it.content.take(MAX_MESSAGE_CHARS)) },
             pending = snapshot.pending?.copy(
+                taskPlan = snapshot.pending.taskPlan.take(6).map { it.take(160) },
                 history = snapshot.pending.history
                     .filterNot { it.role == "system" }
                     .takeLast(MAX_HISTORY_MESSAGES)
