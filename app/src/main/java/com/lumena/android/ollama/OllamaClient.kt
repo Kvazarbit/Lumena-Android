@@ -2,15 +2,23 @@ package com.lumena.android.ollama
 
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 data class OllamaMessage(
     val role: String,
@@ -78,15 +86,13 @@ class OllamaClient(baseUrl: String) {
     }
 
     /**
-     * Agent chat is deliberately bounded. Small local models become slower and less reliable
-     * when every persisted chat message is replayed. We keep the system instruction plus the
-     * newest relevant turns, then retry once with a smaller context if the first generation
-     * times out.
+     * Agent chat is bounded and cancellable. Cancelling the owning coroutine immediately
+     * cancels the active OkHttp/Ollama request, which is what the Local STOP button uses.
      */
     suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             require(model.isNotBlank()) { "Choose an Ollama model first" }
-            try {
+            val text = try {
                 executeChat(
                     model = model,
                     messages = compactMessages(messages, maxChars = 14_000, maxPerMessage = 5_000),
@@ -99,14 +105,19 @@ class OllamaClient(baseUrl: String) {
                     options = OllamaOptions(num_ctx = 3072, num_predict = 512, temperature = 0.1)
                 )
             }
+            Result.success(text)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (t: Throwable) {
+            Result.failure(t)
         }
     }
 
-    private fun executeChat(
+    private suspend fun executeChat(
         model: String,
         messages: List<OllamaMessage>,
         options: OllamaOptions
-    ): String {
+    ): String = suspendCancellableCoroutine { continuation ->
         val payload = requestAdapter.toJson(
             OllamaChatRequest(
                 model = model,
@@ -119,13 +130,28 @@ class OllamaClient(baseUrl: String) {
             .url(base.newBuilder().addPathSegments("api/chat").build())
             .post(payload.toRequestBody(jsonType))
             .build()
-        client.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) error("Ollama HTTP ${response.code}: $body")
-            return responseAdapter.fromJson(body)?.message?.content
-                ?.takeIf { it.isNotBlank() }
-                ?: error("Ollama returned no message")
-        }
+        val call = client.newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (continuation.isActive) continuation.resumeWithException(e)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                try {
+                    response.use {
+                        val body = it.body?.string().orEmpty()
+                        if (!it.isSuccessful) error("Ollama HTTP ${it.code}: $body")
+                        val text = responseAdapter.fromJson(body)?.message?.content
+                            ?.takeIf { value -> value.isNotBlank() }
+                            ?: error("Ollama returned no message")
+                        if (continuation.isActive) continuation.resume(text)
+                    }
+                } catch (t: Throwable) {
+                    if (continuation.isActive) continuation.resumeWithException(t)
+                }
+            }
+        })
     }
 
     private fun compactMessages(
