@@ -33,12 +33,18 @@ jobs:
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
       - name: Run unit and streaming cancellation tests
         run: gradle testDebugUnitTest
-      - name: Build debug APK
-        run: gradle assembleDebug
+      - name: Build APK and side-by-side preview
+        run: |
+          mkdir -p dist
+          gradle assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk dist/Lumena-0.8.1-debug.apk
+          gradle -PlumenaPreview=true assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk dist/Lumena-0.8.1-preview.apk
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --print-certs dist/Lumena-0.8.1-preview.apk > dist/SIGNATURES.txt
       - name: Upload APK and test reports
         uses: actions/upload-artifact@v4
         with:
           name: Lumena-progress-stop
           path: |
-            app/build/outputs/apk/debug/app-debug.apk
+            dist/
             app/build/test-results/testDebugUnitTest/*.xml

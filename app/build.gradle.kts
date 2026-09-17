@@ -3,20 +3,19 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+val previewBuild = providers.gradleProperty("lumenaPreview").isPresent
 android {
     namespace = "com.lumena.android"
     compileSdk = 35
     defaultConfig {
-        applicationId = "com.lumena.android"
+        applicationId = if (previewBuild) "com.lumena.android.preview" else "com.lumena.android"
         minSdk = 28
         targetSdk = 35
         versionCode = 12
-        versionName = "0.8.1"
+        versionName = if (previewBuild) "0.8.1-preview" else "0.8.1"
+        manifestPlaceholders["lumenaLabel"] = if (previewBuild) "Lumena Preview" else "Lumena"
     }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
+    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
