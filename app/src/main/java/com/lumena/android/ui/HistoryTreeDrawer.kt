@@ -1,5 +1,8 @@
 package com.lumena.android.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -24,11 +27,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.settings.HistoryBranch
 import com.lumena.android.settings.HistoryTreeState
+import com.lumena.android.settings.WorkReportFormatter
 import java.text.DateFormat
 import java.util.Date
 
@@ -42,10 +47,12 @@ fun HistoryTreeDrawer(
     onRenameActive: (String) -> Unit,
     onClose: () -> Unit
 ) {
+    val context = LocalContext.current
     var query by remember { mutableStateOf("") }
     var newTask by remember { mutableStateOf("") }
     var newTopic by remember { mutableStateOf("") }
     var rename by remember { mutableStateOf("") }
+    var copiedNotice by remember { mutableStateOf("") }
     val active = state.branches.firstOrNull { it.id == state.activeBranchId }
     val filtered = remember(state, query) {
         if (query.isBlank()) state.branches
@@ -53,6 +60,12 @@ fun HistoryTreeDrawer(
             listOf(branch.topic, branch.taskTitle, branch.title)
                 .any { it.contains(query, ignoreCase = true) }
         }
+    }
+
+    fun copyToClipboard(label: String, text: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+        copiedNotice = "$label copied"
     }
 
     Column(
@@ -89,6 +102,25 @@ fun HistoryTreeDrawer(
                 "Active: ${active.topic} / ${active.taskTitle} / ${active.title}",
                 style = MaterialTheme.typography.bodySmall
             )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = {
+                    copyToClipboard("Lumena compact report", WorkReportFormatter.compact(active))
+                }) {
+                    Text("Copy compact")
+                }
+                OutlinedButton(onClick = {
+                    copyToClipboard("Lumena full report", WorkReportFormatter.full(active))
+                }) {
+                    Text("Copy full")
+                }
+            }
+            if (copiedNotice.isNotBlank()) {
+                Text(
+                    copiedNotice,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
         }
 
         HorizontalDivider()
