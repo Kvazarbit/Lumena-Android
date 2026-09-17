@@ -4,7 +4,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -38,11 +37,13 @@ fun HistoryTreeDrawer(
     state: HistoryTreeState,
     onActivate: (String) -> Unit,
     onForkActive: () -> Unit,
+    onCreateTask: (String) -> Unit,
     onCreateTopic: (String) -> Unit,
     onRenameActive: (String) -> Unit,
     onClose: () -> Unit
 ) {
     var query by remember { mutableStateOf("") }
+    var newTask by remember { mutableStateOf("") }
     var newTopic by remember { mutableStateOf("") }
     var rename by remember { mutableStateOf("") }
     val active = state.branches.firstOrNull { it.id == state.activeBranchId }
@@ -134,6 +135,25 @@ fun HistoryTreeDrawer(
         }
 
         HorizontalDivider()
+
+        if (active != null) {
+            Text("New task in this topic", style = MaterialTheme.typography.titleSmall)
+            OutlinedTextField(
+                value = newTask,
+                onValueChange = { newTask = it },
+                label = { Text("Task name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedButton(
+                enabled = newTask.isNotBlank(),
+                onClick = {
+                    onCreateTask(newTask.trim())
+                    newTask = ""
+                }
+            ) { Text("Create task") }
+        }
+
         Text("New topic", style = MaterialTheme.typography.titleSmall)
         OutlinedTextField(
             value = newTopic,
@@ -202,7 +222,10 @@ private fun BranchRow(
         )
     ) {
         Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-            Text("$prefix ${if (depth > 0) "↳ " else ""}${branch.title}", fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+            Text(
+                "$prefix ${if (depth > 0) "↳ " else ""}${branch.title}",
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+            )
             Text(time, style = MaterialTheme.typography.labelSmall)
         }
     }
