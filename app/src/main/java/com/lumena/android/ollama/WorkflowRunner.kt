@@ -5,6 +5,7 @@ import com.lumena.android.agent.core.AgentController
 import com.lumena.android.agent.core.AgentDecision
 import com.lumena.android.agent.core.ControllerInstruction
 import com.lumena.android.agent.core.TaskState
+import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.local.PlannedTool
 import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.TermuxBridgeClient
@@ -48,21 +49,24 @@ class WorkflowRunner(
         history: List<OllamaMessage>,
         task: TaskState,
         control: AgentControlState? = null,
-        onProgress: (String) -> Unit = {}
+        onProgress: (String) -> Unit = {},
+        onState: (AgentControlState) -> Unit = {}
     ): WorkflowOutcome {
         var current = history
         var state = control ?: controller.initial(task)
         var protocolTurns = 0
+        onState(state)
 
         while (state.task.canContinue) {
             protocolTurns++
             if (protocolTurns > 20) {
                 val stopped = state.copy(
                     task = state.task.copy(
-                        status = com.lumena.android.agent.core.TaskStatus.FAILED,
+                        status = TaskStatus.FAILED,
                         errors = (state.task.errors + "Protocol turn cap reached").takeLast(8)
                     )
                 )
+                onState(stopped)
                 return WorkflowOutcome.Failed(
                     "Agent stopped: protocol turn cap reached.",
                     current,
@@ -73,18 +77,21 @@ class WorkflowRunner(
             onProgress("Thinking · step ${state.task.step + 1}/${state.task.maxSteps}")
             val modelMessages = withDynamicContext(current, state)
             val replyResult = ollama.chat(model, modelMessages)
-            val reply = replyResult.getOrElse { error ->
+            if (replyResult.isFailure) {
+                val error = replyResult.exceptionOrNull()
                 when (val recovery = controller.onModelFailure(
                     state,
-                    error.message ?: error::class.simpleName.orEmpty()
+                    error?.message ?: error?.javaClass?.simpleName.orEmpty()
                 )) {
                     is ControllerInstruction.AskModelAgain -> {
                         state = recovery.state
+                        onState(state)
                         current = current + OllamaMessage("user", recovery.feedback)
                         onProgress("Retrying model · ${state.modelFailures}")
                         continue
                     }
                     is ControllerInstruction.Stop -> {
+                        onState(recovery.state)
                         return WorkflowOutcome.Failed(recovery.reason, current, recovery.state)
                     }
                     else -> {
@@ -96,10 +103,12 @@ class WorkflowRunner(
                     }
                 }
             }
+            val reply = replyResult.getOrThrow()
 
             when (val instruction = controller.interpret(reply, state)) {
                 is ControllerInstruction.Execute -> {
                     state = instruction.state
+                    onState(state)
                     if (state.plan.isNotEmpty() && state.task.step == 0) {
                         onProgress(
                             state.plan.mapIndexed { i, step -> "${i + 1}. $step" }
@@ -121,10 +130,11 @@ class WorkflowRunner(
                     if (!planned.allowed) {
                         val stopped = state.copy(
                             task = state.task.copy(
-                                status = com.lumena.android.agent.core.TaskStatus.FAILED,
+                                status = TaskStatus.FAILED,
                                 errors = (state.task.errors + planned.reason).takeLast(8)
                             )
                         )
+                        onState(stopped)
                         return WorkflowOutcome.Failed(
                             "Blocked tool request: ${planned.request.tool} · ${planned.reason}",
                             current,
@@ -139,13 +149,13 @@ class WorkflowRunner(
                     val toolHistory = current + assistantToolMessage
 
                     if (instruction.requiresConfirmation) {
-                        return WorkflowOutcome.NeedsConfirmation(
-                            PendingWorkflowTool(
-                                plan = planned,
-                                history = toolHistory,
-                                control = state
-                            )
+                        val pending = PendingWorkflowTool(
+                            plan = planned,
+                            history = toolHistory,
+                            control = state
                         )
+                        onState(state)
+                        return WorkflowOutcome.NeedsConfirmation(pending)
                     }
 
                     val localBridge = bridge ?: return WorkflowOutcome.Failed(
@@ -163,6 +173,7 @@ class WorkflowRunner(
                         error = result.error
                     )
                     state = transition.state
+                    onState(state)
                     onProgress(
                         if (result.ok) "✓ ${planned.request.tool}"
                         else "✗ ${planned.request.tool}: ${result.error ?: result.stderr.take(300)}"
@@ -181,12 +192,14 @@ class WorkflowRunner(
 
                 is ControllerInstruction.Finish -> {
                     state = instruction.state
+                    onState(state)
                     val next = current + OllamaMessage("assistant", instruction.text)
                     return WorkflowOutcome.Finished(instruction.text, next, state)
                 }
 
                 is ControllerInstruction.AskModelAgain -> {
                     state = instruction.state
+                    onState(state)
                     current = current +
                         OllamaMessage("assistant", reply.take(4_000)) +
                         OllamaMessage("user", instruction.feedback)
@@ -194,6 +207,7 @@ class WorkflowRunner(
                 }
 
                 is ControllerInstruction.Stop -> {
+                    onState(instruction.state)
                     return WorkflowOutcome.Failed(
                         instruction.reason,
                         current,
@@ -205,10 +219,11 @@ class WorkflowRunner(
 
         val stopped = state.copy(
             task = state.task.copy(
-                status = com.lumena.android.agent.core.TaskStatus.FAILED,
+                status = TaskStatus.FAILED,
                 errors = (state.task.errors + "Task can no longer continue").takeLast(8)
             )
         )
+        onState(stopped)
         return WorkflowOutcome.Failed(
             "Agent stopped because the task cannot continue safely.",
             current,
@@ -218,7 +233,8 @@ class WorkflowRunner(
 
     suspend fun approve(
         pending: PendingWorkflowTool,
-        onProgress: (String) -> Unit = {}
+        onProgress: (String) -> Unit = {},
+        onState: (AgentControlState) -> Unit = {}
     ): WorkflowOutcome {
         val localBridge = bridge ?: return WorkflowOutcome.Failed(
             "Bridge token is required for ${pending.plan.request.tool}",
@@ -242,6 +258,7 @@ class WorkflowRunner(
             stderr = result.stderr,
             error = result.error
         )
+        onState(transition.state)
         val next = pending.history + LocalWorkflowAgent.toolResultMessage(
             tool = pending.plan.request.tool,
             ok = result.ok,
@@ -262,7 +279,8 @@ class WorkflowRunner(
             history = next,
             task = transition.state.task,
             control = transition.state,
-            onProgress = onProgress
+            onProgress = onProgress,
+            onState = onState
         )
     }
 
