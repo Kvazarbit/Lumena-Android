@@ -19,6 +19,7 @@ data class PersistedHistoryMessage(
 data class PersistedPendingTool(
     val tool: String,
     val args: Map<String, String> = emptyMap(),
+    val requestId: String? = null,
     val reason: String = "",
     val control: AgentControlState? = null,
     val history: List<PersistedHistoryMessage> = emptyList()
@@ -67,6 +68,7 @@ object LocalSessionStore {
                 .takeLast(MAX_HISTORY_MESSAGES)
                 .map { it.copy(content = it.content.take(MAX_MESSAGE_CHARS)) },
             pending = snapshot.pending?.copy(
+                requestId = snapshot.pending.requestId?.take(220),
                 control = snapshot.pending.control?.copy(
                     plan = snapshot.pending.control.plan.take(6).map { it.take(180) },
                     task = snapshot.pending.control.task.copy(
