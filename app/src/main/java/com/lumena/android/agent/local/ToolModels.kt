@@ -2,7 +2,8 @@ package com.lumena.android.agent.local
 
 data class ToolRequest(
     val tool: String,
-    val args: Map<String, String> = emptyMap()
+    val args: Map<String, String> = emptyMap(),
+    val requestId: String? = null
 )
 
 data class ToolResult(
