@@ -1,6 +1,7 @@
 package com.lumena.android.settings
 
 import android.content.Context
+import com.lumena.android.agent.core.AgentControlState
 import com.lumena.android.agent.core.TaskState
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -19,7 +20,7 @@ data class PersistedPendingTool(
     val tool: String,
     val args: Map<String, String> = emptyMap(),
     val reason: String = "",
-    val taskPlan: List<String> = emptyList(),
+    val control: AgentControlState? = null,
     val history: List<PersistedHistoryMessage> = emptyList()
 )
 
@@ -32,11 +33,9 @@ data class LocalSessionSnapshot(
 )
 
 /**
- * Persists the Local tab independently from Compose lifecycle.
- *
- * This deliberately stores only bounded conversational/task state. Connection secrets
- * remain in [LumenaPreferences]. The current system prompt is not persisted so a new
- * app version can always restore history under the latest safety/tool instructions.
+ * Persists bounded Local-tab state independently from Compose lifecycle.
+ * Connection secrets remain in LumenaPreferences. The static system prompt is
+ * deliberately not persisted so restored sessions use the newest agent rules.
  */
 object LocalSessionStore {
     private const val FILE = "lumena_local_session"
@@ -68,7 +67,14 @@ object LocalSessionStore {
                 .takeLast(MAX_HISTORY_MESSAGES)
                 .map { it.copy(content = it.content.take(MAX_MESSAGE_CHARS)) },
             pending = snapshot.pending?.copy(
-                taskPlan = snapshot.pending.taskPlan.take(6).map { it.take(160) },
+                control = snapshot.pending.control?.copy(
+                    plan = snapshot.pending.control.plan.take(6).map { it.take(180) },
+                    task = snapshot.pending.control.task.copy(
+                        goal = snapshot.pending.control.task.goal.take(8_000),
+                        lastResult = snapshot.pending.control.task.lastResult?.take(4_000),
+                        errors = snapshot.pending.control.task.errors.takeLast(8).map { it.take(2_000) }
+                    )
+                ),
                 history = snapshot.pending.history
                     .filterNot { it.role == "system" }
                     .takeLast(MAX_HISTORY_MESSAGES)
