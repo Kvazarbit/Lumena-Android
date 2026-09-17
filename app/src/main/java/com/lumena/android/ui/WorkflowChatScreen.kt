@@ -56,6 +56,7 @@ import com.lumena.android.settings.LumenaPreferences
 import com.lumena.android.settings.PersistedChatMessage
 import com.lumena.android.settings.PersistedHistoryMessage
 import com.lumena.android.settings.PersistedPendingTool
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -66,8 +67,9 @@ private data class ChatBubble(
 )
 
 @Composable
-fun WorkflowChatScreen() {
-    val scope = rememberCoroutineScope()
+fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
+    val uiScope = rememberCoroutineScope()
+    val workScope = agentWorkScope ?: uiScope
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val initial = remember { LumenaPreferences.load(context) }
@@ -97,7 +99,16 @@ fun WorkflowChatScreen() {
     var selectedModel by rememberSaveable { mutableStateOf(initial.selectedModel) }
     var models by remember { mutableStateOf<List<String>>(emptyList()) }
     var status by remember { mutableStateOf("Checking Ollama…") }
-    var busy by remember { mutableStateOf(false) }
+    var busy by remember {
+        mutableStateOf(
+            restored.task?.status in setOf(
+                TaskStatus.PLANNING,
+                TaskStatus.WAITING_MODEL,
+                TaskStatus.EXECUTING,
+                TaskStatus.VERIFYING
+            )
+        )
+    }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var currentTask by remember { mutableStateOf(restored.task) }
     var history by remember {
@@ -106,27 +117,24 @@ fun WorkflowChatScreen() {
         )
     }
 
-    val restoredPending = remember {
-        restored.pending?.let { saved ->
-            val plan = ToolGate.plan(
-                PlannerDecision(
-                    request = ToolRequest(saved.tool, saved.args),
-                    reason = saved.reason
-                )
+    fun restoredPendingFrom(saved: PersistedPendingTool?): PendingWorkflowTool? = saved?.let {
+        val plan = ToolGate.plan(
+            PlannerDecision(
+                request = ToolRequest(it.tool, it.args),
+                reason = it.reason
             )
-            if (plan.allowed) {
-                PendingWorkflowTool(
-                    plan = plan,
-                    history = listOf(systemMessage) + saved.history.map {
-                        OllamaMessage(it.role, it.content)
-                    }
-                )
-            } else {
-                null
-            }
-        }
+        )
+        if (plan.allowed) {
+            PendingWorkflowTool(
+                plan = plan,
+                history = listOf(systemMessage) + it.history.map { h ->
+                    OllamaMessage(h.role, h.content)
+                }
+            )
+        } else null
     }
-    var pending by remember { mutableStateOf(restoredPending) }
+
+    var pending by remember { mutableStateOf(restoredPendingFrom(restored.pending)) }
 
     fun persistSession() {
         LocalSessionStore.save(
@@ -152,6 +160,33 @@ fun WorkflowChatScreen() {
         )
     }
 
+    fun syncFromStoredSession() {
+        val stored = LocalSessionStore.load(context)
+        if (stored.task?.id != currentTask?.id) return
+        if (stored.task != currentTask) currentTask = stored.task
+
+        val storedChat = stored.chat.map { ChatBubble(it.role, it.text) }
+        if (storedChat.isNotEmpty() && storedChat != bubbles.toList()) {
+            bubbles.clear()
+            bubbles.addAll(storedChat)
+        }
+
+        val storedHistory = listOf(systemMessage) + stored.history.map {
+            OllamaMessage(it.role, it.content)
+        }
+        if (storedHistory != history) history = storedHistory
+
+        val storedPending = restoredPendingFrom(stored.pending)
+        if (storedPending?.plan?.request != pending?.plan?.request) pending = storedPending
+
+        busy = stored.task?.status in setOf(
+            TaskStatus.PLANNING,
+            TaskStatus.WAITING_MODEL,
+            TaskStatus.EXECUTING,
+            TaskStatus.VERIFYING
+        )
+    }
+
     fun clearConversation() {
         input = ""
         pending = null
@@ -159,6 +194,7 @@ fun WorkflowChatScreen() {
         history = listOf(systemMessage)
         bubbles.clear()
         bubbles += ChatBubble("assistant", "New local conversation started.")
+        busy = false
         LocalSessionStore.clear(context)
         persistSession()
     }
@@ -168,9 +204,8 @@ fun WorkflowChatScreen() {
         ?.let { TermuxBridgeClient(bridgeUrl, it) }
 
     fun refreshModels() {
-        busy = true
         status = "Checking Ollama…"
-        scope.launch {
+        uiScope.launch {
             val result = try {
                 OllamaClient(ollamaUrl).listModels()
             } catch (t: Throwable) {
@@ -196,8 +231,28 @@ fun WorkflowChatScreen() {
                 models = emptyList()
                 status = "Ollama offline · ${it.message ?: it::class.simpleName}"
             }
-            busy = false
         }
+    }
+
+    fun reportProgress(message: String) {
+        if (message.isBlank()) return
+        val previous = bubbles.lastOrNull()
+        if (previous?.role != "status" || previous.text != message) {
+            bubbles += ChatBubble("status", message)
+        }
+
+        if (message.startsWith("Plan\n")) {
+            currentTask = currentTask?.copy(status = TaskStatus.PLANNING)
+        } else if (message.startsWith("Step ")) {
+            val parsedStep = message.substringAfter("Step ").substringBefore(':').trim().toIntOrNull()
+            currentTask = currentTask?.copy(
+                status = TaskStatus.EXECUTING,
+                step = maxOf(currentTask?.step ?: 0, parsedStep ?: 0)
+            )
+        } else if (message.startsWith("Thinking")) {
+            currentTask = currentTask?.copy(status = TaskStatus.WAITING_MODEL)
+        }
+        persistSession()
     }
 
     fun applyOutcome(outcome: WorkflowOutcome) {
@@ -208,20 +263,25 @@ fun WorkflowChatScreen() {
                 bubbles += ChatBubble("assistant", outcome.text)
                 currentTask = currentTask?.copy(
                     status = TaskStatus.DONE,
-                    step = (currentTask?.step ?: 0) + 1,
                     lastResult = outcome.text.take(4_000)
                 )
             }
 
             is WorkflowOutcome.NeedsConfirmation -> {
                 pending = outcome.pending
+                if (outcome.pending.taskPlan.isNotEmpty() && bubbles.none { it.role == "status" && it.text.startsWith("Plan\n") }) {
+                    bubbles += ChatBubble(
+                        "status",
+                        outcome.pending.taskPlan.mapIndexed { i, step -> "${i + 1}. $step" }
+                            .joinToString(prefix = "Plan\n", separator = "\n")
+                    )
+                }
                 bubbles += ChatBubble(
                     "status",
                     "Approval required: ${outcome.pending.plan.request.tool} · ${outcome.pending.plan.reason}"
                 )
                 currentTask = currentTask?.copy(
                     status = TaskStatus.WAITING_CONFIRMATION,
-                    step = (currentTask?.step ?: 0) + 1,
                     lastTool = outcome.pending.plan.request.tool
                 )
             }
@@ -235,6 +295,7 @@ fun WorkflowChatScreen() {
                 )
             }
         }
+        busy = false
         persistSession()
     }
 
@@ -260,13 +321,16 @@ fun WorkflowChatScreen() {
         busy = true
         persistSession()
 
-        scope.launch {
+        workScope.launch {
             val outcome = runCatching {
                 val ollama = OllamaClient(ollamaUrl)
-                WorkflowRunner(ollama, bridgeOrNull(), selectedModel).run(turnHistory)
+                WorkflowRunner(ollama, bridgeOrNull(), selectedModel).run(
+                    history = turnHistory,
+                    maxSteps = 8,
+                    onProgress = ::reportProgress
+                )
             }.getOrElse { WorkflowOutcome.Failed(it.message ?: it.toString()) }
             applyOutcome(outcome)
-            busy = false
         }
     }
 
@@ -277,6 +341,18 @@ fun WorkflowChatScreen() {
     LaunchedEffect(input) {
         delay(300)
         persistSession()
+    }
+
+    LaunchedEffect(currentTask?.id) {
+        while (currentTask?.status in setOf(
+                TaskStatus.PLANNING,
+                TaskStatus.WAITING_MODEL,
+                TaskStatus.EXECUTING,
+                TaskStatus.VERIFYING
+            )) {
+            delay(750)
+            syncFromStoredSession()
+        }
     }
 
     LaunchedEffect(bubbles.size) {
@@ -455,8 +531,12 @@ fun WorkflowChatScreen() {
             onDismissRequest = { },
             title = { Text("Allow local action?") },
             text = {
+                val taskPlan = if (requested.taskPlan.isEmpty()) "" else
+                    requested.taskPlan.mapIndexed { i, step -> "${i + 1}. $step" }
+                        .joinToString(prefix = "Plan:\n", separator = "\n", postfix = "\n\n")
                 Text(
-                    "${requested.plan.reason}\n\nTool: ${requested.plan.request.tool}\nArgs: ${requested.plan.request.args}\n\nThis request was preserved even if you switched tabs."
+                    taskPlan +
+                        "${requested.plan.reason}\n\nTool: ${requested.plan.request.tool}\nArgs: ${requested.plan.request.args}\n\nThis request survives tab switching."
                 )
             },
             confirmButton = {
@@ -468,13 +548,15 @@ fun WorkflowChatScreen() {
                     )
                     busy = true
                     persistSession()
-                    scope.launch {
+                    workScope.launch {
                         val outcome = runCatching {
                             val ollama = OllamaClient(ollamaUrl)
-                            WorkflowRunner(ollama, bridgeOrNull(), selectedModel).approve(requested)
+                            WorkflowRunner(ollama, bridgeOrNull(), selectedModel).approve(
+                                pending = requested,
+                                onProgress = ::reportProgress
+                            )
                         }.getOrElse { WorkflowOutcome.Failed(it.message ?: it.toString()) }
                         applyOutcome(outcome)
-                        busy = false
                     }
                 }) { Text("Allow once") }
             },
@@ -483,6 +565,7 @@ fun WorkflowChatScreen() {
                     pending = null
                     currentTask = currentTask?.copy(status = TaskStatus.CANCELLED)
                     bubbles += ChatBubble("status", "Local action cancelled by user.")
+                    busy = false
                     persistSession()
                 }) { Text("Cancel") }
             }
