@@ -22,11 +22,7 @@ class AgentResponseParser {
         val text = raw.trim()
         if (text.isBlank()) return AgentDecision.Reply("")
 
-        val candidate = when {
-            text.startsWith("{") && text.endsWith("}") -> text
-            else -> extractFirstJsonObject(text)
-        } ?: return AgentDecision.Reply(text)
-
+        val candidate = extractProtocolJson(text) ?: return AgentDecision.Reply(text)
         val obj = runCatching { mapAdapter.fromJson(candidate) }.getOrNull()
             ?: return AgentDecision.Reply(text)
 
@@ -35,50 +31,65 @@ class AgentResponseParser {
             return AgentDecision.Done(summary.ifBlank { "Task complete." })
         }
 
-        val tool = obj["tool"]?.toString()?.trim().orEmpty()
+        obj["reply"]?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let {
+            return AgentDecision.Reply(it)
+        }
+
+        // Lumena JSON: {"tool":"file.read","args":{...}}
+        // Hermes/OpenAI-style content fallback: {"name":"file.read","arguments":{...}}
+        val tool = (obj["tool"] ?: obj["name"])?.toString()?.trim().orEmpty()
         if (tool.isBlank()) return AgentDecision.Reply(text)
 
-        val rawArgs = obj["args"] as? Map<*, *> ?: emptyMap<Any?, Any?>()
+        val rawArgs = when (val value = obj["args"] ?: obj["arguments"]) {
+            is Map<*, *> -> value
+            is String -> runCatching { mapAdapter.fromJson(value) }.getOrNull() ?: emptyMap<String, Any?>()
+            else -> emptyMap<String, Any?>()
+        }
         val args = buildMap {
             rawArgs.forEach { (key, value) ->
                 if (key != null && value != null) put(key.toString(), value.toString())
             }
         }
         val reason = obj["reason"]?.toString()?.trim().orEmpty()
+        val plan = (obj["plan"] as? List<*>)
+            .orEmpty()
+            .mapNotNull { it?.toString()?.trim()?.takeIf(String::isNotBlank) }
+            .take(6)
+            .map { it.take(180) }
 
         return AgentDecision.ToolCall(
             tool = tool,
             args = args,
-            reason = reason
+            reason = reason,
+            plan = plan
         )
     }
 
-    private fun extractFirstJsonObject(text: String): String? {
-        val start = text.indexOf('{')
-        if (start < 0) return null
+    /**
+     * Do not execute arbitrary JSON quoted in prose. Accept only an all-JSON response,
+     * an explicit JSON code fence, or a Hermes <tool_call> envelope.
+     */
+    private fun extractProtocolJson(text: String): String? {
+        if (text.startsWith("{") && text.endsWith("}")) return text
 
-        var depth = 0
-        var inString = false
-        var escaped = false
-        for (i in start until text.length) {
-            val c = text[i]
-            if (inString) {
-                when {
-                    escaped -> escaped = false
-                    c == '\\' -> escaped = true
-                    c == '"' -> inString = false
-                }
-                continue
+        val toolOpen = text.indexOf("<tool_call>", ignoreCase = true)
+        if (toolOpen >= 0) {
+            val start = toolOpen + "<tool_call>".length
+            val end = text.indexOf("</tool_call>", start, ignoreCase = true)
+            if (end > start) {
+                return text.substring(start, end).trim().takeIf { it.startsWith("{") && it.endsWith("}") }
             }
+        }
 
-            when (c) {
-                '"' -> inString = true
-                '{' -> depth++
-                '}' -> {
-                    depth--
-                    if (depth == 0) return text.substring(start, i + 1)
-                }
-            }
+        val fences = listOf("```json", "```JSON", "```")
+        for (fence in fences) {
+            val open = text.indexOf(fence)
+            if (open < 0) continue
+            val start = open + fence.length
+            val end = text.indexOf("```", start)
+            if (end <= start) continue
+            val body = text.substring(start, end).trim()
+            if (body.startsWith("{") && body.endsWith("}")) return body
         }
         return null
     }
