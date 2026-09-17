@@ -1,10 +1,11 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.7
+Lumena Termux Bridge v0.8
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains file access
-to one workspace, and exposes an allow-listed tool surface.
+to one workspace, exposes an allow-listed tool surface, and supports
+request-scoped cancellation for long-running subprocess tools.
 """
 from __future__ import annotations
 
@@ -14,7 +15,9 @@ import re
 import secrets
 import shlex
 import shutil
+import signal
 import subprocess
+import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,6 +39,10 @@ MAX_OUTPUT = 128 * 1024
 DEFAULT_TIMEOUT = 120
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 PROJECT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
+REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,220}$")
+
+ACTIVE_PROCESSES: dict[str, subprocess.Popen[str]] = {}
+ACTIVE_LOCK = threading.Lock()
 
 
 def ensure_token() -> str:
@@ -78,22 +85,106 @@ def clamp(text: str) -> str:
     return text[:MAX_OUTPUT] + "\n...[output truncated]..."
 
 
-def run_process(argv: list[str], cwd: Path, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
-    completed = subprocess.run(
+def _register_process(request_id: str | None, process: subprocess.Popen[str]) -> None:
+    if not request_id:
+        return
+    with ACTIVE_LOCK:
+        ACTIVE_PROCESSES[request_id] = process
+
+
+def _unregister_process(request_id: str | None, process: subprocess.Popen[str]) -> None:
+    if not request_id:
+        return
+    with ACTIVE_LOCK:
+        if ACTIVE_PROCESSES.get(request_id) is process:
+            ACTIVE_PROCESSES.pop(request_id, None)
+
+
+def _terminate_process(process: subprocess.Popen[str], *, force: bool = False) -> None:
+    if process.poll() is not None:
+        return
+    sig = signal.SIGKILL if force else signal.SIGTERM
+    try:
+        os.killpg(process.pid, sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            process.kill() if force else process.terminate()
+        except ProcessLookupError:
+            pass
+
+
+def cancel_request(request_id: str) -> dict[str, Any]:
+    if not REQUEST_ID_RE.fullmatch(request_id):
+        raise ValueError("Invalid requestId")
+    with ACTIVE_LOCK:
+        process = ACTIVE_PROCESSES.get(request_id)
+    if process is None or process.poll() is not None:
+        return {
+            "ok": True,
+            "exitCode": 0,
+            "stdout": f"requestId={request_id}\nactive=false\n",
+            "stderr": "",
+            "error": None,
+        }
+
+    _terminate_process(process, force=False)
+
+    def force_kill() -> None:
+        if process.poll() is None:
+            _terminate_process(process, force=True)
+
+    threading.Timer(2.0, force_kill).start()
+    return {
+        "ok": True,
+        "exitCode": 0,
+        "stdout": f"requestId={request_id}\ncancel_requested=true\n",
+        "stderr": "",
+        "error": None,
+    }
+
+
+def run_process(
+    argv: list[str],
+    cwd: Path,
+    timeout: int = DEFAULT_TIMEOUT,
+    *,
+    request_id: str | None = None,
+    env: dict[str, str] | None = None,
+    timeout_cap: int = 600,
+) -> dict[str, Any]:
+    process = subprocess.Popen(
         argv,
         cwd=str(cwd),
-        capture_output=True,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
         text=True,
-        timeout=max(1, min(timeout, 600)),
         shell=False,
-        check=False,
+        start_new_session=True,
     )
+    _register_process(request_id, process)
+    effective_timeout = max(1, min(timeout, timeout_cap))
+    try:
+        stdout, stderr = process.communicate(timeout=effective_timeout)
+    except subprocess.TimeoutExpired:
+        _terminate_process(process, force=False)
+        try:
+            stdout, stderr = process.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            _terminate_process(process, force=True)
+            stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(argv, effective_timeout, output=stdout, stderr=stderr)
+    finally:
+        _unregister_process(request_id, process)
+
+    cancelled = process.returncode in {-signal.SIGTERM, -signal.SIGKILL}
     return {
-        "ok": completed.returncode == 0,
-        "exitCode": completed.returncode,
-        "stdout": clamp(completed.stdout or ""),
-        "stderr": clamp(completed.stderr or ""),
-        "error": None,
+        "ok": process.returncode == 0,
+        "exitCode": process.returncode,
+        "stdout": clamp(stdout or ""),
+        "stderr": clamp(stderr or ""),
+        "error": "Cancelled" if cancelled else None,
     }
 
 
@@ -186,12 +277,12 @@ def workspace_listing() -> str:
     return "\n".join(lines) if lines else "(workspace empty)"
 
 
-def execute_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
+def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None) -> dict[str, Any]:
     if tool == "health":
         return {
             "ok": True,
             "exitCode": 0,
-            "stdout": f"Lumena bridge OK\nworkspace={WORKSPACE}\nversion=0.7\n",
+            "stdout": f"Lumena bridge OK\nworkspace={WORKSPACE}\nversion=0.8\n",
             "stderr": "",
             "error": None,
         }
@@ -213,7 +304,7 @@ def execute_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
         path = safe_path(name)
         path.mkdir(parents=True, exist_ok=False)
         if str(args.get("git", "true")).lower() in {"1", "true", "yes"}:
-            result = run_process(["git", "init"], path)
+            result = run_process(["git", "init"], path, request_id=request_id)
             if not result["ok"]:
                 return result
         return {"ok": True, "exitCode": 0, "stdout": f"created={name}\n", "stderr": "", "error": None}
@@ -291,7 +382,12 @@ def execute_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
             if not message or len(message) > 200:
                 raise ValueError("git.commit requires a message up to 200 chars")
             argv = ["git", "commit", "-m", message]
-        return run_process(argv, cwd, int(args.get("timeout", DEFAULT_TIMEOUT)))
+        return run_process(
+            argv,
+            cwd,
+            int(args.get("timeout", DEFAULT_TIMEOUT)),
+            request_id=request_id,
+        )
 
     if tool in {"python.run", "python.syntax_check"}:
         script = safe_path(str(args.get("script", "")), must_exist=True)
@@ -300,10 +396,20 @@ def execute_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
         cwd_arg = str(args.get("cwd", "")).strip()
         cwd = safe_path(cwd_arg, must_exist=True) if cwd_arg else script.parent
         if tool == "python.syntax_check":
-            return run_process(["python", "-m", "py_compile", str(script)], cwd, int(args.get("timeout", 60)))
+            return run_process(
+                ["python", "-m", "py_compile", str(script)],
+                cwd,
+                int(args.get("timeout", 60)),
+                request_id=request_id,
+            )
         argv_text = str(args.get("argv", "")).strip()
         extra = shlex.split(argv_text) if argv_text else []
-        return run_process(["python", str(script), *extra], cwd, int(args.get("timeout", DEFAULT_TIMEOUT)))
+        return run_process(
+            ["python", str(script), *extra],
+            cwd,
+            int(args.get("timeout", DEFAULT_TIMEOUT)),
+            request_id=request_id,
+        )
 
     if tool == "python.tests":
         cwd = safe_path(str(args.get("cwd", "")).strip(), must_exist=True)
@@ -315,6 +421,7 @@ def execute_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
             ["python", "-m", "pytest", *extra],
             cwd,
             int(args.get("timeout", 300)),
+            request_id=request_id,
         )
 
     if tool == "ollama.status":
@@ -330,68 +437,81 @@ def execute_tool(tool: str, args: dict[str, Any]) -> dict[str, Any]:
         binary = ollama_binary()
         env = os.environ.copy()
         env["OLLAMA_HOST"] = OLLAMA_HOST
-        completed = subprocess.run(
+        return run_process(
             [binary, "pull", model],
-            cwd=str(HOME),
+            HOME,
+            max(60, min(int(args.get("timeout", 600)), 1800)),
+            request_id=request_id,
             env=env,
-            capture_output=True,
-            text=True,
-            timeout=max(60, min(int(args.get("timeout", 600)), 1800)),
-            shell=False,
-            check=False,
+            timeout_cap=1800,
         )
-        return {
-            "ok": completed.returncode == 0,
-            "exitCode": completed.returncode,
-            "stdout": clamp(completed.stdout or ""),
-            "stderr": clamp(completed.stderr or ""),
-            "error": None,
-        }
 
     raise ValueError(f"Unknown or disabled tool: {tool}")
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.7"
+    server_version = "LumenaBridge/0.8"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[bridge] {self.address_string()} - {fmt % args}")
 
     def _json(self, status: int, payload: dict[str, Any]) -> None:
         encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.end_headers()
-        self.wfile.write(encoded)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _authorized(self) -> bool:
         return self.headers.get("Authorization", "") == f"Bearer {TOKEN}"
 
+    def _read_payload(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length <= 0 or length > MAX_BODY:
+            raise ValueError("Invalid request size")
+        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("JSON body must be an object")
+        return payload
+
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.7"})
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.8"})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
     def do_POST(self) -> None:
-        if self.path != "/tool":
+        if self.path not in {"/tool", "/cancel"}:
             self._json(404, {"ok": False, "error": "Not found"})
             return
         if not self._authorized():
             self._json(401, {"ok": False, "error": "Unauthorized"})
             return
+
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            if length <= 0 or length > MAX_BODY:
-                raise ValueError("Invalid request size")
-            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            payload = self._read_payload()
+            if self.path == "/cancel":
+                request_id = str(payload.get("requestId", "")).strip()
+                self._json(200, cancel_request(request_id))
+                return
+
             tool = str(payload.get("tool", "")).strip()
             args = payload.get("args") or {}
             if not isinstance(args, dict):
                 raise ValueError("args must be an object")
-            result = execute_tool(tool, args)
+            request_id_raw = payload.get("requestId")
+            request_id = str(request_id_raw).strip() if request_id_raw is not None else None
+            if request_id and not REQUEST_ID_RE.fullmatch(request_id):
+                raise ValueError("Invalid requestId")
+
+            result = execute_tool(tool, args, request_id=request_id)
             result["tool"] = tool
+            if request_id:
+                result["requestId"] = request_id
             self._json(200 if result.get("ok") else 422, result)
         except subprocess.TimeoutExpired as exc:
             self._json(408, {
@@ -412,7 +532,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Lumena Termux Bridge v0.7")
+    print("Lumena Termux Bridge v0.8")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")
