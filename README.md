@@ -1,31 +1,36 @@
 # Lumena Android
 
-Android co-pilot / local-agent client built with Kotlin + Jetpack Compose.
+Android companion / local-agent client built with Kotlin + Jetpack Compose.
 
-## Current architecture
+## v0.7.3 local-agent architecture
 
-`Official ChatGPT Companion -> approved local tools -> Termux/Python/Git`
+`User -> Local chat -> bounded Ollama context -> one-step agent decision -> ToolGate -> localhost Termux bridge -> tool result -> local model -> next step`
 
-`Local Ollama model -> guarded agent workflow -> Termux/Python/Git`
+The official ChatGPT companion path remains available:
 
-`Accessibility UI tree -> controlled Android actions`
+`Official ChatGPT -> Accessibility snapshot -> LUMENA_TOOL -> explicit approval -> Termux bridge -> LUMENA_RESULT -> official ChatGPT`
 
-## v0.7.2
+### Local agent hardening
+- shared persistent Bridge URL/token, Ollama URL and selected model
+- persistent local chat and task state
+- automatic Ollama model discovery
+- model context is bounded before every call so long persisted chats do not make small local models progressively slower
+- Ollama read timeout increased for phone inference, with one smaller-context retry after a socket timeout
+- multi-step tasks can announce a short `plan[]`
+- one tool call per model turn
+- up to 8 workflow steps
+- visible `Thinking`, plan, tool step and result trace
+- repeated identical tool calls are stopped by a loop detector
+- tool failures are bounded by a failure budget
+- local work uses an app-level coroutine scope, so switching tabs does not cancel an active task
+- current system/tool prompt is never persisted; restored history always uses the newest rules
 
-- persistent app-wide Bridge URL/token, Ollama URL and selected model
-- automatic Ollama model discovery whenever Local opens
-- persistent Local chat across tab switches and app restarts
-- persistent model history used to continue the same conversation
-- persistent current TaskState
-- pending tool approval survives tab switching/recreation
-- bounded Local session storage so weak local models are not fed unbounded history
-- `New` button clears only the Local conversation/task state, not connection settings
-- deterministic Agent Core: parser, ToolRegistry, LoopDetector, FailureBudget, ContextBuilder
-- bridge v0.7 tools: `file.patch`, `python.syntax_check`, `python.tests`
-- backups before `file.write` and `file.patch`
-- unit tests run before APK build in CI
+### Tools
+Read-only tools include workspace/file/Git/Ollama inspection. Mutating or executable tools such as project creation, file writes/patches, Git mutations, Python execution/tests and Ollama mutations require approval.
 
-## Termux bridge setup
+`file.write` and `file.patch` create backups inside the workspace before changing existing files.
+
+## Termux bridge
 
 ```bash
 bash termux/install_bridge.sh
@@ -36,14 +41,8 @@ Default bridge: `http://127.0.0.1:8765`
 
 Default workspace: `~/lumena-workspace`
 
-The bridge binds only to loopback and uses a bearer token. Paths are confined to the workspace.
-
-## Safety model
-
-The model proposes; the application validates, executes and verifies.
-
-Unknown tools are blocked. External ChatGPT-originated tool requests require explicit user approval. Mutating/executable local tools require confirmation. There is no unrestricted shell tool.
+The bridge binds only to loopback and requires a bearer token.
 
 ## Build
 
-Open with JDK 17 and Android SDK 35 or use GitHub Actions. CI runs agent-core unit tests before `assembleDebug`.
+Pull requests run agent-core unit tests before `assembleDebug`. A debug APK artifact is uploaded only after tests and Android build succeed.
