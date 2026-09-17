@@ -17,7 +17,11 @@ object ToolGate {
         val canonical = validation.canonicalTool ?: decision.request.tool
 
         return PlannedTool(
-            request = ToolRequest(canonical, decision.request.args),
+            request = ToolRequest(
+                tool = canonical,
+                args = decision.request.args,
+                requestId = decision.request.requestId
+            ),
             reason = validation.error ?: decision.reason,
             allowed = validation.allowed,
             requiresConfirmation = validation.requiresConfirmation
