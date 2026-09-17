@@ -19,6 +19,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -27,6 +28,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +47,7 @@ import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.TermuxBridgeClient
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
+import com.lumena.android.agent.runtime.AgentRunCoordinator
 import com.lumena.android.ollama.LocalWorkflowAgent
 import com.lumena.android.ollama.OllamaClient
 import com.lumena.android.ollama.OllamaMessage
@@ -57,6 +60,7 @@ import com.lumena.android.settings.LumenaPreferences
 import com.lumena.android.settings.PersistedChatMessage
 import com.lumena.android.settings.PersistedHistoryMessage
 import com.lumena.android.settings.PersistedPendingTool
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -68,9 +72,14 @@ private data class ChatBubble(
 )
 
 @Composable
-fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
+fun WorkflowChatScreen(
+    agentWorkScope: CoroutineScope? = null,
+    runCoordinator: AgentRunCoordinator? = null
+) {
     val uiScope = rememberCoroutineScope()
     val workScope = agentWorkScope ?: uiScope
+    val fallbackCoordinator = remember { AgentRunCoordinator() }
+    val coordinator = runCoordinator ?: fallbackCoordinator
     val listState = rememberLazyListState()
     val context = LocalContext.current
     val initial = remember { LumenaPreferences.load(context) }
@@ -114,6 +123,7 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
             )
         )
     }
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
     fun restoredPendingFrom(saved: PersistedPendingTool?): PendingWorkflowTool? = saved?.let {
         val planned = ToolGate.plan(
@@ -166,8 +176,8 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
     fun isCurrentTask(taskId: String): Boolean =
         LocalSessionStore.load(context).task?.id == taskId
 
-    fun acceptControl(taskId: String, control: AgentControlState) {
-        if (!isCurrentTask(taskId)) return
+    fun acceptControl(taskId: String, runToken: Long, control: AgentControlState) {
+        if (!coordinator.isCurrent(runToken, taskId) || !isCurrentTask(taskId)) return
         currentTask = control.task
         persistSession()
     }
@@ -199,7 +209,19 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
         )
     }
 
+    fun stopCurrentTask(reason: String = "Stopped by user") {
+        val task = currentTask ?: return
+        coordinator.cancel(reason)
+        pending = null
+        busy = false
+        currentTask = task.copy(status = TaskStatus.CANCELLED)
+        bubbles += ChatBubble("status", "STOP · $reason")
+        persistSession()
+    }
+
     fun clearConversation() {
+        coordinator.cancel("New conversation")
+        coordinator.clearFinished()
         input = ""
         pending = null
         currentTask = null
@@ -246,8 +268,13 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
         }
     }
 
-    fun reportProgress(taskId: String, message: String) {
-        if (message.isBlank() || !isCurrentTask(taskId)) return
+    fun reportProgress(taskId: String, runToken: Long, message: String) {
+        if (message.isBlank() ||
+            !coordinator.isCurrent(runToken, taskId) ||
+            !isCurrentTask(taskId)
+        ) return
+
+        coordinator.addProgress(runToken, message)
         val previous = bubbles.lastOrNull()
         if (previous?.role != "status" || previous.text != message) {
             bubbles += ChatBubble("status", message)
@@ -255,14 +282,15 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
         }
     }
 
-    fun applyOutcome(taskId: String, outcome: WorkflowOutcome) {
-        if (!isCurrentTask(taskId)) return
+    fun applyOutcome(taskId: String, runToken: Long, outcome: WorkflowOutcome) {
+        if (!coordinator.isCurrent(runToken, taskId) || !isCurrentTask(taskId)) return
         when (outcome) {
             is WorkflowOutcome.Finished -> {
                 history = outcome.history
                 pending = null
                 currentTask = outcome.control.task
                 bubbles += ChatBubble("assistant", outcome.text)
+                coordinator.finish(runToken, "Done")
             }
 
             is WorkflowOutcome.NeedsConfirmation -> {
@@ -282,6 +310,7 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
                     "status",
                     "Approval required: ${outcome.pending.plan.request.tool} · ${outcome.pending.plan.reason}"
                 )
+                coordinator.pauseForApproval(runToken)
             }
 
             is WorkflowOutcome.Failed -> {
@@ -289,6 +318,7 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
                 pending = null
                 currentTask = outcome.control.task
                 bubbles += ChatBubble("error", outcome.message)
+                coordinator.finish(runToken, "Failed")
             }
         }
         busy = currentTask?.status in setOf(
@@ -323,15 +353,17 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
         busy = true
         persistSession()
 
-        workScope.launch {
+        coordinator.launch(workScope, task.id, resetProgress = true) { runToken ->
             val outcome = try {
                 val ollama = OllamaClient(ollamaUrl)
                 WorkflowRunner(ollama, bridgeOrNull(), selectedModel).run(
                     history = turnHistory,
                     task = task,
-                    onProgress = { reportProgress(task.id, it) },
-                    onState = { acceptControl(task.id, it) }
+                    onProgress = { reportProgress(task.id, runToken, it) },
+                    onState = { acceptControl(task.id, runToken, it) }
                 )
+            } catch (_: CancellationException) {
+                return@launch
             } catch (t: Throwable) {
                 val failedTask = task.copy(
                     status = TaskStatus.FAILED,
@@ -343,11 +375,29 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
                     AgentControlState(task = failedTask)
                 )
             }
-            applyOutcome(task.id, outcome)
+            applyOutcome(task.id, runToken, outcome)
         }
     }
 
     LaunchedEffect(Unit) {
+        val task = currentTask
+        if (task != null &&
+            task.status in setOf(
+                TaskStatus.PLANNING,
+                TaskStatus.WAITING_MODEL,
+                TaskStatus.EXECUTING,
+                TaskStatus.VERIFYING
+            ) &&
+            !coordinator.active
+        ) {
+            currentTask = task.copy(
+                status = TaskStatus.CANCELLED,
+                errors = (task.errors + "Previous agent run was interrupted before this app session resumed.").takeLast(8)
+            )
+            bubbles += ChatBubble("status", "Previous unfinished run was marked cancelled after app restart.")
+            busy = false
+            persistSession()
+        }
         refreshModels()
     }
 
@@ -365,6 +415,13 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
             )) {
             delay(750)
             syncFromStoredSession()
+        }
+    }
+
+    LaunchedEffect(coordinator.active, coordinator.startedAtMs) {
+        while (coordinator.active) {
+            nowMs = System.currentTimeMillis()
+            delay(1_000)
         }
     }
 
@@ -408,6 +465,14 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
                 }
             }
         }
+
+        AgentProgressPanel(
+            task = currentTask,
+            coordinator = coordinator,
+            pendingApproval = pending != null,
+            nowMs = nowMs,
+            onStop = { stopCurrentTask() }
+        )
 
         if (showSettings) {
             Card(
@@ -504,16 +569,6 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(bubbles) { bubble -> MessageBubble(bubble) }
-            if (busy) {
-                item {
-                    Text(
-                        "Lumena is working…",
-                        modifier = Modifier.padding(8.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
         }
 
         Row(
@@ -531,7 +586,7 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
                 maxLines = 4,
                 modifier = Modifier.weight(1f)
             )
-            Button(enabled = !busy && input.isNotBlank(), onClick = { send() }) {
+            Button(enabled = !busy && pending == null && input.isNotBlank(), onClick = { send() }) {
                 Text("Send")
             }
         }
@@ -562,14 +617,17 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
                     currentTask = requested.control.task.copy(status = TaskStatus.EXECUTING)
                     busy = true
                     persistSession()
-                    workScope.launch {
+
+                    coordinator.launch(workScope, taskId, resetProgress = false) { runToken ->
                         val outcome = try {
                             val ollama = OllamaClient(ollamaUrl)
                             WorkflowRunner(ollama, bridgeOrNull(), selectedModel).approve(
                                 pending = requested,
-                                onProgress = { reportProgress(taskId, it) },
-                                onState = { acceptControl(taskId, it) }
+                                onProgress = { reportProgress(taskId, runToken, it) },
+                                onState = { acceptControl(taskId, runToken, it) }
                             )
+                        } catch (_: CancellationException) {
+                            return@launch
                         } catch (t: Throwable) {
                             val failedControl = requested.control.copy(
                                 task = requested.control.task.copy(
@@ -583,21 +641,95 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
                                 failedControl
                             )
                         }
-                        applyOutcome(taskId, outcome)
+                        applyOutcome(taskId, runToken, outcome)
                     }
                 }) { Text("Allow once") }
             },
             dismissButton = {
                 TextButton(onClick = {
-                    pending = null
-                    currentTask = requested.control.task.copy(status = TaskStatus.CANCELLED)
-                    bubbles += ChatBubble("status", "Local action cancelled by user.")
-                    busy = false
-                    persistSession()
-                }) { Text("Cancel") }
+                    stopCurrentTask("Approval cancelled by user")
+                }) { Text("Cancel task") }
             }
         )
     }
+}
+
+@Composable
+private fun AgentProgressPanel(
+    task: TaskState?,
+    coordinator: AgentRunCoordinator,
+    pendingApproval: Boolean,
+    nowMs: Long,
+    onStop: () -> Unit
+) {
+    val activeStatus = task?.status in setOf(
+        TaskStatus.PLANNING,
+        TaskStatus.WAITING_MODEL,
+        TaskStatus.EXECUTING,
+        TaskStatus.VERIFYING,
+        TaskStatus.WAITING_CONFIRMATION
+    )
+    if (task == null || (!activeStatus && coordinator.progress.isEmpty())) return
+
+    val canStop = coordinator.active || pendingApproval || activeStatus
+    val elapsed = if (coordinator.startedAtMs > 0L) {
+        ((if (coordinator.active) nowMs else System.currentTimeMillis()) - coordinator.startedAtMs)
+            .coerceAtLeast(0L)
+    } else 0L
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Agent progress", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "${task.status.name.lowercase().replace('_', ' ')} · step ${task.step}/${task.maxSteps} · ${formatElapsed(elapsed)}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        coordinator.stage,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                if (canStop) {
+                    OutlinedButton(onClick = onStop) {
+                        Text("STOP")
+                    }
+                }
+            }
+
+            if (coordinator.active) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+
+            coordinator.progress.takeLast(5).forEach { line ->
+                Text(
+                    line,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+private fun formatElapsed(milliseconds: Long): String {
+    val totalSeconds = milliseconds / 1_000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "%02d:%02d".format(minutes, seconds)
 }
 
 @Composable
