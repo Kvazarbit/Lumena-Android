@@ -85,6 +85,8 @@ object LocalSessionStore {
             inputDraft = snapshot.inputDraft.take(MAX_DRAFT_CHARS)
         )
         prefs(context).edit().putString(KEY_SNAPSHOT, adapter.toJson(bounded)).apply()
+        // History mirrors only bounded, app-private context. Workspace files are never copied/rolled back.
+        HistoryTreeStore.mirrorActiveSession(context, bounded)
     }
 
     fun clear(context: Context) {
