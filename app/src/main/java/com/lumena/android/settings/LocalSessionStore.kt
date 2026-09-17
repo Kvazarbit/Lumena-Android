@@ -3,92 +3,36 @@ package com.lumena.android.settings
 import android.content.Context
 import com.lumena.android.agent.core.AgentControlState
 import com.lumena.android.agent.core.TaskState
+import com.lumena.android.agent.runtime.ActiveTool
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 
-data class PersistedChatMessage(
-    val role: String,
-    val text: String
-)
-
-data class PersistedHistoryMessage(
-    val role: String,
-    val content: String
-)
-
+data class PersistedChatMessage(val role: String, val text: String)
+data class PersistedHistoryMessage(val role: String, val content: String)
 data class PersistedPendingTool(
-    val tool: String,
-    val args: Map<String, String> = emptyMap(),
-    val reason: String = "",
-    val control: AgentControlState? = null,
-    val history: List<PersistedHistoryMessage> = emptyList()
+    val tool: String, val args: Map<String, String> = emptyMap(), val reason: String = "",
+    val control: AgentControlState? = null, val history: List<PersistedHistoryMessage> = emptyList()
 )
-
 data class LocalSessionSnapshot(
-    val chat: List<PersistedChatMessage> = emptyList(),
-    val history: List<PersistedHistoryMessage> = emptyList(),
-    val task: TaskState? = null,
-    val pending: PersistedPendingTool? = null,
-    val inputDraft: String = ""
+    val chat: List<PersistedChatMessage> = emptyList(), val history: List<PersistedHistoryMessage> = emptyList(),
+    val task: TaskState? = null, val pending: PersistedPendingTool? = null, val inputDraft: String = "",
+    val control: AgentControlState? = null, val inFlight: ActiveTool? = null
 )
-
-/**
- * Persists bounded Local-tab state independently from Compose lifecycle.
- * Connection secrets remain in LumenaPreferences. The static system prompt is
- * deliberately not persisted so restored sessions use the newest agent rules.
- */
+/** Single writer: LocalAgentViewModel. No credentials or private model reasoning here. */
 object LocalSessionStore {
-    private const val FILE = "lumena_local_session"
-    private const val KEY_SNAPSHOT = "snapshot_json"
-    private const val MAX_CHAT_MESSAGES = 80
-    private const val MAX_HISTORY_MESSAGES = 48
-    private const val MAX_MESSAGE_CHARS = 16_000
-    private const val MAX_DRAFT_CHARS = 8_000
-
-    private val moshi = Moshi.Builder()
-        .add(KotlinJsonAdapterFactory())
-        .build()
-    private val adapter = moshi.adapter(LocalSessionSnapshot::class.java)
-
-    fun load(context: Context): LocalSessionSnapshot {
-        val raw = prefs(context).getString(KEY_SNAPSHOT, null) ?: return LocalSessionSnapshot()
-        return runCatching { adapter.fromJson(raw) }
-            .getOrNull()
-            ?: LocalSessionSnapshot()
-    }
-
+    private val adapter = Moshi.Builder().add(KotlinJsonAdapterFactory()).build().adapter(LocalSessionSnapshot::class.java)
+    private fun prefs(context: Context) = context.applicationContext.getSharedPreferences("lumena_local_session", Context.MODE_PRIVATE)
+    fun load(context: Context): LocalSessionSnapshot = runCatching {
+        prefs(context).getString("snapshot_json", null)?.let { adapter.fromJson(it) }
+    }.getOrNull() ?: LocalSessionSnapshot()
     fun save(context: Context, snapshot: LocalSessionSnapshot) {
         val bounded = snapshot.copy(
-            chat = snapshot.chat.takeLast(MAX_CHAT_MESSAGES).map {
-                it.copy(text = it.text.take(MAX_MESSAGE_CHARS))
-            },
-            history = snapshot.history
-                .filterNot { it.role == "system" }
-                .takeLast(MAX_HISTORY_MESSAGES)
-                .map { it.copy(content = it.content.take(MAX_MESSAGE_CHARS)) },
-            pending = snapshot.pending?.copy(
-                control = snapshot.pending.control?.copy(
-                    plan = snapshot.pending.control.plan.take(6).map { it.take(180) },
-                    task = snapshot.pending.control.task.copy(
-                        goal = snapshot.pending.control.task.goal.take(8_000),
-                        lastResult = snapshot.pending.control.task.lastResult?.take(4_000),
-                        errors = snapshot.pending.control.task.errors.takeLast(8).map { it.take(2_000) }
-                    )
-                ),
-                history = snapshot.pending.history
-                    .filterNot { it.role == "system" }
-                    .takeLast(MAX_HISTORY_MESSAGES)
-                    .map { it.copy(content = it.content.take(MAX_MESSAGE_CHARS)) }
-            ),
-            inputDraft = snapshot.inputDraft.take(MAX_DRAFT_CHARS)
+            chat = snapshot.chat.takeLast(100).map { it.copy(text = it.text.take(16_000)) },
+            history = snapshot.history.filterNot { it.role == "system" }.takeLast(48),
+            pending = snapshot.pending?.copy(history = snapshot.pending.history.filterNot { it.role == "system" }.takeLast(48)),
+            inputDraft = snapshot.inputDraft.take(8000)
         )
-        prefs(context).edit().putString(KEY_SNAPSHOT, adapter.toJson(bounded)).apply()
+        prefs(context).edit().putString("snapshot_json", adapter.toJson(bounded)).apply()
     }
-
-    fun clear(context: Context) {
-        prefs(context).edit().remove(KEY_SNAPSHOT).apply()
-    }
-
-    private fun prefs(context: Context) =
-        context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+    fun clear(context: Context) { prefs(context).edit().remove("snapshot_json").apply() }
 }

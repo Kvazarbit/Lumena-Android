@@ -1,11 +1,9 @@
 name: Android CI
-
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -21,9 +19,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Validate Termux bridge
+      - name: Test Termux job progress and cancellation
         run: |
-          python -m py_compile termux/bridge.py
+          python -m py_compile termux/bridge.py termux/managed_bridge.py termux/bridge_jobs.py
+          python -m unittest discover -s termux/tests -v
           bash -n termux/install_bridge.sh
           bash -n termux/ollama_sidecar.sh
       - name: Install Android SDK packages
@@ -32,12 +31,14 @@ jobs:
           test -x "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-      - name: Run agent core unit tests
+      - name: Run unit and streaming cancellation tests
         run: gradle testDebugUnitTest
       - name: Build debug APK
         run: gradle assembleDebug
-      - name: Upload APK
+      - name: Upload APK and test reports
         uses: actions/upload-artifact@v4
         with:
-          name: Lumena-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: Lumena-progress-stop
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/test-results/testDebugUnitTest/*.xml
