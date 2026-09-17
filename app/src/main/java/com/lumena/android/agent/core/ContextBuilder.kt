@@ -16,13 +16,16 @@ class ContextBuilder(
         task: TaskState,
         project: VerifiedProjectContext?,
         relevantMemory: List<String>,
-        allowedTools: Set<String>? = null
+        allowedTools: Set<String>? = null,
+        plan: List<String> = emptyList(),
+        verificationRequirement: String? = null
     ): String {
         val text = buildString {
             appendLine("SYSTEM")
             appendLine("You are Lumena Local Agent. Choose only the single next safe action.")
             appendLine("Never claim a tool ran unless a TOOL_RESULT was provided.")
             appendLine("Never invent files, project state, command results, or capabilities.")
+            appendLine("For an active tool task, finish only with explicit done JSON after required verification.")
             appendLine()
 
             appendLine("AVAILABLE TOOLS")
@@ -58,6 +61,18 @@ class ContextBuilder(
             }
             appendLine()
 
+            if (plan.isNotEmpty()) {
+                appendLine("PUBLIC PLAN")
+                plan.take(6).forEachIndexed { index, step -> appendLine("${index + 1}. ${sanitize(step).take(180)}") }
+                appendLine()
+            }
+
+            if (!verificationRequirement.isNullOrBlank()) {
+                appendLine("VERIFICATION REQUIRED BEFORE DONE")
+                appendLine(sanitize(verificationRequirement))
+                appendLine()
+            }
+
             val memory = relevantMemory
                 .map(::sanitize)
                 .filter { it.isNotBlank() }
@@ -70,9 +85,9 @@ class ContextBuilder(
 
             appendLine()
             appendLine("OUTPUT RULE")
-            appendLine("For a tool call return ONLY JSON: {\"tool\":\"...\",\"args\":{},\"reason\":\"...\"}")
+            appendLine("For one tool call return ONLY JSON: {\"plan\":[\"optional first-step plan\"],\"tool\":\"...\",\"args\":{},\"reason\":\"...\"}")
             appendLine("If complete return ONLY JSON: {\"done\":true,\"summary\":\"...\"}")
-            appendLine("Otherwise answer normally.")
+            appendLine("For ordinary conversation before tool work return ONLY JSON: {\"reply\":\"...\"}")
         }
 
         return if (text.length <= maxChars) text else text.take(maxChars) + "\n[context truncated by app]"
