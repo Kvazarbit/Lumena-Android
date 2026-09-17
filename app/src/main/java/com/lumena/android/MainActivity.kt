@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.LumenaAccessibilityService
 import com.lumena.android.agent.local.AgentPanel
+import com.lumena.android.agent.runtime.AgentRunCoordinator
 import com.lumena.android.companion.CompanionScreen
 import com.lumena.android.ui.LumenaTheme
 import com.lumena.android.ui.WorkflowChatScreen
@@ -84,6 +85,7 @@ class MainActivity : ComponentActivity() {
     private fun LumenaApp(refreshToken: Int) {
         var tab by remember { mutableIntStateOf(0) }
         val agentWorkScope = rememberCoroutineScope()
+        val agentRunCoordinator = remember { AgentRunCoordinator() }
 
         Scaffold(
             bottomBar = {
@@ -120,7 +122,12 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
-                ) { WorkflowChatScreen(agentWorkScope = agentWorkScope) }
+                ) {
+                    WorkflowChatScreen(
+                        agentWorkScope = agentWorkScope,
+                        runCoordinator = agentRunCoordinator
+                    )
+                }
 
                 else -> ToolsScreen(
                     refreshToken = refreshToken,
