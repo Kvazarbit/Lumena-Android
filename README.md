@@ -1,32 +1,48 @@
 # Lumena Android
 
-Experimental Android co-pilot / computer-use client built with Kotlin + Jetpack Compose.
+Android companion / local-agent client built with Kotlin + Jetpack Compose.
 
-## v0.1 architecture
+## v0.7.3 local-agent architecture
 
-`Screen -> Accessibility UI tree -> ScreenSnapshot -> Planner -> ActionGate -> Executor -> Verification`
+`User -> Local chat -> bounded Ollama context -> one-step agent decision -> ToolGate -> localhost Termux bridge -> tool result -> local model -> next step`
 
-### Included
-- Jetpack Compose shell
-- AccessibilityService-based visible UI reader
-- structured screen snapshot
-- basic click / text-input executor
-- explicit action gate
-- user-facing accessibility setup
+The official ChatGPT companion path remains available:
 
-### Safety and control
-Lumena is designed as a co-pilot, not a hidden automation layer. The app does not attempt to bypass Android security, banking protections, DRM, app authentication, or server-side model safeguards. Actions that can change another app should require user confirmation.
+`Official ChatGPT -> Accessibility snapshot -> LUMENA_TOOL -> explicit approval -> Termux bridge -> LUMENA_RESULT -> official ChatGPT`
 
-## Planned
-- streaming AI chat transport
-- screenshot capture with MediaProjection
-- planner JSON schema
-- action verification loop
-- app launcher/router
-- voice control
-- notification agent
-- local memory/presets
-- GitHub Actions APK build
+### Local agent hardening
+- shared persistent Bridge URL/token, Ollama URL and selected model
+- persistent local chat and task state
+- automatic Ollama model discovery
+- model context is bounded before every call so long persisted chats do not make small local models progressively slower
+- Ollama read timeout increased for phone inference, with one smaller-context retry after a socket timeout
+- multi-step tasks can announce a short `plan[]`
+- one tool call per model turn
+- up to 8 workflow steps
+- visible `Thinking`, plan, tool step and result trace
+- repeated identical tool calls are stopped by a loop detector
+- tool failures are bounded by a failure budget
+- local work uses an app-level coroutine scope, so switching tabs does not cancel an active task
+- current system/tool prompt is never persisted; restored history always uses the newest rules
+
+### Tools
+Read-only tools include workspace/file/Git/Ollama inspection. Mutating or executable tools such as project creation, file writes/patches, Git mutations, Python execution/tests and Ollama mutations require approval.
+
+`file.write` and `file.patch` create backups inside the workspace before changing existing files.
+
+## Termux bridge
+
+```bash
+bash termux/install_bridge.sh
+python ~/.lumena/bridge.py
+```
+
+Default bridge: `http://127.0.0.1:8765`
+
+Default workspace: `~/lumena-workspace`
+
+The bridge binds only to loopback and requires a bearer token.
 
 ## Build
-Open in Android Studio with JDK 17 and Android SDK 35.
+
+Pull requests run agent-core unit tests before `assembleDebug`. A debug APK artifact is uploaded only after tests and Android build succeed.
