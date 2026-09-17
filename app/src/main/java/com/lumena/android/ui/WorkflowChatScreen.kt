@@ -1,627 +1,317 @@
 package com.lumena.android.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.lumena.android.agent.core.AgentControlState
-import com.lumena.android.agent.core.TaskState
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.lumena.android.agent.core.TaskStatus
-import com.lumena.android.agent.local.PlannerDecision
-import com.lumena.android.agent.local.TermuxBridgeClient
-import com.lumena.android.agent.local.ToolGate
-import com.lumena.android.agent.local.ToolRequest
-import com.lumena.android.ollama.LocalWorkflowAgent
-import com.lumena.android.ollama.OllamaClient
-import com.lumena.android.ollama.OllamaMessage
-import com.lumena.android.ollama.PendingWorkflowTool
-import com.lumena.android.ollama.WorkflowOutcome
-import com.lumena.android.ollama.WorkflowRunner
-import com.lumena.android.settings.LocalSessionSnapshot
-import com.lumena.android.settings.LocalSessionStore
-import com.lumena.android.settings.LumenaPreferences
-import com.lumena.android.settings.PersistedChatMessage
-import com.lumena.android.settings.PersistedHistoryMessage
-import com.lumena.android.settings.PersistedPendingTool
+import com.lumena.android.history.*
+import com.lumena.android.ollama.ToolMode
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.util.UUID
+import java.text.DateFormat
+import java.util.Date
 
-private data class ChatBubble(
-    val role: String,
-    val text: String
-)
+private data class EditHistoryTitle(val id: String?, val title: String, val topic: Boolean)
+private data class ForkPoint(val sessionId: String, val taskId: String, val title: String)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun WorkflowChatScreen(
+    @Suppress("UNUSED_PARAMETER") agentWorkScope: CoroutineScope? = null,
+    model: HistoryViewModel = viewModel()
+) {
+    val ui by model.ui.collectAsState()
+    val drawer = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+    val list = rememberLazyListState()
+    var setup by rememberSaveable { mutableStateOf(false) }
+    var review by remember { mutableStateOf(false) }
+    var editTitle by remember { mutableStateOf<EditHistoryTitle?>(null) }
+    var moveId by remember { mutableStateOf<String?>(null) }
+    var fork by remember { mutableStateOf<ForkPoint?>(null) }
+    val current = ui.selected
+    val drawerWidth = (LocalConfiguration.current.screenWidthDp * 0.9f).coerceAtMost(380f).dp
+    LaunchedEffect(Unit) { model.visible() }
+    LaunchedEffect(current?.meta?.id) {
+        review = false
+        if (ui.scrollMessageId == null && current?.payload?.chat?.isNotEmpty() == true)
+            list.scrollToItem(current.payload.chat.lastIndex)
+    }
+    LaunchedEffect(ui.scrollMessageId, current?.meta?.id) {
+        val id = ui.scrollMessageId ?: return@LaunchedEffect
+        val index = current?.payload?.chat?.indexOfFirst { it.id == id } ?: -1
+        if (index >= 0) list.scrollToItem(index)
+        model.consumedScroll()
+    }
+    LaunchedEffect(current?.payload?.chat?.size) {
+        val size = current?.payload?.chat?.size ?: 0
+        val lastVisible = list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        if (size > 0 && ui.scrollMessageId == null && lastVisible >= size - 3) list.animateScrollToItem(size - 1)
+    }
+
+    ModalNavigationDrawer(
+        drawerState = drawer,
+        drawerContent = {
+            ModalDrawerSheet(Modifier.width(drawerWidth).fillMaxHeight()) {
+                HistoryDrawer(ui, onSelect = { id, anchor ->
+                    model.select(id, anchor); scope.launch { drawer.close() }
+                }, onNew = { model.newConversation(); scope.launch { drawer.close() } },
+                    onTopic = { editTitle = EditHistoryTitle(null, "", true) },
+                    onRename = { id, title, topic -> editTitle = EditHistoryTitle(id, title, topic) },
+                    onMove = { moveId = it })
+            }
+        }
+    ) {
+        Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).imePadding()) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { scope.launch { drawer.open() } }, modifier = Modifier.semantics { contentDescription = "Відкрити історію" }) { Text("☰") }
+                Column(Modifier.weight(1f)) {
+                    Text(current?.meta?.title ?: "Lumena", style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(current?.meta?.model?.ifBlank { "Модель не вибрано" } ?: "Історія задач",
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                TextButton(onClick = { model.newConversation() }, enabled = !ui.loading) { Text("Новий") }
+                TextButton(onClick = { setup = true }, enabled = current != null) { Text("Модель") }
+            }
+            if (current != null) {
+                val topic = ui.catalog.topics.firstOrNull { it.id == current.meta.topicId }
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(topic?.title.orEmpty(), style = MaterialTheme.typography.labelSmall)
+                    HistoryLogic.breadcrumbs(ui.catalog, current.meta.id).forEach { ancestor ->
+                        Text(" › ", style = MaterialTheme.typography.labelSmall)
+                        TextButton(onClick = { model.select(ancestor.id) }, contentPadding = PaddingValues(horizontal = 4.dp)) {
+                            Text(ancestor.title.take(32), style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+            }
+            ui.runningSessionId?.let { running ->
+                Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(if (running == current?.meta?.id) "Агент працює в цій розмові" else "Агент працює в іншій розмові",
+                            style = MaterialTheme.typography.labelMedium)
+                        if (running != current?.meta?.id) TextButton(onClick = { model.select(running) }) { Text("Відкрити задачу") }
+                    }
+                    TextButton(onClick = model::stop) { Text("Стоп") }
+                }
+            }
+            current?.payload?.recoveryNotice?.let {
+                Text(it, Modifier.padding(horizontal = 12.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error)
+            }
+            if (ui.loading) {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            } else {
+                LazyColumn(state = list, modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
+                    contentPadding = PaddingValues(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (current?.payload?.chat.isNullOrEmpty()) item {
+                        Text("Почніть розмову. Кнопка ☰ відкриває теми, історію задач та відгалуження контексту.",
+                            Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    items(current?.payload?.chat.orEmpty(), key = { it.id }) { message ->
+                        val mark = current?.payload?.tasks?.firstOrNull { it.anchorMessageId == message.id && it.chatEnd != null }
+                        HistoryMessage(message, mark != null, onFork = {
+                            if (current != null && mark != null) fork = ForkPoint(current.meta.id, mark.id, mark.goal)
+                        })
+                    }
+                }
+            }
+            current?.payload?.pending?.let { pending ->
+                Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                    Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Очікує дозволу\n${pending.plan.request.tool}", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { review = true }, enabled = ui.runningTaskId == null) { Text("Переглянути") }
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(value = current?.payload?.draft.orEmpty(), onValueChange = model::draft,
+                    label = { Text("Повідомлення") }, minLines = 1, maxLines = 4,
+                    enabled = current != null && ui.runningSessionId != current.meta.id,
+                    modifier = Modifier.weight(1f))
+                Button(onClick = model::send, enabled = current != null && current.payload.draft.isNotBlank() &&
+                    current.payload.pending == null && ui.runningTaskId == null) { Text("Надіслати") }
+            }
+        }
+    }
+
+    if (setup && current != null) AlertDialog(onDismissRequest = { setup = false },
+        title = { Text("Модель і з’єднання") },
+        text = {
+            Column(Modifier.heightIn(max = 470.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(ui.modelStatus, style = MaterialTheme.typography.bodySmall)
+                Text("Модель і протокол зберігаються окремо для кожної розмови. URL та ключ мосту — спільні.", style = MaterialTheme.typography.bodySmall)
+                val frozen = ui.runningSessionId == current.meta.id || current.payload.pending != null
+                OutlinedTextField(current.meta.model, { model.model(it, current.meta.toolMode) }, enabled = !frozen,
+                    label = { Text("Назва моделі") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                ui.models.forEach { name -> TextButton(onClick = { model.model(name, current.meta.toolMode) }, enabled = !frozen) {
+                    Text((if (name == current.meta.model) "✓ " else "") + name, maxLines = 2)
+                } }
+                Row { ToolMode.entries.forEach { mode ->
+                    TextButton(onClick = { model.model(current.meta.model, mode) }, enabled = !frozen) {
+                        Text((if (mode == current.meta.toolMode) "✓ " else "") + mode.name)
+                    }
+                } }
+                Text("AUTO перевіряє capabilities моделі. NATIVE використовує tool_calls. JSON — сумісний резервний режим. Хмарна модель залишається хмарною, навіть через localhost.", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(ui.settings.ollamaUrl, model::ollamaUrl, label = { Text("Ollama URL") }, singleLine = true)
+                TextButton(onClick = model::refreshModels) { Text("Оновити список") }
+                HorizontalDivider()
+                OutlinedTextField(ui.settings.bridgeUrl, model::bridgeUrl, label = { Text("Bridge URL") }, singleLine = true)
+                OutlinedTextField(ui.settings.bridgeToken, model::bridgeToken, label = { Text("Bridge token") }, singleLine = true,
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation())
+            }
+        }, confirmButton = { TextButton(onClick = { setup = false }) { Text("Готово") } })
+
+    editTitle?.let { edit ->
+        var value by remember(edit) { mutableStateOf(edit.title) }
+        AlertDialog(onDismissRequest = { editTitle = null }, title = { Text(if (edit.id == null) "Нова тема" else "Перейменувати") },
+            text = { OutlinedTextField(value, { value = it }, label = { Text("Назва") }, singleLine = true) },
+            confirmButton = { TextButton(enabled = value.isNotBlank(), onClick = {
+                when { edit.id == null -> model.createTopic(value); edit.topic -> model.renameTopic(edit.id, value); else -> model.rename(edit.id, value) }
+                editTitle = null
+            }) { Text("Зберегти") } }, dismissButton = { TextButton(onClick = { editTitle = null }) { Text("Скасувати") } })
+    }
+    moveId?.let { id -> AlertDialog(onDismissRequest = { moveId = null }, title = { Text("Перемістити до теми") },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+            Text("Розмова переміщується разом із дочірніми гілками.", style = MaterialTheme.typography.bodySmall)
+            ui.catalog.topics.forEach { topic -> TextButton(onClick = { model.move(id, topic.id); moveId = null }) { Text(topic.title) } }
+        } }, confirmButton = { TextButton(onClick = { moveId = null }) { Text("Закрити") } }) }
+    fork?.let { point -> AlertDialog(onDismissRequest = { fork = null }, title = { Text("Відгалузити контекст?") },
+        text = { Text("${point.title}\n\nНова гілка успадкує історію лише до цієї завершеної точки. Пізніші повідомлення не потраплять у неї.\n\nФайли workspace не копіюються і не відкочуються. Дозволи та незавершені команди не успадковуються.") },
+        confirmButton = { TextButton(onClick = { model.fork(point.sessionId, point.taskId); fork = null }) { Text("Створити гілку") } },
+        dismissButton = { TextButton(onClick = { fork = null }) { Text("Скасувати") } }) }
+    if (review) current?.payload?.pending?.let { pending -> AlertDialog(onDismissRequest = { review = false },
+        title = { Text("Дозволити одну дію?") },
+        text = { SelectionContainer { Text("${pending.plan.reason}\n\n${pending.plan.request.tool}\n${pending.plan.request.args}\n\nPython виконується з правами Termux. Обмеження шляхів інструментів не є ізоляцією довільного Python-коду.",
+            Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState()), fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodySmall) } },
+        confirmButton = { TextButton(enabled = ui.runningTaskId == null, onClick = {
+            model.approve(current.meta.id, pending.control.task.id); review = false
+        }) { Text("Дозволити один раз") } },
+        dismissButton = { TextButton(onClick = { model.reject(current.meta.id, pending.control.task.id); review = false }) { Text("Відхилити") } }) }
+    ui.error?.let { message -> AlertDialog(onDismissRequest = model::clearError, title = { Text("Потрібна увага") },
+        text = { Text(message) }, confirmButton = { TextButton(onClick = model::clearError) { Text("Закрити") } }) }
+}
 
 @Composable
-fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
-    val uiScope = rememberCoroutineScope()
-    val workScope = agentWorkScope ?: uiScope
-    val listState = rememberLazyListState()
-    val context = LocalContext.current
-    val initial = remember { LumenaPreferences.load(context) }
-    val restored = remember { LocalSessionStore.load(context) }
-    val systemMessage = remember { OllamaMessage("system", LocalWorkflowAgent.systemPrompt) }
-
-    val bubbles = remember {
-        mutableStateListOf<ChatBubble>().apply {
-            val restoredChat = restored.chat.map { ChatBubble(it.role, it.text) }
-            if (restoredChat.isNotEmpty()) addAll(restoredChat)
-            else add(
-                ChatBubble(
-                    "assistant",
-                    "Lumena v0.8 local agent is ready. Plan, task state and verification are controlled by the app."
-                )
-            )
-        }
+private fun HistoryDrawer(
+    ui: HistoryUiState,
+    onSelect: (String, String?) -> Unit,
+    onNew: () -> Unit,
+    onTopic: () -> Unit,
+    onRename: (String, String, Boolean) -> Unit,
+    onMove: (String) -> Unit
+) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var collapsedTopics by remember { mutableStateOf(emptySet<String>()) }
+    var collapsedChats by remember { mutableStateOf(emptySet<String>()) }
+    var menu by remember { mutableStateOf<String?>(null) }
+    Text("Історія", Modifier.padding(start = 20.dp, top = 20.dp), style = MaterialTheme.typography.headlineSmall)
+    Text("Теми · розмови · задачі", Modifier.padding(horizontal = 20.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall)
+    Row(Modifier.padding(horizontal = 12.dp)) {
+        TextButton(onClick = onTopic) { Text("+ Тема") }
+        TextButton(onClick = onNew, enabled = !ui.loading) { Text("+ Розмова") }
     }
-
-    var input by rememberSaveable { mutableStateOf(restored.inputDraft) }
-    var ollamaUrl by rememberSaveable { mutableStateOf(initial.ollamaUrl) }
-    var bridgeUrl by rememberSaveable { mutableStateOf(initial.bridgeUrl) }
-    var bridgeToken by rememberSaveable { mutableStateOf(initial.bridgeToken) }
-    var selectedModel by rememberSaveable { mutableStateOf(initial.selectedModel) }
-    var models by remember { mutableStateOf<List<String>>(emptyList()) }
-    var status by remember { mutableStateOf("Checking Ollama…") }
-    var showSettings by rememberSaveable { mutableStateOf(false) }
-    var currentTask by remember { mutableStateOf(restored.task) }
-    var history by remember {
-        mutableStateOf(
-            listOf(systemMessage) + restored.history.map { OllamaMessage(it.role, it.content) }
-        )
-    }
-    var busy by remember {
-        mutableStateOf(
-            restored.task?.status in setOf(
-                TaskStatus.PLANNING,
-                TaskStatus.WAITING_MODEL,
-                TaskStatus.EXECUTING,
-                TaskStatus.VERIFYING
-            )
-        )
-    }
-
-    fun restoredPendingFrom(saved: PersistedPendingTool?): PendingWorkflowTool? = saved?.let {
-        val planned = ToolGate.plan(
-            PlannerDecision(
-                request = ToolRequest(it.tool, it.args),
-                reason = it.reason
-            )
-        )
-        val control = it.control
-            ?: currentTask?.let { task -> AgentControlState(task = task) }
-            ?: return@let null
-        if (planned.allowed) {
-            PendingWorkflowTool(
-                plan = planned,
-                history = listOf(systemMessage) + it.history.map { h ->
-                    OllamaMessage(h.role, h.content)
-                },
-                control = control
-            )
-        } else null
-    }
-
-    var pending by remember { mutableStateOf(restoredPendingFrom(restored.pending)) }
-
-    fun persistSession() {
-        LocalSessionStore.save(
-            context,
-            LocalSessionSnapshot(
-                chat = bubbles.map { PersistedChatMessage(it.role, it.text) },
-                history = history
-                    .filterNot { it.role == "system" }
-                    .map { PersistedHistoryMessage(it.role, it.content) },
-                task = currentTask,
-                pending = pending?.let { active ->
-                    PersistedPendingTool(
-                        tool = active.plan.request.tool,
-                        args = active.plan.request.args,
-                        reason = active.plan.reason,
-                        control = active.control,
-                        history = active.history
-                            .filterNot { it.role == "system" }
-                            .map { PersistedHistoryMessage(it.role, it.content) }
-                    )
-                },
-                inputDraft = input
-            )
-        )
-    }
-
-    fun isCurrentTask(taskId: String): Boolean =
-        LocalSessionStore.load(context).task?.id == taskId
-
-    fun acceptControl(taskId: String, control: AgentControlState) {
-        if (!isCurrentTask(taskId)) return
-        currentTask = control.task
-        persistSession()
-    }
-
-    fun syncFromStoredSession() {
-        val stored = LocalSessionStore.load(context)
-        if (stored.task?.id != currentTask?.id) return
-        if (stored.task != currentTask) currentTask = stored.task
-
-        val storedChat = stored.chat.map { ChatBubble(it.role, it.text) }
-        if (storedChat.isNotEmpty() && storedChat != bubbles.toList()) {
-            bubbles.clear()
-            bubbles.addAll(storedChat)
-        }
-
-        val storedHistory = listOf(systemMessage) + stored.history.map {
-            OllamaMessage(it.role, it.content)
-        }
-        if (storedHistory != history) history = storedHistory
-
-        val storedPending = restoredPendingFrom(stored.pending)
-        if (storedPending?.plan?.request != pending?.plan?.request) pending = storedPending
-
-        busy = stored.task?.status in setOf(
-            TaskStatus.PLANNING,
-            TaskStatus.WAITING_MODEL,
-            TaskStatus.EXECUTING,
-            TaskStatus.VERIFYING
-        )
-    }
-
-    fun clearConversation() {
-        input = ""
-        pending = null
-        currentTask = null
-        history = listOf(systemMessage)
-        bubbles.clear()
-        bubbles += ChatBubble("assistant", "New local conversation started.")
-        busy = false
-        LocalSessionStore.clear(context)
-        persistSession()
-    }
-
-    fun bridgeOrNull(): TermuxBridgeClient? = bridgeToken
-        .takeIf { it.isNotBlank() }
-        ?.let { TermuxBridgeClient(bridgeUrl, it) }
-
-    fun refreshModels() {
-        status = "Checking Ollama…"
-        uiScope.launch {
-            val result = try {
-                OllamaClient(ollamaUrl).listModels()
-            } catch (t: Throwable) {
-                Result.failure(t)
-            }
-            result.onSuccess { found ->
-                models = found
-                val resolvedModel = when {
-                    selectedModel.isNotBlank() && selectedModel in found -> selectedModel
-                    found.isNotEmpty() -> found.first()
-                    else -> selectedModel
-                }
-                if (resolvedModel != selectedModel) {
-                    selectedModel = resolvedModel
-                    LumenaPreferences.saveSelectedModel(context, resolvedModel)
-                }
-                status = if (found.isEmpty()) {
-                    "Ollama online · no local models"
-                } else {
-                    "Ollama online · ${found.size} model(s)"
-                }
-            }.onFailure {
-                models = emptyList()
-                status = "Ollama offline · ${it.message ?: it::class.simpleName}"
-            }
-        }
-    }
-
-    fun reportProgress(taskId: String, message: String) {
-        if (message.isBlank() || !isCurrentTask(taskId)) return
-        val previous = bubbles.lastOrNull()
-        if (previous?.role != "status" || previous.text != message) {
-            bubbles += ChatBubble("status", message)
-            persistSession()
-        }
-    }
-
-    fun applyOutcome(taskId: String, outcome: WorkflowOutcome) {
-        if (!isCurrentTask(taskId)) return
-        when (outcome) {
-            is WorkflowOutcome.Finished -> {
-                history = outcome.history
-                pending = null
-                currentTask = outcome.control.task
-                bubbles += ChatBubble("assistant", outcome.text)
-            }
-
-            is WorkflowOutcome.NeedsConfirmation -> {
-                pending = outcome.pending
-                history = outcome.pending.history
-                currentTask = outcome.pending.control.task
-                if (outcome.pending.taskPlan.isNotEmpty() &&
-                    bubbles.none { it.role == "status" && it.text.startsWith("Plan\n") }
-                ) {
-                    bubbles += ChatBubble(
-                        "status",
-                        outcome.pending.taskPlan.mapIndexed { i, step -> "${i + 1}. $step" }
-                            .joinToString(prefix = "Plan\n", separator = "\n")
-                    )
-                }
-                bubbles += ChatBubble(
-                    "status",
-                    "Approval required: ${outcome.pending.plan.request.tool} · ${outcome.pending.plan.reason}"
-                )
-            }
-
-            is WorkflowOutcome.Failed -> {
-                history = outcome.history
-                pending = null
-                currentTask = outcome.control.task
-                bubbles += ChatBubble("error", outcome.message)
-            }
-        }
-        busy = currentTask?.status in setOf(
-            TaskStatus.PLANNING,
-            TaskStatus.WAITING_MODEL,
-            TaskStatus.EXECUTING,
-            TaskStatus.VERIFYING
-        )
-        persistSession()
-    }
-
-    fun send() {
-        val text = input.trim()
-        if (text.isBlank() || busy) return
-        if (selectedModel.isBlank()) {
-            bubbles += ChatBubble("error", "No Ollama model selected. Start Ollama and refresh models.")
-            persistSession()
-            return
-        }
-
-        input = ""
-        val task = TaskState(
-            id = UUID.randomUUID().toString(),
-            projectId = null,
-            goal = text,
-            status = TaskStatus.WAITING_MODEL
-        )
-        currentTask = task
-        bubbles += ChatBubble("user", text)
-        val turnHistory = history + OllamaMessage("user", text)
-        history = turnHistory
-        busy = true
-        persistSession()
-
-        workScope.launch {
-            val outcome = try {
-                val ollama = OllamaClient(ollamaUrl)
-                WorkflowRunner(ollama, bridgeOrNull(), selectedModel).run(
-                    history = turnHistory,
-                    task = task,
-                    onProgress = { reportProgress(task.id, it) },
-                    onState = { acceptControl(task.id, it) }
-                )
-            } catch (t: Throwable) {
-                val failedTask = task.copy(
-                    status = TaskStatus.FAILED,
-                    errors = listOf(t.message ?: t.toString())
-                )
-                WorkflowOutcome.Failed(
-                    t.message ?: t.toString(),
-                    turnHistory,
-                    AgentControlState(task = failedTask)
-                )
-            }
-            applyOutcome(task.id, outcome)
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        refreshModels()
-    }
-
-    LaunchedEffect(input) {
-        delay(300)
-        persistSession()
-    }
-
-    LaunchedEffect(currentTask?.id) {
-        while (currentTask?.status in setOf(
-                TaskStatus.PLANNING,
-                TaskStatus.WAITING_MODEL,
-                TaskStatus.EXECUTING,
-                TaskStatus.VERIFYING
-            )) {
-            delay(750)
-            syncFromStoredSession()
-        }
-    }
-
-    LaunchedEffect(bubbles.size) {
-        if (bubbles.isNotEmpty()) listState.animateScrollToItem(bubbles.lastIndex)
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Lumena", style = MaterialTheme.typography.headlineSmall)
-                Text(
-                    if (selectedModel.isBlank()) status else "$status · $selectedModel",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                currentTask?.let { task ->
-                    Text(
-                        "Task: ${task.status.name.lowercase().replace('_', ' ')} · ${task.step}/${task.maxSteps}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            Row {
-                TextButton(onClick = { clearConversation() }) {
-                    Text("New")
-                }
-                TextButton(onClick = { showSettings = !showSettings }) {
-                    Text(if (showSettings) "Hide" else "Model")
-                }
-            }
-        }
-
-        if (showSettings) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text("Local model", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Lumena restores the model automatically and keeps AgentController state outside the model.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    OutlinedTextField(
-                        value = ollamaUrl,
-                        onValueChange = {
-                            ollamaUrl = it
-                            LumenaPreferences.saveOllamaUrl(context, it)
-                        },
-                        label = { Text("Ollama URL") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(enabled = !busy, onClick = { refreshModels() }) {
-                            Text("Refresh models")
+    OutlinedTextField(query, { query = it }, label = { Text("Пошук назв і задач") }, singleLine = true,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp))
+    HorizontalDivider(Modifier.padding(top = 8.dp))
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp)) {
+        ui.catalog.topics.forEach { topic ->
+            val effectiveQuery = if (topic.title.contains(query, true)) "" else query
+            val rows = HistoryLogic.tree(ui.catalog, topic.id, effectiveQuery, if (query.isBlank()) collapsedChats else emptySet())
+            if (query.isBlank() || rows.isNotEmpty() || topic.title.contains(query, true)) {
+                item(key = "topic:${topic.id}") {
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { collapsedTopics = if (topic.id in collapsedTopics) collapsedTopics - topic.id else collapsedTopics + topic.id }, modifier = Modifier.weight(1f)) {
+                            Text((if (topic.id in collapsedTopics && query.isBlank()) "▸ " else "▾ ") + topic.title,
+                                modifier = Modifier.fillMaxWidth(), maxLines = 2)
                         }
-                        if (models.isNotEmpty()) {
-                            TextButton(onClick = {
-                                val current = models.indexOf(selectedModel).coerceAtLeast(0)
-                                val next = models[(current + 1) % models.size]
-                                selectedModel = next
-                                LumenaPreferences.saveSelectedModel(context, next)
-                            }) {
-                                Text("Next model")
+                        IconButton(onClick = { onRename(topic.id, topic.title, true) }, modifier = Modifier.semantics { contentDescription = "Перейменувати тему" }) { Text("⋮") }
+                    }
+                }
+                if (topic.id !in collapsedTopics || query.isNotBlank()) rows.forEach { row ->
+                    val c = row.meta
+                    item(key = "chat:${c.id}") {
+                        Row(Modifier.fillMaxWidth().padding(start = (8 + row.depth.coerceAtMost(6) * 12).dp)
+                            .background(if (c.id == ui.selected?.meta?.id) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = { collapsedChats = if (c.id in collapsedChats) collapsedChats - c.id else collapsedChats + c.id },
+                                modifier = Modifier.semantics { contentDescription = "Розгорнути або згорнути розмову" }) { Text(if (c.id in collapsedChats) "▸" else "▾") }
+                            Column(Modifier.weight(1f).clickable { onSelect(c.id, null) }.padding(vertical = 10.dp)) {
+                                Text((if (row.depth > 0) "↳ " else "") + c.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium)
+                                Text((if (ui.runningSessionId == c.id) "● Працює · " else "") + dateLabel(c.updatedAt), style = MaterialTheme.typography.labelSmall)
+                            }
+                            Box {
+                                IconButton(onClick = { menu = c.id }, modifier = Modifier.semantics { contentDescription = "Дії з розмовою" }) { Text("⋮") }
+                                DropdownMenu(expanded = menu == c.id, onDismissRequest = { menu = null }) {
+                                    DropdownMenuItem(text = { Text("Перейменувати") }, onClick = { menu = null; onRename(c.id, c.title, false) })
+                                    DropdownMenuItem(text = { Text("До іншої теми") }, onClick = { menu = null; onMove(c.id) })
+                                }
                             }
                         }
                     }
-                    OutlinedTextField(
-                        value = selectedModel,
-                        onValueChange = {
-                            selectedModel = it
-                            LumenaPreferences.saveSelectedModel(context, it)
-                        },
-                        label = { Text("Model") },
-                        supportingText = {
-                            if (models.isNotEmpty()) Text(models.joinToString(" · "))
-                        },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    HorizontalDivider()
-                    Text("Termux tools", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "Bridge settings are shared with Companion and Tools.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    OutlinedTextField(
-                        value = bridgeUrl,
-                        onValueChange = {
-                            bridgeUrl = it
-                            LumenaPreferences.saveBridgeUrl(context, it)
-                        },
-                        label = { Text("Bridge URL") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = bridgeToken,
-                        onValueChange = {
-                            bridgeToken = it
-                            LumenaPreferences.saveBridgeToken(context, it)
-                        },
-                        label = { Text("Bridge token") },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-        }
-
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(bubbles) { bubble -> MessageBubble(bubble) }
-            if (busy) {
-                item {
-                    Text(
-                        "Lumena is working…",
-                        modifier = Modifier.padding(8.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
-                label = { Text("Message Lumena") },
-                minLines = 1,
-                maxLines = 4,
-                modifier = Modifier.weight(1f)
-            )
-            Button(enabled = !busy && input.isNotBlank(), onClick = { send() }) {
-                Text("Send")
-            }
-        }
-    }
-
-    pending?.let { requested ->
-        AlertDialog(
-            onDismissRequest = { },
-            title = { Text("Allow local action?") },
-            text = {
-                val taskPlan = if (requested.taskPlan.isEmpty()) "" else
-                    requested.taskPlan.mapIndexed { i, step -> "${i + 1}. $step" }
-                        .joinToString(prefix = "Plan:\n", separator = "\n", postfix = "\n\n")
-                val verify = requested.control.verificationReason
-                    ?.let { "\n\nVerification pending: $it" }
-                    .orEmpty()
-                Text(
-                    taskPlan +
-                        "${requested.plan.reason}\n\nTool: ${requested.plan.request.tool}\nArgs: ${requested.plan.request.args}" +
-                        verify +
-                        "\n\nThis request survives tab switching."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val taskId = requested.control.task.id
-                    pending = null
-                    currentTask = requested.control.task.copy(status = TaskStatus.EXECUTING)
-                    busy = true
-                    persistSession()
-                    workScope.launch {
-                        val outcome = try {
-                            val ollama = OllamaClient(ollamaUrl)
-                            WorkflowRunner(ollama, bridgeOrNull(), selectedModel).approve(
-                                pending = requested,
-                                onProgress = { reportProgress(taskId, it) },
-                                onState = { acceptControl(taskId, it) }
-                            )
-                        } catch (t: Throwable) {
-                            val failedControl = requested.control.copy(
-                                task = requested.control.task.copy(
-                                    status = TaskStatus.FAILED,
-                                    errors = (requested.control.task.errors + (t.message ?: t.toString())).takeLast(8)
-                                )
-                            )
-                            WorkflowOutcome.Failed(
-                                t.message ?: t.toString(),
-                                requested.history,
-                                failedControl
-                            )
+                    if (c.id !in collapsedChats || query.isNotBlank()) c.tasks.filter {
+                        !it.inherited && (query.isBlank() || it.goal.contains(query, true) || c.title.contains(query, true) || topic.title.contains(query, true))
+                    }.forEach { task -> item(key = "task:${c.id}:${task.id}") {
+                        Column(Modifier.fillMaxWidth().clickable { onSelect(c.id, task.anchorMessageId) }
+                            .padding(start = (52 + row.depth.coerceAtMost(6) * 12).dp, end = 12.dp, top = 8.dp, bottom = 8.dp).heightIn(min = 42.dp)) {
+                            Text(task.goal.take(100), style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(statusLabel(task.status) + " · " + dateLabel(task.startedAt), style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        applyOutcome(taskId, outcome)
-                    }
-                }) { Text("Allow once") }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    pending = null
-                    currentTask = requested.control.task.copy(status = TaskStatus.CANCELLED)
-                    bubbles += ChatBubble("status", "Local action cancelled by user.")
-                    busy = false
-                    persistSession()
-                }) { Text("Cancel") }
+                    } }
+                }
             }
-        )
+        }
+        if (ui.catalog.conversations.isEmpty()) item { Text("Історія ще порожня", Modifier.padding(20.dp)) }
     }
 }
 
 @Composable
-private fun MessageBubble(message: ChatBubble) {
-    val isUser = message.role == "user"
-    val color = when (message.role) {
+private fun HistoryMessage(message: ChatEntry, canFork: Boolean, onFork: () -> Unit) {
+    val user = message.role == "user"
+    val background = when (message.role) {
         "user" -> MaterialTheme.colorScheme.primaryContainer
-        "error" -> MaterialTheme.colorScheme.error.copy(alpha = 0.18f)
+        "error" -> MaterialTheme.colorScheme.errorContainer
         "status" -> MaterialTheme.colorScheme.surfaceVariant
         else -> MaterialTheme.colorScheme.surface
     }
-    val horizontal = if (isUser) Alignment.End else Alignment.Start
-
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = horizontal
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(if (isUser) 0.86f else 0.94f)
-                .background(color, RoundedCornerShape(18.dp))
-                .padding(horizontal = 14.dp, vertical = 10.dp)
-        ) {
-            Text(message.text, style = MaterialTheme.typography.bodyMedium)
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = if (user) Alignment.End else Alignment.Start) {
+        Column(Modifier.fillMaxWidth(if (user) 0.9f else 0.98f).background(background, RoundedCornerShape(16.dp)).padding(12.dp)) {
+            SelectionContainer { Text(message.text, style = if (message.role == "status") MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodyMedium) }
+            if (canFork) TextButton(onClick = onFork, contentPadding = PaddingValues(horizontal = 0.dp)) { Text("↳ Відгалузити звідси", style = MaterialTheme.typography.labelMedium) }
         }
     }
+}
+
+private fun dateLabel(time: Long): String = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(time))
+private fun statusLabel(status: TaskStatus): String = when (status) {
+    TaskStatus.DONE -> "✓ Завершено"
+    TaskStatus.FAILED -> "✗ Помилка / перервано"
+    TaskStatus.CANCELLED -> "■ Зупинено"
+    TaskStatus.WAITING_CONFIRMATION -> "Ⅱ Очікує дозволу"
+    TaskStatus.NEW -> "○ Розпочато"
+    else -> "● Виконується"
 }
