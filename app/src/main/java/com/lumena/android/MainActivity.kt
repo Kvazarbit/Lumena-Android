@@ -7,22 +7,46 @@ import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.LumenaAccessibilityService
+import com.lumena.android.agent.local.AgentPanel
+import com.lumena.android.companion.CompanionScreen
+import com.lumena.android.ui.LumenaTheme
+import com.lumena.android.ui.WorkflowChatScreen
 
 class MainActivity : ComponentActivity() {
-
     private var refreshToken by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { LumenaHome(refreshToken) }
+        setContent {
+            LumenaTheme {
+                LumenaApp(refreshToken)
+            }
+        }
     }
 
     override fun onResume() {
@@ -34,20 +58,13 @@ class MainActivity : ComponentActivity() {
         ComponentName(this, LumenaAccessibilityService::class.java)
 
     private fun isAccessibilityEnabled(): Boolean {
-        val enabled = Settings.Secure.getInt(
-            contentResolver,
-            Settings.Secure.ACCESSIBILITY_ENABLED,
-            0
-        ) == 1
-
+        val enabled = Settings.Secure.getInt(contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 0) == 1
         if (!enabled) return false
-
         val expected = serviceComponent().flattenToString()
         val services = Settings.Secure.getString(
             contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
         ).orEmpty()
-
         return services.split(':').any { it.equals(expected, ignoreCase = true) }
     }
 
@@ -64,7 +81,57 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun LumenaHome(refreshToken: Int) {
+    private fun LumenaApp(refreshToken: Int) {
+        var tab by remember { mutableIntStateOf(0) }
+        val agentWorkScope = rememberCoroutineScope()
+
+        Scaffold(
+            bottomBar = {
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = tab == 0,
+                        onClick = { tab = 0 },
+                        icon = { Text("●") },
+                        label = { Text("Companion") }
+                    )
+                    NavigationBarItem(
+                        selected = tab == 1,
+                        onClick = { tab = 1 },
+                        icon = { Text("◈") },
+                        label = { Text("Local") }
+                    )
+                    NavigationBarItem(
+                        selected = tab == 2,
+                        onClick = { tab = 2 },
+                        icon = { Text("◆") },
+                        label = { Text("Tools") }
+                    )
+                }
+            }
+        ) { innerPadding ->
+            when (tab) {
+                0 -> Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                ) { CompanionScreen() }
+
+                1 -> Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                ) { WorkflowChatScreen(agentWorkScope = agentWorkScope) }
+
+                else -> ToolsScreen(
+                    refreshToken = refreshToken,
+                    modifier = Modifier.padding(innerPadding)
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun ToolsScreen(refreshToken: Int, modifier: Modifier = Modifier) {
         var snapshotText by remember { mutableStateOf("No snapshot yet") }
         var enabled by remember { mutableStateOf(false) }
         var rawServices by remember { mutableStateOf("") }
@@ -77,76 +144,61 @@ class MainActivity : ComponentActivity() {
             ).orEmpty()
         }
 
-        MaterialTheme {
-            Surface(Modifier.fillMaxSize()) {
-                Column(
-                    Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    Text("Lumena Android", style = MaterialTheme.typography.headlineMedium)
-                    Text("Screen Agent v0.2 — accessibility diagnostics + transparent control")
+        Column(
+            modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text("Tools", style = MaterialTheme.typography.headlineMedium)
+            Text("Android control, Termux bridge and diagnostics")
 
-                    Text(
-                        if (enabled || LumenaAccessibilityService.instance != null)
-                            "Accessibility: connected"
-                        else
-                            "Accessibility: not connected"
-                    )
+            Text(
+                if (enabled || LumenaAccessibilityService.instance != null)
+                    "Accessibility: connected"
+                else
+                    "Accessibility: not connected"
+            )
 
-                    Button(onClick = { openAccessibilitySettings() }) {
-                        Text("Open Accessibility settings")
-                    }
-
-                    OutlinedButton(onClick = { openAppDetails() }) {
-                        Text("Open Lumena app settings")
-                    }
-
-                    Button(onClick = {
-                        val service = LumenaAccessibilityService.instance
-                        if (service == null) {
-                            snapshotText = "Accessibility service is not running yet."
-                        } else {
-                            val s = service.snapshot()
-                            snapshotText = buildString {
-                                appendLine("Package: ${s.packageName}")
-                                appendLine("Nodes: ${s.nodes.size}")
-                                s.nodes.take(30).forEach {
-                                    appendLine("• ${it.text ?: it.contentDescription ?: it.className}")
-                                }
-                            }
-                        }
-                    }) { Text("Read current screen") }
-
-                    HorizontalDivider()
-
-                    Text("Diagnostics", style = MaterialTheme.typography.titleMedium)
-                    Text("Expected service: ${serviceComponent().flattenToString()}")
-                    Text("System says enabled: $enabled")
-                    Text(
-                        if (rawServices.isBlank())
-                            "Enabled services list: empty"
-                        else
-                            "Enabled services: $rawServices",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-
-                    Text(snapshotText, style = MaterialTheme.typography.bodySmall)
-
-                    Spacer(Modifier.height(24.dp))
-                    Text(
-                        "If Lumena is greyed out in Accessibility, open Lumena app settings and use the three-dot menu for 'Allow restricted settings' when your Android firmware provides that option.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-
-                    Text(
-                        "Lumena never silently performs sensitive actions. Actions that can alter another app require explicit approval.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
+            Button(onClick = { openAccessibilitySettings() }) {
+                Text("Open Accessibility settings")
             }
+
+            OutlinedButton(onClick = { openAppDetails() }) {
+                Text("Open Lumena app settings")
+            }
+
+            Button(onClick = {
+                val service = LumenaAccessibilityService.instance
+                if (service == null) {
+                    snapshotText = "Accessibility service is not running yet."
+                } else {
+                    val s = service.snapshot()
+                    snapshotText = buildString {
+                        appendLine("Package: ${s.packageName}")
+                        appendLine("Nodes: ${s.nodes.size}")
+                        s.nodes.take(30).forEach {
+                            appendLine("• ${it.text ?: it.contentDescription ?: it.className}")
+                        }
+                    }
+                }
+            }) {
+                Text("Read current screen")
+            }
+
+            HorizontalDivider()
+            Text("Diagnostics", style = MaterialTheme.typography.titleMedium)
+            Text("Expected service: ${serviceComponent().flattenToString()}")
+            Text("System says enabled: $enabled")
+            Text(
+                if (rawServices.isBlank()) "Enabled services list: empty"
+                else "Enabled services: $rawServices",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(snapshotText, style = MaterialTheme.typography.bodySmall)
+
+            AgentPanel()
         }
     }
 }
