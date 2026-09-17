@@ -45,7 +45,6 @@ import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.local.AgentPanel
 import com.lumena.android.agent.runtime.AgentRunCoordinator
 import com.lumena.android.companion.CompanionScreen
-import com.lumena.android.settings.HistoryTreeState
 import com.lumena.android.settings.HistoryTreeStore
 import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.ui.HistoryTreeDrawer
@@ -145,15 +144,20 @@ class MainActivity : ComponentActivity() {
                 return
             }
             stopBeforeContextSwitch("Switched history branch")
-            if (HistoryTreeStore.activate(this@MainActivity, branchId)) {
-                reloadHistory()
-            }
+            if (HistoryTreeStore.activate(this@MainActivity, branchId)) reloadHistory()
             drawerScope.launch { drawerState.close() }
         }
 
         fun forkActive() {
             stopBeforeContextSwitch("Forked history context")
             HistoryTreeStore.forkActive(this@MainActivity)
+            reloadHistory()
+            drawerScope.launch { drawerState.close() }
+        }
+
+        fun createTask(title: String) {
+            stopBeforeContextSwitch("Started a new task in this topic")
+            HistoryTreeStore.createTask(this@MainActivity, title)
             reloadHistory()
             drawerScope.launch { drawerState.close() }
         }
@@ -174,6 +178,7 @@ class MainActivity : ComponentActivity() {
                         state = historyState,
                         onActivate = ::activateBranch,
                         onForkActive = ::forkActive,
+                        onCreateTask = ::createTask,
                         onCreateTopic = ::createTopic,
                         onRenameActive = { title ->
                             HistoryTreeStore.renameBranch(
@@ -243,7 +248,7 @@ class MainActivity : ComponentActivity() {
                                 it.id == historyState.activeBranchId
                             }
                             Text(
-                                active?.let { "${it.topic} › ${it.title}" } ?: "Local",
+                                active?.let { "${it.topic} › ${it.taskTitle} › ${it.title}" } ?: "Local",
                                 style = MaterialTheme.typography.labelMedium,
                                 modifier = Modifier.padding(top = 12.dp)
                             )
