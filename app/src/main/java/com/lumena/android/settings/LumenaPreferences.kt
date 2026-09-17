@@ -6,7 +6,8 @@ data class LumenaConnectionSettings(
     val bridgeUrl: String = DEFAULT_BRIDGE_URL,
     val bridgeToken: String = "",
     val ollamaUrl: String = DEFAULT_OLLAMA_URL,
-    val selectedModel: String = ""
+    val selectedModel: String = "",
+    val companionAutoReturn: Boolean = true
 ) {
     companion object {
         const val DEFAULT_BRIDGE_URL = "http://127.0.0.1:8765"
@@ -28,6 +29,7 @@ object LumenaPreferences {
     private const val KEY_BRIDGE_TOKEN = "bridge_token"
     private const val KEY_OLLAMA_URL = "ollama_url"
     private const val KEY_SELECTED_MODEL = "selected_model"
+    private const val KEY_COMPANION_AUTO_RETURN = "companion_auto_return"
     private const val KEY_LEGACY_MIGRATED = "legacy_companion_migrated"
 
     fun load(context: Context): LumenaConnectionSettings {
@@ -40,7 +42,8 @@ object LumenaPreferences {
             bridgeToken = prefs.getString(KEY_BRIDGE_TOKEN, "") ?: "",
             ollamaUrl = prefs.getString(KEY_OLLAMA_URL, LumenaConnectionSettings.DEFAULT_OLLAMA_URL)
                 ?: LumenaConnectionSettings.DEFAULT_OLLAMA_URL,
-            selectedModel = prefs.getString(KEY_SELECTED_MODEL, "") ?: ""
+            selectedModel = prefs.getString(KEY_SELECTED_MODEL, "") ?: "",
+            companionAutoReturn = prefs.getBoolean(KEY_COMPANION_AUTO_RETURN, true)
         )
     }
 
@@ -58,6 +61,10 @@ object LumenaPreferences {
 
     fun saveSelectedModel(context: Context, value: String) {
         prefs(context).edit().putString(KEY_SELECTED_MODEL, value.trim()).apply()
+    }
+
+    fun saveCompanionAutoReturn(context: Context, value: Boolean) {
+        prefs(context).edit().putBoolean(KEY_COMPANION_AUTO_RETURN, value).apply()
     }
 
     private fun prefs(context: Context) =
