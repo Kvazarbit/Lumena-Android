@@ -11,6 +11,7 @@ import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.TermuxBridgeClient
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
+import java.util.UUID
 
 data class PendingWorkflowTool(
     val plan: PlannedTool,
@@ -116,11 +117,13 @@ class WorkflowRunner(
                         )
                     }
 
+                    val requestId = buildRequestId(state)
                     val planned = ToolGate.plan(
                         PlannerDecision(
                             request = ToolRequest(
-                                instruction.call.tool,
-                                instruction.call.args
+                                tool = instruction.call.tool,
+                                args = instruction.call.args,
+                                requestId = requestId
                             ),
                             reason = instruction.call.reason.ifBlank {
                                 "Agent requested ${instruction.call.tool}"
@@ -163,6 +166,7 @@ class WorkflowRunner(
                         current,
                         state
                     )
+                    onProgress("Running ${planned.request.tool}…")
                     val result = localBridge.execute(planned.request)
                     val transition = controller.afterTool(
                         state = state,
@@ -178,6 +182,8 @@ class WorkflowRunner(
                         if (result.ok) "✓ ${planned.request.tool}"
                         else "✗ ${planned.request.tool}: ${result.error ?: result.stderr.take(300)}"
                     )
+                    compactToolOutput(planned.request.tool, result.stdout, result.stderr, result.error)
+                        ?.let(onProgress)
                     current = toolHistory + LocalWorkflowAgent.toolResultMessage(
                         tool = planned.request.tool,
                         ok = result.ok,
@@ -270,6 +276,12 @@ class WorkflowRunner(
             if (result.ok) "✓ ${pending.plan.request.tool}"
             else "✗ ${pending.plan.request.tool}: ${result.error ?: result.stderr.take(300)}"
         )
+        compactToolOutput(
+            pending.plan.request.tool,
+            result.stdout,
+            result.stderr,
+            result.error
+        )?.let(onProgress)
 
         transition.stopReason?.let { reason ->
             return WorkflowOutcome.Failed(reason, next, transition.state)
@@ -295,5 +307,27 @@ class WorkflowRunner(
             add(OllamaMessage("system", mergedSystem))
             addAll(history.filterNot { it.role == "system" })
         }
+    }
+
+    private fun buildRequestId(state: AgentControlState): String =
+        "${state.task.id}-${state.task.step + 1}-${UUID.randomUUID()}"
+
+    private fun compactToolOutput(
+        tool: String,
+        stdout: String,
+        stderr: String,
+        error: String?
+    ): String? {
+        val text = when {
+            !error.isNullOrBlank() -> error
+            stdout.isNotBlank() -> stdout
+            stderr.isNotBlank() -> stderr
+            else -> return null
+        }
+        val compact = text
+            .replace(Regex("[\\r\\n]+"), " ")
+            .trim()
+            .take(600)
+        return if (compact.isBlank()) null else "Output · $tool\n$compact"
     }
 }
