@@ -16,19 +16,28 @@ class AgentResponseParserTest {
     @Test
     fun strictToolJsonBecomesToolCall() {
         val parsed = parser.parse(
-            """{"tool":"file.read","args":{"path":"README.md"},"reason":"Inspect project"}"""
+            """{"plan":["inspect","verify"],"tool":"file.read","args":{"path":"README.md"},"reason":"Inspect project"}"""
         )
         assertTrue(parsed is AgentDecision.ToolCall)
         parsed as AgentDecision.ToolCall
         assertEquals("file.read", parsed.tool)
         assertEquals("README.md", parsed.args["path"])
         assertEquals("Inspect project", parsed.reason)
+        assertEquals(listOf("inspect", "verify"), parsed.plan)
     }
 
     @Test
-    fun wrappedJsonIsExtractedWithoutGuessing() {
+    fun arbitraryJsonQuotedInProseIsNotExecuted() {
+        val text = """Example only: {"tool":"git.status","args":{"cwd":"btc"}} do not run it."""
+        assertEquals(AgentDecision.Reply(text), parser.parse(text))
+    }
+
+    @Test
+    fun fencedJsonIsAccepted() {
         val parsed = parser.parse(
-            """I need one tool.\n{"tool":"git.status","args":{"cwd":"btc"},"reason":"Check state"}\nWaiting."""
+            """```json
+{"tool":"git.status","args":{"cwd":"btc"},"reason":"Check state"}
+```"""
         )
         assertTrue(parsed is AgentDecision.ToolCall)
         parsed as AgentDecision.ToolCall
@@ -37,9 +46,26 @@ class AgentResponseParserTest {
     }
 
     @Test
+    fun hermesToolEnvelopeIsAccepted() {
+        val parsed = parser.parse(
+            """<tool_call>{"name":"file.read","arguments":{"path":"a.txt"}}</tool_call>"""
+        )
+        assertTrue(parsed is AgentDecision.ToolCall)
+        parsed as AgentDecision.ToolCall
+        assertEquals("file.read", parsed.tool)
+        assertEquals("a.txt", parsed.args["path"])
+    }
+
+    @Test
     fun doneJsonBecomesDone() {
         val parsed = parser.parse("""{"done":true,"summary":"Tests passed"}""")
         assertEquals(AgentDecision.Done("Tests passed"), parsed)
+    }
+
+    @Test
+    fun replyJsonBecomesReply() {
+        val parsed = parser.parse("""{"reply":"Привіт"}""")
+        assertEquals(AgentDecision.Reply("Привіт"), parsed)
     }
 
     @Test
