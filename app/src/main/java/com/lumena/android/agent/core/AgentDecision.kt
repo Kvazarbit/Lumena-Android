@@ -6,7 +6,8 @@ sealed interface AgentDecision {
     data class ToolCall(
         val tool: String,
         val args: Map<String, String> = emptyMap(),
-        val reason: String = ""
+        val reason: String = "",
+        val plan: List<String> = emptyList()
     ) : AgentDecision
 
     data class Done(val summary: String) : AgentDecision
