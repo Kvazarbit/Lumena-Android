@@ -55,7 +55,8 @@ class HistoryLogicTest {
     }
     @Test fun executionAfterProcessDeathIsUncertainNotAutoResumed() {
         val source = source().payload
-        val executing = source.copy(pending = null, control = source.control!!.copy(task = source.control.task.copy(status = TaskStatus.EXECUTING)))
+        val control = source.control!!
+        val executing = source.copy(pending = null, control = control.copy(task = control.task.copy(status = TaskStatus.EXECUTING)))
         val recovered = HistoryLogic.interrupted(executing)
         assertTrue(recovered.executionUncertain)
         assertEquals(TaskStatus.FAILED, recovered.control!!.task.status)
@@ -63,6 +64,7 @@ class HistoryLogicTest {
         assertNotNull(recovered.recoveryNotice)
     }
     @Test fun unapprovedPendingCallRemainsPending() {
-        assertEquals(source().payload, HistoryLogic.interrupted(source().payload))
+        val pending = source().payload
+        assertEquals(pending, HistoryLogic.interrupted(pending))
     }
 }
