@@ -19,6 +19,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -49,6 +50,7 @@ fun CompanionScreen() {
 
     var bridgeUrl by rememberSaveable { mutableStateOf(initial.bridgeUrl) }
     var token by rememberSaveable { mutableStateOf(initial.bridgeToken) }
+    var autoReturn by rememberSaveable { mutableStateOf(initial.companionAutoReturn) }
     var detected by remember { mutableStateOf<CompanionCommand?>(null) }
     var handledFingerprint by remember { mutableStateOf<String?>(null) }
     var lastResult by remember { mutableStateOf("") }
@@ -112,14 +114,26 @@ fun CompanionScreen() {
         status = "Running ${plan.request.tool}…"
         scope.launch {
             val result = TermuxBridgeClient(bridgeUrl, token).execute(plan.request)
-            lastResult = CompanionProtocol.formatResult(plan.request.tool, result)
+            val formatted = CompanionProtocol.formatResult(plan.request.tool, result)
+            lastResult = formatted
             handledFingerprint = command.fingerprint
-            status = if (result.ok) {
-                "${plan.request.tool} completed. Review the result before returning it to ChatGPT."
-            } else {
-                "${plan.request.tool} returned an error. The real error can still be sent back to ChatGPT."
-            }
             busy = false
+
+            if (autoReturn) {
+                status = if (result.ok) {
+                    "${plan.request.tool} completed. Returning the real result to ChatGPT…"
+                } else {
+                    "${plan.request.tool} returned an error. Returning the real error to ChatGPT…"
+                }
+                delay(250)
+                openChatGptWith(formatted, send = true)
+            } else {
+                status = if (result.ok) {
+                    "${plan.request.tool} completed. Review the result before returning it to ChatGPT."
+                } else {
+                    "${plan.request.tool} returned an error. The real error can still be sent back to ChatGPT."
+                }
+            }
         }
     }
 
@@ -223,6 +237,31 @@ fun CompanionScreen() {
             }
         }
 
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Auto-return result", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "After your Run once approval, Lumena sends the real LUMENA_RESULT back to the same ChatGPT chat automatically. New tool calls still require your approval.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Switch(
+                    checked = autoReturn,
+                    onCheckedChange = {
+                        autoReturn = it
+                        LumenaPreferences.saveCompanionAutoReturn(context, it)
+                    }
+                )
+            }
+        }
+
         HorizontalDivider()
         Text("3 · Tool request", style = MaterialTheme.typography.titleLarge)
         Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -275,7 +314,11 @@ fun CompanionScreen() {
 
         Spacer(Modifier.height(12.dp))
         Text(
-            "Security: commands read from ChatGPT are never auto-executed. Every external LUMENA_TOOL request requires your Run once tap. No unrestricted shell tool is exposed.",
+            if (autoReturn) {
+                "Security: every external LUMENA_TOOL still requires your Run once tap. Auto-return only sends the real result after an approved tool finishes. No unrestricted shell tool is exposed."
+            } else {
+                "Security: commands read from ChatGPT are never auto-executed. Every external LUMENA_TOOL request requires your Run once tap. No unrestricted shell tool is exposed."
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
