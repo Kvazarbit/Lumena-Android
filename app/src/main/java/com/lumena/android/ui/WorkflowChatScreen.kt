@@ -38,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.lumena.android.agent.core.AgentControlState
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.local.PlannerDecision
@@ -79,16 +80,13 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
     val bubbles = remember {
         mutableStateListOf<ChatBubble>().apply {
             val restoredChat = restored.chat.map { ChatBubble(it.role, it.text) }
-            if (restoredChat.isNotEmpty()) {
-                addAll(restoredChat)
-            } else {
-                add(
-                    ChatBubble(
-                        "assistant",
-                        "Lumena local agent is ready. Chat, model and task state are restored automatically."
-                    )
+            if (restoredChat.isNotEmpty()) addAll(restoredChat)
+            else add(
+                ChatBubble(
+                    "assistant",
+                    "Lumena v0.8 local agent is ready. Plan, task state and verification are controlled by the app."
                 )
-            }
+            )
         }
     }
 
@@ -99,6 +97,13 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
     var selectedModel by rememberSaveable { mutableStateOf(initial.selectedModel) }
     var models by remember { mutableStateOf<List<String>>(emptyList()) }
     var status by remember { mutableStateOf("Checking Ollama…") }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
+    var currentTask by remember { mutableStateOf(restored.task) }
+    var history by remember {
+        mutableStateOf(
+            listOf(systemMessage) + restored.history.map { OllamaMessage(it.role, it.content) }
+        )
+    }
     var busy by remember {
         mutableStateOf(
             restored.task?.status in setOf(
@@ -109,27 +114,24 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
             )
         )
     }
-    var showSettings by rememberSaveable { mutableStateOf(false) }
-    var currentTask by remember { mutableStateOf(restored.task) }
-    var history by remember {
-        mutableStateOf(
-            listOf(systemMessage) + restored.history.map { OllamaMessage(it.role, it.content) }
-        )
-    }
 
     fun restoredPendingFrom(saved: PersistedPendingTool?): PendingWorkflowTool? = saved?.let {
-        val plan = ToolGate.plan(
+        val planned = ToolGate.plan(
             PlannerDecision(
                 request = ToolRequest(it.tool, it.args),
                 reason = it.reason
             )
         )
-        if (plan.allowed) {
+        val control = it.control
+            ?: currentTask?.let { task -> AgentControlState(task = task) }
+            ?: return@let null
+        if (planned.allowed) {
             PendingWorkflowTool(
-                plan = plan,
+                plan = planned,
                 history = listOf(systemMessage) + it.history.map { h ->
                     OllamaMessage(h.role, h.content)
-                }
+                },
+                control = control
             )
         } else null
     }
@@ -150,6 +152,7 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
                         tool = active.plan.request.tool,
                         args = active.plan.request.args,
                         reason = active.plan.reason,
+                        control = active.control,
                         history = active.history
                             .filterNot { it.role == "system" }
                             .map { PersistedHistoryMessage(it.role, it.content) }
@@ -158,6 +161,15 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
                 inputDraft = input
             )
         )
+    }
+
+    fun isCurrentTask(taskId: String): Boolean =
+        LocalSessionStore.load(context).task?.id == taskId
+
+    fun acceptControl(taskId: String, control: AgentControlState) {
+        if (!isCurrentTask(taskId)) return
+        currentTask = control.task
+        persistSession()
     }
 
     fun syncFromStoredSession() {
@@ -234,42 +246,32 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
         }
     }
 
-    fun reportProgress(message: String) {
-        if (message.isBlank()) return
+    fun reportProgress(taskId: String, message: String) {
+        if (message.isBlank() || !isCurrentTask(taskId)) return
         val previous = bubbles.lastOrNull()
         if (previous?.role != "status" || previous.text != message) {
             bubbles += ChatBubble("status", message)
+            persistSession()
         }
-
-        if (message.startsWith("Plan\n")) {
-            currentTask = currentTask?.copy(status = TaskStatus.PLANNING)
-        } else if (message.startsWith("Step ")) {
-            val parsedStep = message.substringAfter("Step ").substringBefore(':').trim().toIntOrNull()
-            currentTask = currentTask?.copy(
-                status = TaskStatus.EXECUTING,
-                step = maxOf(currentTask?.step ?: 0, parsedStep ?: 0)
-            )
-        } else if (message.startsWith("Thinking")) {
-            currentTask = currentTask?.copy(status = TaskStatus.WAITING_MODEL)
-        }
-        persistSession()
     }
 
-    fun applyOutcome(outcome: WorkflowOutcome) {
+    fun applyOutcome(taskId: String, outcome: WorkflowOutcome) {
+        if (!isCurrentTask(taskId)) return
         when (outcome) {
             is WorkflowOutcome.Finished -> {
                 history = outcome.history
                 pending = null
+                currentTask = outcome.control.task
                 bubbles += ChatBubble("assistant", outcome.text)
-                currentTask = currentTask?.copy(
-                    status = TaskStatus.DONE,
-                    lastResult = outcome.text.take(4_000)
-                )
             }
 
             is WorkflowOutcome.NeedsConfirmation -> {
                 pending = outcome.pending
-                if (outcome.pending.taskPlan.isNotEmpty() && bubbles.none { it.role == "status" && it.text.startsWith("Plan\n") }) {
+                history = outcome.pending.history
+                currentTask = outcome.pending.control.task
+                if (outcome.pending.taskPlan.isNotEmpty() &&
+                    bubbles.none { it.role == "status" && it.text.startsWith("Plan\n") }
+                ) {
                     bubbles += ChatBubble(
                         "status",
                         outcome.pending.taskPlan.mapIndexed { i, step -> "${i + 1}. $step" }
@@ -280,22 +282,21 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
                     "status",
                     "Approval required: ${outcome.pending.plan.request.tool} · ${outcome.pending.plan.reason}"
                 )
-                currentTask = currentTask?.copy(
-                    status = TaskStatus.WAITING_CONFIRMATION,
-                    lastTool = outcome.pending.plan.request.tool
-                )
             }
 
             is WorkflowOutcome.Failed -> {
+                history = outcome.history
                 pending = null
+                currentTask = outcome.control.task
                 bubbles += ChatBubble("error", outcome.message)
-                currentTask = currentTask?.copy(
-                    status = TaskStatus.FAILED,
-                    errors = (currentTask?.errors.orEmpty() + outcome.message).takeLast(8)
-                )
             }
         }
-        busy = false
+        busy = currentTask?.status in setOf(
+            TaskStatus.PLANNING,
+            TaskStatus.WAITING_MODEL,
+            TaskStatus.EXECUTING,
+            TaskStatus.VERIFYING
+        )
         persistSession()
     }
 
@@ -309,12 +310,13 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
         }
 
         input = ""
-        currentTask = TaskState(
+        val task = TaskState(
             id = UUID.randomUUID().toString(),
             projectId = null,
             goal = text,
             status = TaskStatus.WAITING_MODEL
         )
+        currentTask = task
         bubbles += ChatBubble("user", text)
         val turnHistory = history + OllamaMessage("user", text)
         history = turnHistory
@@ -322,15 +324,26 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
         persistSession()
 
         workScope.launch {
-            val outcome = runCatching {
+            val outcome = try {
                 val ollama = OllamaClient(ollamaUrl)
                 WorkflowRunner(ollama, bridgeOrNull(), selectedModel).run(
                     history = turnHistory,
-                    maxSteps = 8,
-                    onProgress = ::reportProgress
+                    task = task,
+                    onProgress = { reportProgress(task.id, it) },
+                    onState = { acceptControl(task.id, it) }
                 )
-            }.getOrElse { WorkflowOutcome.Failed(it.message ?: it.toString()) }
-            applyOutcome(outcome)
+            } catch (t: Throwable) {
+                val failedTask = task.copy(
+                    status = TaskStatus.FAILED,
+                    errors = listOf(t.message ?: t.toString())
+                )
+                WorkflowOutcome.Failed(
+                    t.message ?: t.toString(),
+                    turnHistory,
+                    AgentControlState(task = failedTask)
+                )
+            }
+            applyOutcome(task.id, outcome)
         }
     }
 
@@ -407,9 +420,9 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("Local Ollama sidecar", style = MaterialTheme.typography.titleMedium)
+                    Text("Local model", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Lumena restores the last model automatically and rechecks Ollama whenever this screen opens.",
+                        "Lumena restores the model automatically and keeps AgentController state outside the model.",
                         style = MaterialTheme.typography.bodySmall
                     )
                     OutlinedTextField(
@@ -453,7 +466,7 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
                     HorizontalDivider()
                     Text("Termux tools", style = MaterialTheme.typography.titleSmall)
                     Text(
-                        "Bridge URL and token are shared automatically with Companion and Tools.",
+                        "Bridge settings are shared with Companion and Tools.",
                         style = MaterialTheme.typography.bodySmall
                     )
                     OutlinedTextField(
@@ -490,9 +503,7 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
                 .padding(horizontal = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(bubbles) { bubble ->
-                MessageBubble(bubble)
-            }
+            items(bubbles) { bubble -> MessageBubble(bubble) }
             if (busy) {
                 item {
                     Text(
@@ -534,36 +545,52 @@ fun WorkflowChatScreen(agentWorkScope: CoroutineScope? = null) {
                 val taskPlan = if (requested.taskPlan.isEmpty()) "" else
                     requested.taskPlan.mapIndexed { i, step -> "${i + 1}. $step" }
                         .joinToString(prefix = "Plan:\n", separator = "\n", postfix = "\n\n")
+                val verify = requested.control.verificationReason
+                    ?.let { "\n\nVerification pending: $it" }
+                    .orEmpty()
                 Text(
                     taskPlan +
-                        "${requested.plan.reason}\n\nTool: ${requested.plan.request.tool}\nArgs: ${requested.plan.request.args}\n\nThis request survives tab switching."
+                        "${requested.plan.reason}\n\nTool: ${requested.plan.request.tool}\nArgs: ${requested.plan.request.args}" +
+                        verify +
+                        "\n\nThis request survives tab switching."
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
+                    val taskId = requested.control.task.id
                     pending = null
-                    currentTask = currentTask?.copy(
-                        status = TaskStatus.EXECUTING,
-                        lastTool = requested.plan.request.tool
-                    )
+                    currentTask = requested.control.task.copy(status = TaskStatus.EXECUTING)
                     busy = true
                     persistSession()
                     workScope.launch {
-                        val outcome = runCatching {
+                        val outcome = try {
                             val ollama = OllamaClient(ollamaUrl)
                             WorkflowRunner(ollama, bridgeOrNull(), selectedModel).approve(
                                 pending = requested,
-                                onProgress = ::reportProgress
+                                onProgress = { reportProgress(taskId, it) },
+                                onState = { acceptControl(taskId, it) }
                             )
-                        }.getOrElse { WorkflowOutcome.Failed(it.message ?: it.toString()) }
-                        applyOutcome(outcome)
+                        } catch (t: Throwable) {
+                            val failedControl = requested.control.copy(
+                                task = requested.control.task.copy(
+                                    status = TaskStatus.FAILED,
+                                    errors = (requested.control.task.errors + (t.message ?: t.toString())).takeLast(8)
+                                )
+                            )
+                            WorkflowOutcome.Failed(
+                                t.message ?: t.toString(),
+                                requested.history,
+                                failedControl
+                            )
+                        }
+                        applyOutcome(taskId, outcome)
                     }
                 }) { Text("Allow once") }
             },
             dismissButton = {
                 TextButton(onClick = {
                     pending = null
-                    currentTask = currentTask?.copy(status = TaskStatus.CANCELLED)
+                    currentTask = requested.control.task.copy(status = TaskStatus.CANCELLED)
                     bubbles += ChatBubble("status", "Local action cancelled by user.")
                     busy = false
                     persistSession()
