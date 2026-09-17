@@ -31,7 +31,7 @@ data class HistoryTreeState(
  */
 object HistoryTreeStore {
     private const val FILE_NAME = "lumena_history_tree.json"
-    private const val MAX_BRANCHES = 32
+    private const val MAX_BRANCHES = 48
     private const val MAX_TITLE = 72
 
     private val lock = Any()
@@ -113,14 +113,45 @@ object HistoryTreeStore {
                 updatedAt = now,
                 session = cleanFork
             )
-            val retained = state.branches
-                .map { if (it.id == parent.id) savedParent else it }
-                .plus(child)
-                .sortedByDescending { it.updatedAt }
-                .take(MAX_BRANCHES)
+            val retained = retainBranches(
+                state.branches.map { if (it.id == parent.id) savedParent else it } + child,
+                child.id
+            )
             state = HistoryTreeState(activeBranchId = child.id, branches = retained)
             saveInternal(app, state)
             child
+        }
+        LocalSessionStore.save(app, created.session)
+        return created
+    }
+
+    /** Starts a blank task under the current topic without inheriting chat history. */
+    fun createTask(context: Context, taskTitle: String): HistoryBranch {
+        val app = context.applicationContext
+        val created = synchronized(lock) {
+            var state = loadOrCreate(app)
+            val current = archive(LocalSessionStore.load(app))
+            val active = state.branches.first { it.id == state.activeBranchId }
+            val now = System.currentTimeMillis()
+            state = state.copy(
+                branches = state.branches.map { branch ->
+                    if (branch.id == state.activeBranchId) branch.copy(updatedAt = now, session = current)
+                    else branch
+                }
+            )
+            val branch = HistoryBranch(
+                id = UUID.randomUUID().toString(),
+                topic = active.topic,
+                taskTitle = sanitizeTitle(taskTitle.ifBlank { "New task" }),
+                title = "Main",
+                parentBranchId = null,
+                createdAt = now,
+                updatedAt = now,
+                session = LocalSessionSnapshot()
+            )
+            val retained = retainBranches(state.branches + branch, branch.id)
+            saveInternal(app, HistoryTreeState(branch.id, retained))
+            branch
         }
         LocalSessionStore.save(app, created.session)
         return created
@@ -139,7 +170,6 @@ object HistoryTreeStore {
                     else branch
                 }
             )
-            val blank = LocalSessionSnapshot()
             val branch = HistoryBranch(
                 id = UUID.randomUUID().toString(),
                 topic = sanitizeTitle(topicTitle.ifBlank { "New topic" }),
@@ -148,11 +178,9 @@ object HistoryTreeStore {
                 parentBranchId = null,
                 createdAt = now,
                 updatedAt = now,
-                session = blank
+                session = LocalSessionSnapshot()
             )
-            val retained = (state.branches + branch)
-                .sortedByDescending { it.updatedAt }
-                .take(MAX_BRANCHES)
+            val retained = retainBranches(state.branches + branch, branch.id)
             saveInternal(app, HistoryTreeState(branch.id, retained))
             branch
         }
@@ -214,6 +242,21 @@ object HistoryTreeStore {
             file.writeText(tmp.readText())
             tmp.delete()
         }
+    }
+
+    private fun retainBranches(branches: List<HistoryBranch>, activeId: String): List<HistoryBranch> {
+        if (branches.size <= MAX_BRANCHES) return branches
+        val byId = branches.associateBy { it.id }
+        val keep = linkedSetOf<String>()
+        var cursor: String? = activeId
+        while (cursor != null && keep.size < MAX_BRANCHES) {
+            keep += cursor
+            cursor = byId[cursor]?.parentBranchId
+        }
+        branches.sortedByDescending { it.updatedAt }.forEach {
+            if (keep.size < MAX_BRANCHES) keep += it.id
+        }
+        return branches.filter { it.id in keep }
     }
 
     private fun archive(snapshot: LocalSessionSnapshot): LocalSessionSnapshot = snapshot.copy(
