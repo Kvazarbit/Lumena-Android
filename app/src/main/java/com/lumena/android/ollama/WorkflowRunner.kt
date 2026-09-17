@@ -1,136 +1,246 @@
 package com.lumena.android.ollama
 
+import com.lumena.android.agent.core.AgentControlState
+import com.lumena.android.agent.core.AgentController
 import com.lumena.android.agent.core.AgentDecision
-import com.lumena.android.agent.core.FailureBudget
-import com.lumena.android.agent.core.FailureTracker
-import com.lumena.android.agent.core.LoopDetector
-import com.lumena.android.agent.core.LoopState
+import com.lumena.android.agent.core.ControllerInstruction
+import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.local.PlannedTool
+import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.TermuxBridgeClient
 import com.lumena.android.agent.local.ToolGate
+import com.lumena.android.agent.local.ToolRequest
 
 data class PendingWorkflowTool(
     val plan: PlannedTool,
     val history: List<OllamaMessage>,
-    val taskPlan: List<String> = emptyList()
-)
+    val control: AgentControlState
+) {
+    val taskPlan: List<String>
+        get() = control.plan
+}
 
 sealed interface WorkflowOutcome {
-    data class Finished(val text: String, val history: List<OllamaMessage>) : WorkflowOutcome
-    data class NeedsConfirmation(val pending: PendingWorkflowTool) : WorkflowOutcome
-    data class Failed(val message: String) : WorkflowOutcome
+    data class Finished(
+        val text: String,
+        val history: List<OllamaMessage>,
+        val control: AgentControlState
+    ) : WorkflowOutcome
+
+    data class NeedsConfirmation(
+        val pending: PendingWorkflowTool
+    ) : WorkflowOutcome
+
+    data class Failed(
+        val message: String,
+        val history: List<OllamaMessage>,
+        val control: AgentControlState
+    ) : WorkflowOutcome
 }
 
 class WorkflowRunner(
     private val ollama: OllamaClient,
     private val bridge: TermuxBridgeClient?,
-    private val model: String
+    private val model: String,
+    private val controller: AgentController = AgentController()
 ) {
     suspend fun run(
         history: List<OllamaMessage>,
-        maxSteps: Int = 8,
+        task: TaskState,
+        control: AgentControlState? = null,
         onProgress: (String) -> Unit = {}
     ): WorkflowOutcome {
         var current = history
-        val loopDetector = LoopDetector(maxIdenticalAttempts = 3)
-        val failures = FailureTracker(FailureBudget(maxTotalSteps = maxSteps))
-        var announcedPlan = false
+        var state = control ?: controller.initial(task)
+        var protocolTurns = 0
 
-        repeat(maxSteps) { index ->
-            failures.recordStep()?.let {
-                return WorkflowOutcome.Failed("Agent stopped: step limit reached ($maxSteps).")
-            }
-
-            onProgress("Thinking · step ${index + 1}/$maxSteps")
-            val reply = ollama.chat(model, current).getOrElse { error ->
-                failures.recordModelFailure()
+        while (state.task.canContinue) {
+            protocolTurns++
+            if (protocolTurns > 20) {
+                val stopped = state.copy(
+                    task = state.task.copy(
+                        status = com.lumena.android.agent.core.TaskStatus.FAILED,
+                        errors = (state.task.errors + "Protocol turn cap reached").takeLast(8)
+                    )
+                )
                 return WorkflowOutcome.Failed(
-                    "Model call failed: ${error.message ?: error::class.simpleName}. The task state was kept; you can retry."
+                    "Agent stopped: protocol turn cap reached.",
+                    current,
+                    stopped
                 )
             }
-            failures.recordModelSuccess()
 
-            when (val parsed = LocalWorkflowAgent.parse(reply)) {
-                is AgentReply.Message -> {
-                    val next = current + OllamaMessage("assistant", parsed.text)
-                    return WorkflowOutcome.Finished(parsed.text, next)
+            onProgress("Thinking · step ${state.task.step + 1}/${state.task.maxSteps}")
+            val modelMessages = withDynamicContext(current, state)
+            val replyResult = ollama.chat(model, modelMessages)
+            val reply = replyResult.getOrElse { error ->
+                when (val recovery = controller.onModelFailure(
+                    state,
+                    error.message ?: error::class.simpleName.orEmpty()
+                )) {
+                    is ControllerInstruction.AskModelAgain -> {
+                        state = recovery.state
+                        current = current + OllamaMessage("user", recovery.feedback)
+                        onProgress("Retrying model · ${state.modelFailures}")
+                        continue
+                    }
+                    is ControllerInstruction.Stop -> {
+                        return WorkflowOutcome.Failed(recovery.reason, current, recovery.state)
+                    }
+                    else -> {
+                        return WorkflowOutcome.Failed(
+                            "Unexpected model recovery state.",
+                            current,
+                            state
+                        )
+                    }
                 }
+            }
 
-                is AgentReply.Tool -> {
-                    if (!announcedPlan && parsed.plan.isNotEmpty()) {
-                        announcedPlan = true
+            when (val instruction = controller.interpret(reply, state)) {
+                is ControllerInstruction.Execute -> {
+                    state = instruction.state
+                    if (state.plan.isNotEmpty() && state.task.step == 0) {
                         onProgress(
-                            parsed.plan.mapIndexed { i, step -> "${i + 1}. $step" }
+                            state.plan.mapIndexed { i, step -> "${i + 1}. $step" }
                                 .joinToString(prefix = "Plan\n", separator = "\n")
                         )
                     }
 
-                    val coreCall = AgentDecision.ToolCall(
-                        tool = parsed.decision.request.tool,
-                        args = parsed.decision.request.args,
-                        reason = parsed.decision.reason
+                    val planned = ToolGate.plan(
+                        PlannerDecision(
+                            request = ToolRequest(
+                                instruction.call.tool,
+                                instruction.call.args
+                            ),
+                            reason = instruction.call.reason.ifBlank {
+                                "Agent requested ${instruction.call.tool}"
+                            }
+                        )
                     )
-                    when (val loop = loopDetector.record(coreCall)) {
-                        is LoopState.Detected -> {
-                            return WorkflowOutcome.Failed(
-                                "Agent stopped a repeated action loop after ${loop.count} identical attempts: ${parsed.decision.request.tool}"
+                    if (!planned.allowed) {
+                        val stopped = state.copy(
+                            task = state.task.copy(
+                                status = com.lumena.android.agent.core.TaskStatus.FAILED,
+                                errors = (state.task.errors + planned.reason).takeLast(8)
                             )
-                        }
-                        is LoopState.Ok -> Unit
+                        )
+                        return WorkflowOutcome.Failed(
+                            "Blocked tool request: ${planned.request.tool} · ${planned.reason}",
+                            current,
+                            stopped
+                        )
                     }
 
-                    val plan = ToolGate.plan(parsed.decision)
-                    if (!plan.allowed) {
-                        return WorkflowOutcome.Failed("Blocked tool request: ${plan.request.tool}")
-                    }
+                    onProgress(
+                        "Step ${state.task.step + 1}: ${planned.request.tool} · ${planned.reason}"
+                    )
+                    val assistantToolMessage = OllamaMessage("assistant", reply.take(12_000))
+                    val toolHistory = current + assistantToolMessage
 
-                    onProgress("Step ${index + 1}: ${plan.request.tool} · ${plan.reason}")
-
-                    if (plan.requiresConfirmation) {
+                    if (instruction.requiresConfirmation) {
                         return WorkflowOutcome.NeedsConfirmation(
                             PendingWorkflowTool(
-                                plan = plan,
-                                history = current + OllamaMessage("assistant", parsed.raw),
-                                taskPlan = parsed.plan
+                                plan = planned,
+                                history = toolHistory,
+                                control = state
                             )
                         )
                     }
 
-                    val localBridge = bridge
-                        ?: return WorkflowOutcome.Failed("Bridge token is required for ${plan.request.tool}")
-                    val result = localBridge.execute(plan.request)
-                    failures.recordToolResult(coreCall, result.ok)?.let { violation ->
-                        return WorkflowOutcome.Failed("Agent stopped by failure budget: $violation")
-                    }
-                    onProgress(
-                        if (result.ok) "✓ ${plan.request.tool}" else "✗ ${plan.request.tool}: ${result.error ?: result.stderr.take(300)}"
+                    val localBridge = bridge ?: return WorkflowOutcome.Failed(
+                        "Bridge token is required for ${planned.request.tool}",
+                        current,
+                        state
                     )
+                    val result = localBridge.execute(planned.request)
+                    val transition = controller.afterTool(
+                        state = state,
+                        call = instruction.call,
+                        ok = result.ok,
+                        stdout = result.stdout,
+                        stderr = result.stderr,
+                        error = result.error
+                    )
+                    state = transition.state
+                    onProgress(
+                        if (result.ok) "✓ ${planned.request.tool}"
+                        else "✗ ${planned.request.tool}: ${result.error ?: result.stderr.take(300)}"
+                    )
+                    current = toolHistory + LocalWorkflowAgent.toolResultMessage(
+                        tool = planned.request.tool,
+                        ok = result.ok,
+                        stdout = result.stdout,
+                        stderr = result.stderr,
+                        error = result.error
+                    )
+                    transition.stopReason?.let { reason ->
+                        return WorkflowOutcome.Failed(reason, current, state)
+                    }
+                }
+
+                is ControllerInstruction.Finish -> {
+                    state = instruction.state
+                    val next = current + OllamaMessage("assistant", instruction.text)
+                    return WorkflowOutcome.Finished(instruction.text, next, state)
+                }
+
+                is ControllerInstruction.AskModelAgain -> {
+                    state = instruction.state
                     current = current +
-                        OllamaMessage("assistant", parsed.raw) +
-                        LocalWorkflowAgent.toolResultMessage(
-                            tool = plan.request.tool,
-                            ok = result.ok,
-                            stdout = result.stdout,
-                            stderr = result.stderr,
-                            error = result.error
-                        )
+                        OllamaMessage("assistant", reply.take(4_000)) +
+                        OllamaMessage("user", instruction.feedback)
+                    onProgress("Protocol correction · retry ${state.protocolRetries}")
+                }
+
+                is ControllerInstruction.Stop -> {
+                    return WorkflowOutcome.Failed(
+                        instruction.reason,
+                        current,
+                        instruction.state
+                    )
                 }
             }
         }
 
-        return WorkflowOutcome.Failed("Agent reached the local step limit ($maxSteps). The task state was preserved.")
+        val stopped = state.copy(
+            task = state.task.copy(
+                status = com.lumena.android.agent.core.TaskStatus.FAILED,
+                errors = (state.task.errors + "Task can no longer continue").takeLast(8)
+            )
+        )
+        return WorkflowOutcome.Failed(
+            "Agent stopped because the task cannot continue safely.",
+            current,
+            stopped
+        )
     }
 
     suspend fun approve(
         pending: PendingWorkflowTool,
         onProgress: (String) -> Unit = {}
     ): WorkflowOutcome {
-        val localBridge = bridge
-            ?: return WorkflowOutcome.Failed("Bridge token is required for ${pending.plan.request.tool}")
+        val localBridge = bridge ?: return WorkflowOutcome.Failed(
+            "Bridge token is required for ${pending.plan.request.tool}",
+            pending.history,
+            pending.control
+        )
+
         onProgress("Running ${pending.plan.request.tool}…")
         val result = localBridge.execute(pending.plan.request)
-        onProgress(
-            if (result.ok) "✓ ${pending.plan.request.tool}" else "✗ ${pending.plan.request.tool}: ${result.error ?: result.stderr.take(300)}"
+        val call = AgentDecision.ToolCall(
+            tool = pending.plan.request.tool,
+            args = pending.plan.request.args,
+            reason = pending.plan.reason,
+            plan = pending.control.plan
+        )
+        val transition = controller.afterTool(
+            state = pending.control,
+            call = call,
+            ok = result.ok,
+            stdout = result.stdout,
+            stderr = result.stderr,
+            error = result.error
         )
         val next = pending.history + LocalWorkflowAgent.toolResultMessage(
             tool = pending.plan.request.tool,
@@ -139,6 +249,33 @@ class WorkflowRunner(
             stderr = result.stderr,
             error = result.error
         )
-        return run(next, maxSteps = 8, onProgress = onProgress)
+        onProgress(
+            if (result.ok) "✓ ${pending.plan.request.tool}"
+            else "✗ ${pending.plan.request.tool}: ${result.error ?: result.stderr.take(300)}"
+        )
+
+        transition.stopReason?.let { reason ->
+            return WorkflowOutcome.Failed(reason, next, transition.state)
+        }
+
+        return run(
+            history = next,
+            task = transition.state.task,
+            control = transition.state,
+            onProgress = onProgress
+        )
+    }
+
+    private fun withDynamicContext(
+        history: List<OllamaMessage>,
+        state: AgentControlState
+    ): List<OllamaMessage> {
+        val staticSystem = history.firstOrNull { it.role == "system" }?.content
+            ?: LocalWorkflowAgent.systemPrompt
+        val mergedSystem = staticSystem + "\n\n" + controller.dynamicContext(state)
+        return buildList {
+            add(OllamaMessage("system", mergedSystem))
+            addAll(history.filterNot { it.role == "system" })
+        }
     }
 }
