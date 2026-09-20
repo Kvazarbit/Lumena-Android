@@ -25,11 +25,12 @@ class EmbeddedLlamaClient(
     suspend fun chat(messages: List<OllamaMessage>): Result<String> = withContext(Dispatchers.IO) {
         try {
             val profile = LlamaHardwareProfile.detect(appContext)
-            val prompt = buildPrompt(messages, profile.contextSize)
+            val prepared = prepareMessages(messages, profile.contextSize)
             val text = EmbeddedLlamaRuntime.generate(
                 context = appContext,
                 modelRef = modelRef,
-                prompt = prompt,
+                roles = prepared.map { it.role }.toTypedArray(),
+                contents = prepared.map { it.content }.toTypedArray(),
                 profile = profile,
                 computeMode = computeMode,
                 temperature = temperature
@@ -62,37 +63,47 @@ class EmbeddedLlamaClient(
      */
     override fun close() = Unit
 
-    private fun buildPrompt(messages: List<OllamaMessage>, contextSize: Int): String {
-        // Conservative multilingual budget. Native code still enforces the exact token limit.
+    private fun prepareMessages(
+        messages: List<OllamaMessage>,
+        contextSize: Int
+    ): List<OllamaMessage> {
         val charBudget = (contextSize * 4).coerceAtLeast(4_096)
         val system = messages.firstOrNull { it.role == "system" }
-        val systemText = system?.let { "System: ${it.content}\n" }.orEmpty()
-        val keptSystem = if (systemText.length <= charBudget / 2) {
-            systemText
-        } else {
-            systemText.take(charBudget / 2) + "\n"
+
+        val kept = ArrayDeque<OllamaMessage>()
+        var remaining = charBudget
+
+        val systemMessage = system?.let {
+            val content = if (it.content.length <= charBudget / 2) {
+                it.content
+            } else {
+                it.content.take(charBudget / 2)
+            }
+            remaining -= content.length
+            OllamaMessage("system", content)
         }
 
-        var remaining = (charBudget - keptSystem.length - 32).coerceAtLeast(512)
-        val recent = ArrayDeque<String>()
         for (message in messages.asReversed()) {
             if (message.role == "system") continue
-            val role = when (message.role) {
-                "assistant" -> "Assistant"
-                else -> "User"
+            val normalizedRole = when (message.role) {
+                "assistant" -> "assistant"
+                else -> "user"
             }
-            val line = "$role: ${message.content}\n"
-            if (line.length > remaining && recent.isNotEmpty()) break
-            val kept = if (line.length <= remaining) line else line.takeLast(remaining)
-            recent.addFirst(kept)
-            remaining -= kept.length
+            val content = if (message.content.length <= remaining) {
+                message.content
+            } else {
+                message.content.takeLast(remaining.coerceAtLeast(0))
+            }
+
+            if (content.isBlank() && kept.isNotEmpty()) break
+            kept.addFirst(OllamaMessage(normalizedRole, content))
+            remaining -= content.length
             if (remaining <= 0) break
         }
 
-        return buildString {
-            append(keptSystem)
-            recent.forEach(::append)
-            append("Assistant:")
+        return buildList {
+            systemMessage?.let(::add)
+            addAll(kept)
         }
     }
 
