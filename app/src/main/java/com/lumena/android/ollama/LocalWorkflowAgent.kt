@@ -9,6 +9,8 @@ object LocalWorkflowAgent {
         RULES:
         - For local work, return exactly ONE tool call per response.
         - Prefer READ-ONLY inspection tools before any mutating or executable tool.
+        - If a local path is unknown, call workspace.list first and use only paths/roots it actually returns.
+        - Read-only roots such as @Lumena-Android are for inspection tools only.
         - For current public internet data, use http.json with a public HTTPS JSON API before claiming network access is unavailable.
         - Never create or modify files merely to inspect what already exists.
         - On the first tool call of a multi-step task include a short public plan of 2-6 steps.
@@ -20,7 +22,7 @@ object LocalWorkflowAgent {
         - For ordinary conversation that needs no tool, use reply JSON.
 
         TOOL CALL:
-        {"plan":["inspect","change","verify"],"tool":"git.status","args":{"cwd":"project"},"reason":"Inspect state"}
+        {"plan":["discover","inspect","report"],"tool":"workspace.list","args":{},"reason":"Discover real local paths before inspection"}
 
         DONE:
         {"done":true,"summary":"What was actually completed and verified"}
