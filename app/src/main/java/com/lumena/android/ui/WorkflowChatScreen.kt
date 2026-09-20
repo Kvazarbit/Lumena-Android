@@ -1,5 +1,10 @@
 package com.lumena.android.ui
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -108,6 +113,7 @@ fun WorkflowChatScreen(
     var selectedModel by rememberSaveable { mutableStateOf(initial.selectedModel) }
     var inferenceBackend by rememberSaveable { mutableStateOf(initial.inferenceBackend) }
     var ggufPath by rememberSaveable { mutableStateOf(initial.ggufPath) }
+    var ggufPickerStatus by rememberSaveable { mutableStateOf("") }
     var models by remember { mutableStateOf<List<String>>(emptyList()) }
     var status by remember { mutableStateOf("Checking Ollama…") }
     var showSettings by rememberSaveable { mutableStateOf(false) }
@@ -128,6 +134,33 @@ fun WorkflowChatScreen(
         )
     }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val ggufDisplayName = remember(ggufPath) {
+        resolveGgufDisplayName(context, ggufPath)
+    }
+    val ggufPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val selectedName = resolveGgufDisplayName(context, uri.toString())
+            if (!selectedName.endsWith(".gguf", ignoreCase = true)) {
+                ggufPickerStatus = "Choose a .gguf model file."
+            } else {
+                val permissionSaved = runCatching {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }.isSuccess
+                ggufPath = uri.toString()
+                inferenceBackend = "embedded"
+                LumenaPreferences.saveGgufPath(context, ggufPath)
+                LumenaPreferences.saveInferenceBackend(context, "embedded")
+                ggufPickerStatus = if (permissionSaved) {
+                    "✓ $selectedName · access saved"
+                } else {
+                    "✓ $selectedName · selected for this app session"
+                }
+            }
+        }
+    }
 
     fun restoredPendingFrom(saved: PersistedPendingTool?): PendingWorkflowTool? = saved?.let {
         val planned = ToolGate.plan(
@@ -242,7 +275,7 @@ fun WorkflowChatScreen(
         ?.let { TermuxBridgeClient(bridgeUrl, it) }
 
     fun modelClient(): ChatModelClient =
-        if (inferenceBackend == "embedded") EmbeddedLlamaClient(ggufPath)
+        if (inferenceBackend == "embedded") EmbeddedLlamaClient(context, ggufPath)
         else OllamaClient(ollamaUrl)
 
     fun modelNameForRun(): String =
@@ -460,7 +493,7 @@ fun WorkflowChatScreen(
             Column(modifier = Modifier.weight(1f)) {
                 Text("Lumena", style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    if (inferenceBackend == "embedded") "Embedded llama.cpp · ${ggufPath.substringAfterLast('/').ifBlank { "no GGUF selected" }}" else if (selectedModel.isBlank()) status else "$status · $selectedModel",
+                    if (inferenceBackend == "embedded") "Embedded llama.cpp · ${ggufDisplayName.ifBlank { "no GGUF selected" }}" else if (selectedModel.isBlank()) status else "$status · $selectedModel",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -507,14 +540,42 @@ fun WorkflowChatScreen(
                         OutlinedButton(onClick = { inferenceBackend = "ollama"; LumenaPreferences.saveInferenceBackend(context, "ollama") }) { Text(if (inferenceBackend == "ollama") "✓ Ollama" else "Ollama") }
                     }
                     if (inferenceBackend == "embedded") {
-                        OutlinedTextField(
-                            value = ggufPath,
-                            onValueChange = { ggufPath = it; LumenaPreferences.saveGgufPath(context, it) },
-                            label = { Text("GGUF model path") },
-                            supportingText = { Text("Example: /storage/emulated/0/Download/model.gguf") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
+                        Text(
+                            if (ggufPath.isBlank()) "No GGUF selected" else "Selected: $ggufDisplayName",
+                            style = MaterialTheme.typography.bodyMedium
                         )
+                        Text(
+                            "The model can stay in Downloads, Documents or another folder. Lumena remembers Android document access instead of copying the GGUF.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                enabled = !busy,
+                                onClick = { ggufPicker.launch(arrayOf("*/*")) }
+                            ) {
+                                Text(if (ggufPath.isBlank()) "Choose GGUF" else "Change GGUF")
+                            }
+                            if (ggufPath.isNotBlank()) {
+                                TextButton(
+                                    enabled = !busy,
+                                    onClick = {
+                                        ggufPath = ""
+                                        ggufPickerStatus = "GGUF selection cleared."
+                                        LumenaPreferences.saveGgufPath(context, "")
+                                    }
+                                ) {
+                                    Text("Forget")
+                                }
+                            }
+                        }
+                        if (ggufPickerStatus.isNotBlank()) {
+                            Text(
+                                ggufPickerStatus,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                     Text(
                         "Lumena restores the model automatically and keeps AgentController state outside the model.",
@@ -786,4 +847,25 @@ private fun MessageBubble(message: ChatBubble) {
             Text(message.text, style = MaterialTheme.typography.bodyMedium)
         }
     }
+}
+
+
+private fun resolveGgufDisplayName(context: android.content.Context, modelRef: String): String {
+    if (modelRef.isBlank()) return ""
+    if (!modelRef.startsWith("content://")) {
+        return modelRef.substringAfterLast('/').ifBlank { modelRef }
+    }
+    val uri = runCatching { Uri.parse(modelRef) }.getOrNull() ?: return "Selected GGUF"
+    return runCatching {
+        context.contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            val column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else null
+        }
+    }.getOrNull().orEmpty().ifBlank { "Selected GGUF" }
 }
