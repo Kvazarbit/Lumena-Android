@@ -65,24 +65,6 @@ fun CompanionScreen() {
         LumenaPreferences.saveBridgeToken(context, token)
     }
 
-    fun refreshCommand(force: Boolean = false) {
-        val snapshot = LumenaAccessibilityService.lastChatGptSnapshot
-        val command = CompanionProtocol.parse(snapshot)
-        when {
-            command == null -> status = if (snapshot == null) {
-                "No ChatGPT snapshot yet. Open the official ChatGPT app once."
-            } else {
-                "ChatGPT captured, but no LUMENA_TOOL block is visible yet."
-            }
-            !force && command.fingerprint == handledFingerprint ->
-                status = "Last tool request was already handled. Tap Rescan to run it again."
-            else -> {
-                detected = command
-                status = "Tool request detected from official ChatGPT. Review it before running."
-            }
-        }
-    }
-
     fun openChatGptWith(text: String, send: Boolean) {
         val service = LumenaAccessibilityService.instance
         if (service == null) {
@@ -101,20 +83,42 @@ fun CompanionScreen() {
         status = if (send) "Opening ChatGPT and sending…" else "Opening ChatGPT and inserting text…"
     }
 
-    fun runDetected() {
-        val command = detected ?: return
+    fun planFor(command: CompanionCommand) =
+        ToolGate.plan(command.decision, externalSource = true)
+
+    fun isSafeReadOnly(command: CompanionCommand): Boolean {
+        val plan = planFor(command)
+        if (!plan.allowed) return false
+        return ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
+    }
+
+    fun executeCommand(command: CompanionCommand, automatic: Boolean) {
+        if (busy || command.fingerprint == handledFingerprint) return
         if (token.isBlank()) {
             status = "Paste the Termux bridge token first."
             return
         }
-        val plan = ToolGate.plan(command.decision)
+
+        val plan = planFor(command)
         if (!plan.allowed) {
-            status = "Blocked unknown tool: ${plan.request.tool}"
+            status = "Blocked tool request: ${plan.reason}"
             return
         }
+
+        val readOnly = ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
+        if (automatic && (!safeAuto || !readOnly)) {
+            status = "Approval required for ${plan.request.tool}."
+            return
+        }
+
         persistConnection()
         busy = true
-        status = "Running ${plan.request.tool}…"
+        status = if (automatic) {
+            "Safe Auto · running ${plan.request.tool}…"
+        } else {
+            "Running ${plan.request.tool}…"
+        }
+
         scope.launch {
             val result = TermuxBridgeClient(bridgeUrl, token, context).execute(plan.request)
             val formatted = CompanionProtocol.formatResult(plan.request.tool, result)
@@ -132,22 +136,63 @@ fun CompanionScreen() {
                 openChatGptWith(formatted, send = true)
             } else {
                 status = if (result.ok) {
-                    "${plan.request.tool} completed. Review the result before returning it to ChatGPT."
+                    "${plan.request.tool} completed. Result is ready below."
                 } else {
-                    "${plan.request.tool} returned an error. The real error can still be sent back to ChatGPT."
+                    "${plan.request.tool} returned an error. The real error is shown below."
                 }
             }
         }
     }
 
-    LaunchedEffect(Unit) {
+    fun acceptDetected(command: CompanionCommand, force: Boolean = false) {
+        if (!force && command.fingerprint == handledFingerprint) {
+            status = "Last tool request was already handled."
+            return
+        }
+
+        detected = command
+        val plan = planFor(command)
+        when {
+            !plan.allowed -> status = "Blocked tool request: ${plan.reason}"
+            safeAuto && isSafeReadOnly(command) && !busy -> {
+                status = "Safe read-only tool detected."
+                executeCommand(command, automatic = true)
+            }
+            else -> status = "Tool request detected. Review it before running."
+        }
+    }
+
+    fun refreshCommand(force: Boolean = false) {
+        val snapshot = LumenaAccessibilityService.lastChatGptSnapshot
+        val command = CompanionProtocol.parse(snapshot)
+        if (command == null) {
+            status = if (snapshot == null) {
+                "No ChatGPT snapshot yet. Open the official ChatGPT app once."
+            } else {
+                "ChatGPT captured, but no LUMENA_TOOL block is visible yet."
+            }
+            return
+        }
+        if (force && command.fingerprint == handledFingerprint) handledFingerprint = null
+        acceptDetected(command, force = force)
+    }
+
+    fun runDetected() {
+        detected?.let { executeCommand(it, automatic = false) }
+    }
+
+    LaunchedEffect(safeAuto, token, bridgeUrl) {
         while (true) {
             val command = CompanionProtocol.parse(LumenaAccessibilityService.lastChatGptSnapshot)
-            if (command != null && command.fingerprint != handledFingerprint && command.fingerprint != detected?.fingerprint) {
-                detected = command
-                status = "New LUMENA_TOOL request detected."
+            if (
+                command != null &&
+                command.fingerprint != handledFingerprint &&
+                command.fingerprint != detected?.fingerprint &&
+                !busy
+            ) {
+                acceptDetected(command)
             }
-            delay(1000)
+            delay(700)
         }
     }
 
