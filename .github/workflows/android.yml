@@ -36,6 +36,38 @@ jobs:
       - name: Validate Termux bridge
         run: |
           python -m py_compile termux/bridge.py
+          python - <<'PY'
+          import importlib.util
+          from pathlib import Path
+
+          spec = importlib.util.spec_from_file_location("lumena_bridge", "termux/bridge.py")
+          bridge = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(bridge)
+
+          assert bridge.system_info()["ok"] is True
+          assert bridge.file_list({})["ok"] is True
+
+          try:
+              bridge._validated_public_https_url("http://example.com")
+          except ValueError:
+              pass
+          else:
+              raise AssertionError("http.json must reject non-HTTPS URLs")
+
+          try:
+              bridge._validated_public_https_url("https://127.0.0.1/test")
+          except ValueError:
+              pass
+          else:
+              raise AssertionError("http.json must reject loopback destinations")
+
+          try:
+              bridge.file_search({"query": ""})
+          except ValueError:
+              pass
+          else:
+              raise AssertionError("file.search must reject an empty query")
+          PY
           bash -n termux/install_bridge.sh
           bash -n termux/ollama_sidecar.sh
           bash -n scripts/sync_llama_cpp.sh
