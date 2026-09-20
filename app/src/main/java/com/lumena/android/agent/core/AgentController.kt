@@ -17,7 +17,8 @@ data class AgentControlState(
     val lastToolSignature: String? = null,
     val identicalToolCalls: Int = 0,
     val verificationRequired: Boolean = false,
-    val verificationReason: String? = null
+    val verificationReason: String? = null,
+    val visualEvidenceReady: Boolean = false
 )
 
 sealed interface ControllerInstruction {
@@ -180,6 +181,13 @@ class AgentController(
         decision: AgentDecision.Done,
         state: AgentControlState
     ): ControllerInstruction {
+        if (requiresVisualEvidence(state.task.goal) && !state.visualEvidenceReady) {
+            return protocolRetry(
+                state,
+                "The user asked to find/show an image. Use image.search successfully before marking the task done. http.get/http.json or text links do not satisfy this goal."
+            )
+        }
+
         if (state.verificationRequired) {
             return protocolRetry(
                 state,
@@ -220,6 +228,13 @@ class AgentController(
             return protocolRetry(
                 state,
                 "The previous output looked like a tool/protocol message but could not be parsed safely. Return one valid Lumena JSON tool call, or ordinary prose with no protocol fields."
+            )
+        }
+
+        if (requiresVisualEvidence(state.task.goal) && !state.visualEvidenceReady) {
+            return protocolRetry(
+                state,
+                "The user asked to find/show an image. Use image.search successfully before replying. A text-only answer does not satisfy this goal."
             )
         }
 
@@ -326,7 +341,8 @@ class AgentController(
                 pythonFailures = pythonFailures,
                 repeatedToolFailures = repeatedFailures,
                 verificationRequired = verificationRequired,
-                verificationReason = verificationReason
+                verificationReason = verificationReason,
+                visualEvidenceReady = state.visualEvidenceReady || (ok && call.tool == "image.search")
             )
         )
     }
@@ -367,6 +383,19 @@ class AgentController(
                 state = next
             )
         }
+    }
+
+    private fun requiresVisualEvidence(goal: String): Boolean {
+        val lower = goal.lowercase()
+        val imageTerms = listOf(
+            "фото", "зображ", "картин", "image", "photo", "picture",
+            "zdję", "obraz"
+        )
+        val actionTerms = listOf(
+            "знайд", "покаж", "пошук", "find", "show", "search",
+            "znajd", "pokaż", "wyszuk"
+        )
+        return imageTerms.any(lower::contains) && actionTerms.any(lower::contains)
     }
 
     private fun fail(state: AgentControlState, reason: String): AgentControlState = state.copy(
