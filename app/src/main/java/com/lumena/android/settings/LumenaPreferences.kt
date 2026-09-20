@@ -7,7 +7,9 @@ data class LumenaConnectionSettings(
     val bridgeToken: String = "",
     val ollamaUrl: String = DEFAULT_OLLAMA_URL,
     val selectedModel: String = "",
-    val companionAutoReturn: Boolean = true
+    val companionAutoReturn: Boolean = true,
+    val inferenceBackend: String = "ollama",
+    val ggufPath: String = ""
 ) {
     companion object {
         const val DEFAULT_BRIDGE_URL = "http://127.0.0.1:8765"
@@ -31,6 +33,8 @@ object LumenaPreferences {
     private const val KEY_SELECTED_MODEL = "selected_model"
     private const val KEY_COMPANION_AUTO_RETURN = "companion_auto_return"
     private const val KEY_LEGACY_MIGRATED = "legacy_companion_migrated"
+    private const val KEY_INFERENCE_BACKEND = "inference_backend"
+    private const val KEY_GGUF_PATH = "gguf_path"
 
     fun load(context: Context): LumenaConnectionSettings {
         val app = context.applicationContext
@@ -55,7 +59,9 @@ object LumenaPreferences {
             bridgeToken = prefs.getString(KEY_BRIDGE_TOKEN, "") ?: "",
             ollamaUrl = ollamaUrl,
             selectedModel = prefs.getString(KEY_SELECTED_MODEL, "") ?: "",
-            companionAutoReturn = prefs.getBoolean(KEY_COMPANION_AUTO_RETURN, true)
+            companionAutoReturn = prefs.getBoolean(KEY_COMPANION_AUTO_RETURN, true),
+            inferenceBackend = prefs.getString(KEY_INFERENCE_BACKEND, "ollama") ?: "ollama",
+            ggufPath = prefs.getString(KEY_GGUF_PATH, "") ?: ""
         )
     }
 
@@ -73,6 +79,14 @@ object LumenaPreferences {
 
     fun saveSelectedModel(context: Context, value: String) {
         prefs(context).edit().putString(KEY_SELECTED_MODEL, value.trim()).apply()
+    }
+
+    fun saveInferenceBackend(context: Context, value: String) {
+        prefs(context).edit().putString(KEY_INFERENCE_BACKEND, value).apply()
+    }
+
+    fun saveGgufPath(context: Context, value: String) {
+        prefs(context).edit().putString(KEY_GGUF_PATH, value.trim()).apply()
     }
 
     fun saveCompanionAutoReturn(context: Context, value: Boolean) {
