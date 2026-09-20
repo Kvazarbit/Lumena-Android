@@ -119,6 +119,23 @@ class AgentControllerTest {
     }
 
     @Test
+    fun verifiedExperienceIsInjectedIntoDynamicContext() {
+        val state = controller.initial(task())
+        val context = controller.dynamicContext(
+            state,
+            relevantMemory = listOf(
+                "NEGATIVE unresolved · python.run · target=script=demo.py · failure: missing dependency · seen=1x",
+                "POSITIVE verified · git.status · target=cwd=@Lumena-Android · success: clean · seen=2x"
+            )
+        )
+
+        assertTrue(context.contains("RELEVANT VERIFIED MEMORY"))
+        assertTrue(context.contains("NEGATIVE unresolved"))
+        assertTrue(context.contains("POSITIVE verified"))
+        assertTrue(context.contains("script=demo.py"))
+    }
+
+    @Test
     fun repeatedIdenticalCallsAreStopped() {
         var state = controller.initial(task())
         val raw = """{"tool":"workspace.list","args":{},"reason":"inspect"}"""
