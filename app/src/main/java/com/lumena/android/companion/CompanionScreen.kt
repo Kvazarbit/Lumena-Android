@@ -113,7 +113,7 @@ fun CompanionScreen() {
         busy = true
         status = "Running ${plan.request.tool}…"
         scope.launch {
-            val result = TermuxBridgeClient(bridgeUrl, token).execute(plan.request)
+            val result = TermuxBridgeClient(bridgeUrl, token, context).execute(plan.request)
             val formatted = CompanionProtocol.formatResult(plan.request.tool, result)
             lastResult = formatted
             handledFingerprint = command.fingerprint
@@ -217,7 +217,7 @@ fun CompanionScreen() {
                             persistConnection()
                             busy = true
                             scope.launch {
-                                val result = if (token.isBlank()) null else TermuxBridgeClient(bridgeUrl, token).execute(
+                                val result = if (token.isBlank()) null else TermuxBridgeClient(bridgeUrl, token, context).execute(
                                     ToolRequest("health")
                                 )
                                 status = when {
