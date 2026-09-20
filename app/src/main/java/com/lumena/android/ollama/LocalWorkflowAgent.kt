@@ -11,6 +11,7 @@ object LocalWorkflowAgent {
         - Prefer READ_ONLY inspection. If a path is unknown use workspace.list; for broad state use context.snapshot; for independent reads prefer inspect.batch.
         - Read-only roots such as @Lumena-Android are inspection-only.
         - For current public data use http.json; for public HTTPS text/HTML use http.get.
+        - For requests to find/show photos or images, use image.search directly. http.get/http.json alone do NOT satisfy a request to show an image; the app renders image.search attachments inline.
         - Verify active Ollama state with ollama.status. If CLI/API disagree, report the mismatch. Query a local model with ollama.generate, not ad-hoc Python HTTP scripts.
         - process.status is for bridge-started long-running subprocess health.
         - python.run/python.syntax_check accept ONLY a path to an existing workspace .py file. Create code with file.write first.
@@ -18,6 +19,7 @@ object LocalWorkflowAgent {
         - Never modify files merely to inspect them.
         - After each TOOL_RESULT continue the SAME goal. If verification is required, verify before done.
         - After tool work starts, finish ONLY with done JSON. Ordinary no-tool conversation uses reply JSON.
+        - Keep user-facing reply/done text in the user's language unless the user asks for another language.
 
         TOOL:
         {"plan":["optional","short","plan"],"tool":"workspace.list","args":{},"reason":"Discover real paths"}
