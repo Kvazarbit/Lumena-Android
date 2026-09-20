@@ -398,6 +398,7 @@ fun WorkflowChatScreen(
                         if (text.isEmpty()) coordinator.beginModelTurn(runToken)
                         else coordinator.updateModelText(runToken, text)
                     },
+                    onToolTelemetry = { coordinator.updateToolTelemetry(runToken, it) },
                     isApprovedForTask = ::isApprovedForTask,
                     onState = { acceptControl(task.id, runToken, it) }
                 )
@@ -600,6 +601,7 @@ fun WorkflowChatScreen(
                             if (text.isEmpty()) coordinator.beginModelTurn(runToken)
                             else coordinator.updateModelText(runToken, text)
                         },
+                        onToolTelemetry = { coordinator.updateToolTelemetry(runToken, it) },
                         isApprovedForTask = ::isApprovedForTask,
                         onState = { acceptControl(taskId, runToken, it) }
                     )
