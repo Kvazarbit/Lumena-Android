@@ -104,6 +104,57 @@ class ExperienceMemoryStoreTest {
     }
 
     @Test
+    fun unrelatedExperienceIsNotInjectedIntoAQuery() {
+        var state = ExperienceMemoryState()
+        state = ExperienceMemoryIndex.record(
+            state,
+            ToolRequest("git.status", mapOf("cwd" to "@Lumena-Android")),
+            ToolResult(ok = true, tool = "git.status", stdout = "clean branch"),
+            now = 1000L
+        )
+        state = ExperienceMemoryIndex.record(
+            state,
+            ToolRequest("python.run", mapOf("script" to "audio_test.py")),
+            ToolResult(ok = false, tool = "python.run", error = "audio device unavailable"),
+            now = 2000L
+        )
+
+        val relevant = ExperienceMemoryIndex.relevant(
+            state,
+            query = "debug python audio_test.py",
+            limit = 8
+        )
+
+        assertTrue(relevant.any { it.contains("python.run") })
+        assertFalse(relevant.any { it.contains("git.status") })
+    }
+
+    @Test
+    fun changedPositiveSummaryUpdatesSameAnchor() {
+        val request = ToolRequest(
+            tool = "git.status",
+            args = mapOf("cwd" to "@Lumena-Android")
+        )
+        var state = ExperienceMemoryIndex.record(
+            ExperienceMemoryState(),
+            request,
+            ToolResult(ok = true, tool = "git.status", stdout = "## feature/a"),
+            now = 1000L
+        )
+        state = ExperienceMemoryIndex.record(
+            state,
+            request,
+            ToolResult(ok = true, tool = "git.status", stdout = "## feature/b"),
+            now = 2000L
+        )
+
+        val positives = state.anchors.filter { it.valence == ExperienceValence.POSITIVE }
+        assertEquals(1, positives.size)
+        assertEquals(2, positives.single().occurrences)
+        assertTrue(positives.single().summary.contains("feature/b"))
+    }
+
+    @Test
     fun repeatedVerifiedSuccessCompactsIntoOccurrences() {
         val request = ToolRequest(
             tool = "git.status",
