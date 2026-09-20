@@ -207,6 +207,56 @@ class AgentControllerTest {
     }
 
     @Test
+    fun initialStateCarriesDeterministicIntentRecipe() {
+        val visualTask = TaskState(
+            id = "intent",
+            projectId = null,
+            goal = "знайди фото жінки і покажи",
+            status = TaskStatus.WAITING_MODEL
+        )
+
+        val state = controller.initial(visualTask)
+        val context = controller.dynamicContext(state)
+
+        assertTrue(state.intent == TaskIntent.VISUAL_SEARCH)
+        assertTrue(state.intentConfidence == 100)
+        assertTrue("image.search" in state.recommendedTools)
+        assertTrue(context.contains("TASK RECIPE"))
+        assertTrue(context.contains("intent=VISUAL_SEARCH"))
+        assertTrue(context.contains("recommended_tools=image.search"))
+    }
+
+    @Test
+    fun failedToolProducesRecoveryGuidanceInDynamicContext() {
+        val fileTask = TaskState(
+            id = "recover",
+            projectId = null,
+            goal = "знайди файл missing.txt і прочитай його",
+            status = TaskStatus.WAITING_MODEL
+        )
+        var state = controller.initial(fileTask)
+        val call = AgentDecision.ToolCall(
+            tool = "file.read",
+            args = mapOf("path" to "missing.txt")
+        )
+
+        state = controller.afterTool(
+            state = state,
+            call = call,
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "FileNotFoundError: No such file"
+        ).state
+
+        val context = controller.dynamicContext(state)
+
+        assertTrue(state.recoveryHint.orEmpty().contains("workspace.list"))
+        assertTrue(context.contains("RECOVERY GUIDANCE"))
+        assertTrue(context.contains("file.search"))
+    }
+
+    @Test
     fun repeatedIdenticalCallsAreStopped() {
         var state = controller.initial(task())
         val raw = """{"tool":"workspace.list","args":{},"reason":"inspect"}"""
