@@ -51,6 +51,7 @@ import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.runtime.AgentRunCoordinator
 import com.lumena.android.companion.CompanionScreen
 import com.lumena.android.llama.EmbeddedLlamaClient
+import com.lumena.android.llama.EmbeddedLlamaRuntime
 import com.lumena.android.settings.HistoryTreeStore
 import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.settings.LumenaPreferences
@@ -104,7 +105,18 @@ class MainActivity : ComponentActivity() {
         var agentOpen by remember { mutableStateOf(false) }
         var historyState by remember { mutableStateOf(HistoryTreeStore.load(this@MainActivity)) }
         var liveSession by remember { mutableStateOf(LocalSessionStore.load(this@MainActivity)) }
-        var model by remember { mutableStateOf(LumenaPreferences.load(this@MainActivity).selectedModel) }
+
+        fun currentModelLabel(): String {
+            val settings = LumenaPreferences.load(this@MainActivity)
+            return if (settings.inferenceBackend == "embedded") {
+                val actual = EmbeddedLlamaRuntime.backendLabel()
+                if (actual == "not loaded yet") "Embedded GGUF" else "Embedded GGUF · $actual"
+            } else {
+                settings.selectedModel.ifBlank { "Ollama" }
+            }
+        }
+
+        var model by remember { mutableStateOf(currentModelLabel()) }
 
         LaunchedEffect(refreshToken) {
             val bridgeSettings = LumenaPreferences.load(this@MainActivity)
@@ -125,12 +137,17 @@ class MainActivity : ComponentActivity() {
         }
         fun closeRight() { agentOpen = false }
         fun openLeft() { agentOpen = false; reloadHistory(); scope.launch { leftDrawer.open() } }
-        fun openRight() { scope.launch { leftDrawer.close() }; liveSession = LocalSessionStore.load(this@MainActivity); model = LumenaPreferences.load(this@MainActivity).selectedModel; agentOpen = true }
+        fun openRight() {
+            scope.launch { leftDrawer.close() }
+            liveSession = LocalSessionStore.load(this@MainActivity)
+            model = currentModelLabel()
+            agentOpen = true
+        }
 
         LaunchedEffect(tab, agentOpen, coordinator.active) {
             while (tab == 1) {
                 liveSession = LocalSessionStore.load(this@MainActivity)
-                model = LumenaPreferences.load(this@MainActivity).selectedModel
+                model = currentModelLabel()
                 delay(600)
             }
         }
