@@ -86,7 +86,8 @@ fun AgentWorkDrawer(
                 )
                 task?.let {
                     Text(
-                        "Step ${it.step}/${it.maxSteps}",
+                        if (it.step == 0 && running) "Planning task budget…"
+                        else "Step ${it.step}/${it.maxSteps}",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
