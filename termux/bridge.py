@@ -721,6 +721,7 @@ def _register_process(request_id: str | None, process: subprocess.Popen[str]) ->
         return
     with ACTIVE_LOCK:
         ACTIVE_PROCESSES[request_id] = process
+        ACTIVE_STARTED[request_id] = time.monotonic()
 
 
 def _unregister_process(request_id: str | None, process: subprocess.Popen[str]) -> None:
@@ -729,6 +730,7 @@ def _unregister_process(request_id: str | None, process: subprocess.Popen[str]) 
     with ACTIVE_LOCK:
         if ACTIVE_PROCESSES.get(request_id) is process:
             ACTIVE_PROCESSES.pop(request_id, None)
+            ACTIVE_STARTED.pop(request_id, None)
 
 
 def _terminate_process(process: subprocess.Popen[str], *, force: bool = False) -> None:
