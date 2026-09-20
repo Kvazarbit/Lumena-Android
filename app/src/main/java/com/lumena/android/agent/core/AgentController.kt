@@ -335,7 +335,10 @@ class AgentController(
         state: AgentControlState,
         relevantMemory: List<String> = emptyList()
     ): String {
-        return ContextBuilder(maxChars = 9_000).build(
+        return ContextBuilder(
+            maxMemoryItems = 6,
+            maxChars = 4_500
+        ).build(
             task = state.task,
             project = null,
             relevantMemory = relevantMemory,
