@@ -76,7 +76,7 @@ class AgentController(
     }
 
     fun onModelFailure(state: AgentControlState, message: String): ControllerInstruction {
-        val compactMessage = message.takeLast(4_000)
+        val compactMessage = compactFailureMessage(message)
         val failures = state.modelFailures + 1
         val next = state.copy(
             modelFailures = failures,
@@ -426,6 +426,24 @@ class AgentController(
             intentGuidance = state.intentGuidance,
             recoveryGuidance = state.recoveryHint
         )
+    }
+
+    private fun compactFailureMessage(
+        message: String,
+        maxChars: Int = 4_000
+    ): String {
+        val clean = message
+            .replace('\u0000', ' ')
+            .trim()
+        if (clean.length <= maxChars) return clean
+
+        val marker = "\n...[middle of technical log omitted]...\n"
+        val available = (maxChars - marker.length).coerceAtLeast(0)
+        val headChars = (available * 3) / 5
+        val tailChars = available - headChars
+        return clean.take(headChars) +
+            marker +
+            clean.takeLast(tailChars)
     }
 
     private fun protocolRetry(state: AgentControlState, problem: String): ControllerInstruction {
