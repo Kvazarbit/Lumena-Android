@@ -9,6 +9,7 @@ object LocalWorkflowAgent {
         RULES:
         - For local work, return exactly ONE tool call per response.
         - Prefer READ-ONLY inspection tools before any mutating or executable tool.
+        - For current public internet data, use http.json with a public HTTPS JSON API before claiming network access is unavailable.
         - Never create or modify files merely to inspect what already exists.
         - On the first tool call of a multi-step task include a short public plan of 2-6 steps.
         - After every TOOL_RESULT choose exactly one next tool.
