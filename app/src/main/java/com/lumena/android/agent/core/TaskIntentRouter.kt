@@ -105,7 +105,7 @@ object TaskIntentRouter {
             )
         }
 
-        if (isFileInspection(lower)) {
+        if (isFileInspection(lower) && !isPublicWeb(lower)) {
             return TaskIntentProfile(
                 intent = TaskIntent.FILE_INSPECTION,
                 confidence = 86,
