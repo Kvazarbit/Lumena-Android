@@ -41,10 +41,10 @@ import java.util.Date
 fun HistoryTreeDrawer(
     state: HistoryTreeState,
     onActivate: (String) -> Unit,
-    onForkOpen now: () -> Unit,
+    onForkActive: () -> Unit,
     onCreateTask: (String) -> Unit,
     onCreateTopic: (String) -> Unit,
-    onRenameOpen now: (String) -> Unit,
+    onRenameActive: (String) -> Unit,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
