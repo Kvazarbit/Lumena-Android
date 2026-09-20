@@ -155,8 +155,9 @@ object TaskIntentRouter {
             "модел загруж", "модел работает"
         ).any(lower::contains)
         val action = listOf(
-            "status", "стан", "статус", "запуст", "start", "pull", "download",
-            "generate", "генер", "завантаж", "loaded", "running", "працю", "работ"
+            "status", "стан", "статус", "запуст", "запущ", "start", "pull", "download",
+            "generate", "генер", "завантаж", "loaded", "running", "працю", "работ",
+            "uruchom", "działa", "dziala"
         ).any(lower::contains)
         return subject && action
     }
