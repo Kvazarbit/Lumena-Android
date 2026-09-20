@@ -915,6 +915,97 @@ def workspace_listing() -> str:
     return "\n".join(lines) if lines else "(workspace empty)"
 
 
+def context_snapshot(args: dict[str, Any]) -> dict[str, Any]:
+    refresh = str(args.get("refresh", "false")).lower() in {"1", "true", "yes"}
+    max_age = _bounded_int(args.get("max_age"), 300, 30, 3600)
+
+    if CONTEXT_CACHE_FILE.exists() and not refresh:
+        try:
+            age = time.time() - CONTEXT_CACHE_FILE.stat().st_mtime
+            if age <= max_age:
+                cached = CONTEXT_CACHE_FILE.read_text(encoding="utf-8")
+                json.loads(cached)
+                return {
+                    "ok": True,
+                    "exitCode": 0,
+                    "stdout": clamp(cached),
+                    "stderr": "",
+                    "error": None,
+                }
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    system_payload = {}
+    try:
+        system_payload = json.loads(system_info()["stdout"])
+    except (KeyError, TypeError, json.JSONDecodeError):
+        pass
+
+    roots: list[dict[str, Any]] = [{
+        "name": "workspace",
+        "path": str(WORKSPACE),
+        "alias": ".",
+        "mode": "read-write",
+        "exists": WORKSPACE.exists(),
+    }]
+    roots.extend(
+        {
+            "name": root.name,
+            "path": str(root),
+            "alias": f"@{root.name}",
+            "mode": "read-only",
+            "exists": root.exists(),
+        }
+        for root in READONLY_ROOTS
+    )
+
+    git_state: dict[str, Any] = {}
+    candidates: list[tuple[str, Path]] = [(".", WORKSPACE)]
+    candidates.extend((f"@{root.name}", root) for root in READONLY_ROOTS)
+
+    for label, root in candidates:
+        if not root.exists() or not root.is_dir():
+            continue
+        git_dir = root / ".git"
+        if not git_dir.exists():
+            continue
+        try:
+            result = execute_tool("git.status", {"cwd": label})
+            git_state[label] = {
+                "ok": result.get("ok"),
+                "status": str(result.get("stdout", ""))[:8000],
+                "error": result.get("error"),
+            }
+        except Exception as exc:
+            git_state[label] = {
+                "ok": False,
+                "status": "",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    snapshot = {
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "system": system_payload,
+        "roots": roots,
+        "workspace_listing": workspace_listing().splitlines()[:250],
+        "git": git_state,
+    }
+    encoded = json.dumps(snapshot, ensure_ascii=False, indent=2)
+    try:
+        CONTEXT_CACHE_FILE.write_text(encoded, encoding="utf-8")
+        CONTEXT_CACHE_FILE.chmod(0o600)
+    except OSError:
+        pass
+
+    return {
+        "ok": True,
+        "exitCode": 0,
+        "stdout": clamp(encoded),
+        "stderr": "",
+        "error": None,
+    }
+
+
 def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None) -> dict[str, Any]:
     if tool == "health":
         return {
