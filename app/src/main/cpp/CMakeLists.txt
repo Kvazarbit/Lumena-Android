@@ -28,6 +28,7 @@ set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
 # glslc and SPIRV-Headers are host build tools; Vulkan headers/library come from NDK.
 find_program(LUMENA_GLSLC NAMES glslc NO_CMAKE_FIND_ROOT_PATH)
 find_path(LUMENA_VULKAN_HPP_ROOT NAMES vulkan/vulkan.hpp NO_CMAKE_FIND_ROOT_PATH)
+find_path(LUMENA_SPIRV_HPP_ROOT NAMES spirv/unified1/spirv.hpp NO_CMAKE_FIND_ROOT_PATH)
 if(LUMENA_GLSLC)
     set(Vulkan_GLSLC_EXECUTABLE "${LUMENA_GLSLC}" CACHE FILEPATH "" FORCE)
 endif()
@@ -35,10 +36,12 @@ find_package(SPIRV-Headers CONFIG QUIET NO_CMAKE_FIND_ROOT_PATH)
 find_package(Vulkan QUIET)
 
 set(LUMENA_VULKAN_HPP_INCLUDE "")
-if(LUMENA_VULKAN_HPP_ROOT)
+if(LUMENA_VULKAN_HPP_ROOT AND LUMENA_SPIRV_HPP_ROOT)
     set(LUMENA_VULKAN_HPP_INCLUDE "${CMAKE_BINARY_DIR}/lumena-vulkan-headers")
     file(MAKE_DIRECTORY "${LUMENA_VULKAN_HPP_INCLUDE}")
     file(COPY "${LUMENA_VULKAN_HPP_ROOT}/vulkan"
+         DESTINATION "${LUMENA_VULKAN_HPP_INCLUDE}")
+    file(COPY "${LUMENA_SPIRV_HPP_ROOT}/spirv"
          DESTINATION "${LUMENA_VULKAN_HPP_INCLUDE}")
 endif()
 
