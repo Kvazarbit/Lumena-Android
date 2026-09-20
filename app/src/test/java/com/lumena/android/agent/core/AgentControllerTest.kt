@@ -89,6 +89,20 @@ class AgentControllerTest {
     }
 
     @Test
+    fun proseWrappedToolJsonIsCorrectedInsteadOfShownAsReply() {
+        val state = controller.initial(task())
+        val raw = """
+            I will verify the loaded model now.
+
+            {"plan":["verify"],"tool":"ollama.status","args":{},"reason":"Check loaded model"}
+        """.trimIndent()
+
+        val instruction = controller.interpret(raw, state)
+
+        assertTrue(instruction is ControllerInstruction.AskModelAgain)
+    }
+
+    @Test
     fun proseCannotFinishAfterToolWork() {
         val state = controller.initial(task()).copy(toolUsed = true)
         val instruction = controller.interpret("Looks good, done!", state)
