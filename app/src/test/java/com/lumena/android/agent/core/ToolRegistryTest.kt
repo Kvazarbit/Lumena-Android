@@ -45,6 +45,24 @@ class ToolRegistryTest {
     }
 
     @Test
+    fun inspectBatchIsReadOnlyButRequiresRequests() {
+        val missing = ToolRegistry.validate(
+            AgentDecision.ToolCall("inspect.batch", emptyMap())
+        )
+        assertFalse(missing.allowed)
+        assertTrue(missing.error!!.contains("requests"))
+
+        val allowed = ToolRegistry.validate(
+            AgentDecision.ToolCall(
+                "inspect.batch",
+                mapOf("requests" to """[{"tool":"system.info","args":{}}]""")
+            )
+        )
+        assertTrue(allowed.allowed)
+        assertFalse(allowed.requiresConfirmation)
+    }
+
+    @Test
     fun explicitAliasCanonicalizesWithoutFuzzyMatching() {
         assertEquals("git.status", ToolRegistry.canonicalize("git_status"))
         assertEquals("mystery-status", ToolRegistry.canonicalize("mystery-status"))
