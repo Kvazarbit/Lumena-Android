@@ -75,7 +75,11 @@ import com.lumena.android.ollama.WorkflowOutcome
 import com.lumena.android.ollama.WorkflowRunner
 import com.lumena.android.settings.LocalSessionSnapshot
 import com.lumena.android.settings.LocalSessionStore
+import com.lumena.android.settings.ContextGenomeStats
+import com.lumena.android.settings.ContextGenomeStore
 import com.lumena.android.settings.ExperienceMemoryStore
+import com.lumena.android.settings.GenomeCapsule
+import com.lumena.android.settings.GenomeUnpackedUnit
 import com.lumena.android.settings.LumenaPreferences
 import com.lumena.android.settings.PersistedChatMessage
 import com.lumena.android.settings.PersistedHistoryMessage
@@ -148,6 +152,12 @@ fun WorkflowChatScreen(
 
     val experienceStats = remember(showSettings, experienceMemoryRevision) {
         ExperienceMemoryStore.stats(context)
+    }
+    val genomeStats = remember(showSettings, experienceMemoryRevision) {
+        ContextGenomeStore.stats(context)
+    }
+    val genomeCapsules = remember(showSettings, experienceMemoryRevision) {
+        ContextGenomeStore.capsules(context, limit = 6)
     }
     val ggufDisplayName = remember(ggufPath) { resolveGgufDisplayName(context, ggufPath) }
     val hardwareProfile = remember(showSettings, busy) { LlamaHardwareProfile.detect(context) }
@@ -591,6 +601,9 @@ fun WorkflowChatScreen(
                 experienceNegative = experienceStats.negative,
                 experienceUnresolved = experienceStats.unresolvedNegative,
                 experienceTotal = experienceStats.total,
+                genomeStats = genomeStats,
+                genomeCapsules = genomeCapsules,
+                onUnpackGenome = { id -> ContextGenomeStore.unpack(context, id) },
                 onClearExperience = {
                     if (!busy) {
                         ExperienceMemoryStore.clear(context)
@@ -935,6 +948,9 @@ private fun ModelAndConnectionSheet(
     experienceNegative: Int,
     experienceUnresolved: Int,
     experienceTotal: Int,
+    genomeStats: ContextGenomeStats,
+    genomeCapsules: List<GenomeCapsule>,
+    onUnpackGenome: (String) -> GenomeUnpackedUnit?,
     onClearExperience: () -> Unit
 ) {
     Column(
