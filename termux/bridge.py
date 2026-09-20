@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.15
+Lumena Termux Bridge v0.16
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -467,7 +467,7 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.15",
+            "User-Agent": "LumenaBridge/0.16",
             "Cache-Control": "no-cache",
         },
     )
@@ -521,7 +521,7 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "text/html,text/plain,application/json,application/xml,text/xml,application/xhtml+xml;q=0.9,*/*;q=0.1",
-            "User-Agent": "LumenaBridge/0.15",
+            "User-Agent": "LumenaBridge/0.16",
             "Cache-Control": "no-cache",
         },
     )
@@ -577,16 +577,68 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         }
 
 
-def image_search(args: dict[str, Any]) -> dict[str, Any]:
-    query = str(args.get("query", "")).strip()
-    if not query:
-        raise ValueError("image.search requires a non-empty query")
-    if len(query) > 200:
-        raise ValueError("image.search query exceeds 200 characters")
+def _image_query_variants(query: str) -> list[str]:
+    normalized = re.sub(r"\s+", " ", query).strip()
+    variants: list[str] = []
 
-    limit = _bounded_int(args.get("limit"), 4, 1, 8)
-    timeout = _bounded_int(args.get("timeout"), 12, 2, 20)
+    def add(value: str) -> None:
+        value = re.sub(r"\s+", " ", value).strip(" ,.;:-")
+        if value and value.lower() not in {item.lower() for item in variants}:
+            variants.append(value[:200])
 
+    add(normalized)
+
+    generic = re.compile(
+        r"(?iu)\b(photography|photograph|photo|photos|image|images|picture|pictures|"
+        r"portrait|фото|фотографія|фотографії|зображення|картинка|картинки|"
+        r"zdjęcie|zdjecie|zdjęcia|zdjecia|fotografia|fotografie)\b"
+    )
+    simplified = generic.sub(" ", normalized)
+    add(simplified)
+
+    # A short high-signal variant helps providers whose ranking is hurt by
+    # descriptive tail words while preserving the user's key subject terms.
+    simplified_tokens = simplified.split()
+    if len(simplified_tokens) > 4:
+        add(" ".join(simplified_tokens[:4]))
+    elif len(normalized.split()) > 5:
+        add(" ".join(normalized.split()[:5]))
+
+    return variants[:3]
+
+
+def _read_json_response(
+    request: urllib.request.Request,
+    timeout: int,
+    provider: str,
+) -> dict[str, Any]:
+    try:
+        response = PUBLIC_HTTPS_OPENER.open(request, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        body = exc.read(4096).decode("utf-8", errors="replace")
+        raise ValueError(f"{provider} HTTP {exc.code}: {body[:1000]}") from exc
+    except urllib.error.URLError as exc:
+        raise ValueError(f"{provider} image search failed: {exc.reason}") from exc
+
+    with response:
+        raw = response.read(MAX_HTTP_JSON + 1)
+        if len(raw) > MAX_HTTP_JSON:
+            raise ValueError(f"{provider} response exceeds 2 MiB limit")
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{provider} returned invalid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{provider} returned a non-object JSON response")
+    return payload
+
+
+def _wikimedia_image_search(
+    query: str,
+    limit: int,
+    timeout: int,
+) -> list[dict[str, Any]]:
     params = urllib.parse.urlencode({
         "action": "query",
         "generator": "search",
@@ -600,35 +652,16 @@ def image_search(args: dict[str, Any]) -> dict[str, Any]:
         "formatversion": "2",
         "origin": "*",
     })
-    url = "https://commons.wikimedia.org/w/api.php?" + params
     request = urllib.request.Request(
-        url,
+        "https://commons.wikimedia.org/w/api.php?" + params,
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.15 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.16 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
-
-    try:
-        response = PUBLIC_HTTPS_OPENER.open(request, timeout=timeout)
-    except urllib.error.HTTPError as exc:
-        body = exc.read(4096).decode("utf-8", errors="replace")
-        raise ValueError(f"Wikimedia HTTP {exc.code}: {body[:1000]}") from exc
-    except urllib.error.URLError as exc:
-        raise ValueError(f"Wikimedia image search failed: {exc.reason}") from exc
-
-    with response:
-        raw = response.read(MAX_HTTP_JSON + 1)
-        if len(raw) > MAX_HTTP_JSON:
-            raise ValueError("Wikimedia response exceeds 2 MiB limit")
-
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Wikimedia returned invalid JSON: {exc}") from exc
-
+    payload = _read_json_response(request, timeout, "Wikimedia Commons")
     pages = payload.get("query", {}).get("pages", [])
     if isinstance(pages, dict):
         pages = list(pages.values())
@@ -647,17 +680,21 @@ def image_search(args: dict[str, Any]) -> dict[str, Any]:
         source_page = str(info.get("descriptionurl") or "").strip()
         mime = str(info.get("mime") or "").strip().lower()
 
-        if not thumbnail.startswith("https://"):
-            continue
         parsed_thumb = urllib.parse.urlsplit(thumbnail)
-        if not (parsed_thumb.hostname or "").lower().endswith("wikimedia.org"):
+        if (
+            parsed_thumb.scheme != "https" or
+            not (parsed_thumb.hostname or "").lower().endswith("wikimedia.org")
+        ):
             continue
         if mime and not mime.startswith("image/"):
             continue
 
         if source_page:
             parsed_source = urllib.parse.urlsplit(source_page)
-            if parsed_source.scheme != "https" or not (parsed_source.hostname or "").lower().endswith("wikimedia.org"):
+            if (
+                parsed_source.scheme != "https" or
+                not (parsed_source.hostname or "").lower().endswith("wikimedia.org")
+            ):
                 source_page = ""
 
         images.append({
@@ -669,18 +706,151 @@ def image_search(args: dict[str, Any]) -> dict[str, Any]:
             "width": info.get("width"),
             "height": info.get("height"),
             "source": "Wikimedia Commons",
+            "provider": "wikimedia",
+            "matched_query": query,
         })
         if len(images) >= limit:
             break
+    return images
+
+
+def _openverse_image_search(
+    query: str,
+    limit: int,
+    timeout: int,
+) -> list[dict[str, Any]]:
+    params = urllib.parse.urlencode({
+        "q": query,
+        "page_size": str(limit),
+        "mature": "true",
+    })
+    request = urllib.request.Request(
+        "https://api.openverse.org/v1/images/?" + params,
+        method="GET",
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "LumenaBridge/0.16 (local Android assistant)",
+            "Cache-Control": "no-cache",
+        },
+    )
+    payload = _read_json_response(request, timeout, "Openverse")
+    results = payload.get("results") or []
+    if not isinstance(results, list):
+        return []
+
+    images: list[dict[str, Any]] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        image_id = str(item.get("id") or "").strip()
+        thumbnail = str(item.get("thumbnail") or "").strip()
+        title = str(item.get("title") or "").strip()
+        mime = str(item.get("filetype") or "").strip().lower()
+
+        parsed_thumb = urllib.parse.urlsplit(thumbnail)
+        thumb_host = (parsed_thumb.hostname or "").lower()
+        if (
+            parsed_thumb.scheme != "https" or
+            thumb_host not in {"api.openverse.org", "openverse.org"} and
+            not thumb_host.endswith(".openverse.org")
+        ):
+            continue
+
+        source_page = (
+            f"https://openverse.org/image/{urllib.parse.quote(image_id, safe='')}"
+            if image_id else ""
+        )
+        images.append({
+            "title": title[:300],
+            "thumbnail_url": thumbnail,
+            "original_url": "",
+            "source_page": source_page,
+            "mime": f"image/{mime}" if mime and "/" not in mime else mime,
+            "width": item.get("width"),
+            "height": item.get("height"),
+            "source": "Openverse",
+            "provider": "openverse",
+            "matched_query": query,
+            "license": str(item.get("license") or "")[:80],
+            "creator": str(item.get("creator") or "")[:200],
+        })
+        if len(images) >= limit:
+            break
+    return images
+
+
+def image_search(args: dict[str, Any]) -> dict[str, Any]:
+    query = str(args.get("query", "")).strip()
+    if not query:
+        raise ValueError("image.search requires a non-empty query")
+    if len(query) > 200:
+        raise ValueError("image.search query exceeds 200 characters")
+
+    limit = _bounded_int(args.get("limit"), 4, 1, 8)
+    timeout = _bounded_int(args.get("timeout"), 12, 2, 20)
+    variants = _image_query_variants(query)
+
+    images: list[dict[str, Any]] = []
+    providers_used: list[str] = []
+    provider_errors: list[str] = []
+
+    def add_results(provider: str, rows: list[dict[str, Any]]) -> None:
+        if rows and provider not in providers_used:
+            providers_used.append(provider)
+        known = {str(item.get("thumbnail_url") or "") for item in images}
+        for row in rows:
+            preview = str(row.get("thumbnail_url") or "")
+            if not preview or preview in known:
+                continue
+            images.append(row)
+            known.add(preview)
+            if len(images) >= limit:
+                break
+
+    for variant in variants:
+        if len(images) >= limit:
+            break
+        try:
+            add_results(
+                "Wikimedia Commons",
+                _wikimedia_image_search(
+                    variant,
+                    max(1, limit - len(images)),
+                    timeout,
+                ),
+            )
+        except ValueError as exc:
+            provider_errors.append(str(exc)[:500])
+
+    for variant in variants:
+        if len(images) >= limit:
+            break
+        try:
+            add_results(
+                "Openverse",
+                _openverse_image_search(
+                    variant,
+                    max(1, limit - len(images)),
+                    timeout,
+                ),
+            )
+        except ValueError as exc:
+            provider_errors.append(str(exc)[:500])
 
     if not images:
-        raise ValueError("No Wikimedia Commons images found for this query")
+        details = "; ".join(provider_errors[-4:])
+        suffix = f": {details}" if details else ""
+        raise ValueError(
+            f"No displayable images found across Wikimedia Commons and Openverse{suffix}"
+        )
 
     result = {
-        "provider": "Wikimedia Commons",
+        "provider": "multi",
+        "providers_used": providers_used,
         "query": query,
+        "queries_tried": variants,
         "display_ready": True,
-        "images": images,
+        "images": images[:limit],
     }
     return {
         "ok": True,
@@ -689,7 +859,6 @@ def image_search(args: dict[str, Any]) -> dict[str, Any]:
         "stderr": "",
         "error": None,
     }
-
 
 def process_status(args: dict[str, Any]) -> dict[str, Any]:
     requested = str(args.get("requestId", "")).strip()
@@ -1294,7 +1463,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"Lumena bridge OK\n"
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + root.name for root in READONLY_ROOTS if root.exists()) or '(none)'}\n"
-                f"version=0.15\n"
+                f"version=0.16\n"
             ),
             "stderr": "",
             "error": None,
@@ -1553,7 +1722,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.15"
+    server_version = "LumenaBridge/0.16"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[bridge] {self.address_string()} - {fmt % args}")
@@ -1583,7 +1752,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.15"})
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.16"})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
@@ -1635,7 +1804,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Lumena Termux Bridge v0.15")
+    print("Lumena Termux Bridge v0.16")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")
