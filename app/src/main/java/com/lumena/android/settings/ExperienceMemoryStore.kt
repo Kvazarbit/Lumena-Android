@@ -186,20 +186,36 @@ object ExperienceMemoryIndex {
         .joinToString("") { "%02x".format(it) }
 }
 
-object ExperienceMemoryStore {
-    private const val FILE_NAME = "lumena_experience_memory.json"
-    private val lock = Any()
+object ExperienceMemoryFileCodec {
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()
     private val adapter = moshi.adapter(ExperienceMemoryState::class.java)
 
-    fun load(context: Context): ExperienceMemoryState = synchronized(lock) {
-        val file = file(context.applicationContext)
-        if (!file.exists()) return@synchronized ExperienceMemoryState()
-        runCatching { adapter.fromJson(file.readText()) }
+    fun load(file: File): ExperienceMemoryState {
+        if (!file.exists()) return ExperienceMemoryState()
+        return runCatching { adapter.fromJson(file.readText()) }
             .getOrNull()
             ?: ExperienceMemoryState()
+    }
+
+    fun save(file: File, state: ExperienceMemoryState) {
+        file.parentFile?.mkdirs()
+        val tmp = File(file.parentFile, file.name + ".tmp")
+        tmp.writeText(adapter.toJson(state))
+        if (!tmp.renameTo(file)) {
+            file.writeText(tmp.readText())
+            tmp.delete()
+        }
+    }
+}
+
+object ExperienceMemoryStore {
+    private const val FILE_NAME = "lumena_experience_memory.json"
+    private val lock = Any()
+
+    fun load(context: Context): ExperienceMemoryState = synchronized(lock) {
+        ExperienceMemoryFileCodec.load(file(context.applicationContext))
     }
 
     fun record(
@@ -239,14 +255,7 @@ object ExperienceMemoryStore {
     }
 
     private fun save(context: Context, state: ExperienceMemoryState) {
-        val file = file(context)
-        file.parentFile?.mkdirs()
-        val tmp = File(file.parentFile, file.name + ".tmp")
-        tmp.writeText(adapter.toJson(state))
-        if (!tmp.renameTo(file)) {
-            file.writeText(tmp.readText())
-            tmp.delete()
-        }
+        ExperienceMemoryFileCodec.save(file(context), state)
     }
 
     private fun file(context: Context) = File(context.filesDir, FILE_NAME)
