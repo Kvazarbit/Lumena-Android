@@ -27,6 +27,20 @@ class AgentResponseParserTest {
     }
 
     @Test
+    fun nestedBatchArgsStayValidJson() {
+        val parsed = parser.parse(
+            """{"tool":"inspect.batch","args":{"requests":[{"tool":"file.read","args":{"path":"README.md"}},{"tool":"system.info","args":{}}]},"reason":"Inspect in one round trip"}"""
+        )
+        assertTrue(parsed is AgentDecision.ToolCall)
+        parsed as AgentDecision.ToolCall
+        val requests = parsed.args["requests"].orEmpty()
+        assertTrue(requests.startsWith("["))
+        assertTrue(requests.contains("\"tool\":\"file.read\""))
+        assertTrue(requests.contains("\"path\":\"README.md\""))
+        assertTrue(requests.contains("\"tool\":\"system.info\""))
+    }
+
+    @Test
     fun arbitraryJsonQuotedInProseIsNotExecuted() {
         val text = """Example only: {"tool":"git.status","args":{"cwd":"btc"}} do not run it."""
         assertEquals(AgentDecision.Reply(text), parser.parse(text))
