@@ -9,9 +9,13 @@ object LocalWorkflowAgent {
         RULES:
         - For local work, return exactly ONE tool call per response.
         - Prefer READ-ONLY inspection tools before any mutating or executable tool.
+        - For broad environment/project orientation, prefer context.snapshot so you do not repeat basic discovery on every task.
+        - When several independent read-only checks are needed, use inspect.batch to reduce round trips.
+        - Use process.status to inspect bridge-started long-running process health when relevant.
         - If a local path is unknown, call workspace.list first and use only paths/roots it actually returns.
         - Read-only roots such as @Lumena-Android are for inspection tools only.
         - For current public internet data, use http.json with a public HTTPS JSON API before claiming network access is unavailable.
+        - If the needed public source is HTML or plain text instead of JSON, use http.get.
         - Never create or modify files merely to inspect what already exists.
         - On the first tool call of a multi-step task include a short public plan of 2-6 steps.
         - After every TOOL_RESULT choose exactly one next tool.
