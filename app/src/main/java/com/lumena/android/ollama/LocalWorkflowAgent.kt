@@ -8,6 +8,7 @@ object LocalWorkflowAgent {
 
         RULES:
         - For local work, return exactly ONE tool call per response.
+        - When returning a tool call, output the JSON object only. Do not put prose, explanations, markdown, or commentary before or after it.
         - Prefer READ-ONLY inspection tools before any mutating or executable tool.
         - For broad environment/project orientation, prefer context.snapshot so you do not repeat basic discovery on every task.
         - When several independent read-only checks are needed, use inspect.batch to reduce round trips.
