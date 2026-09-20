@@ -259,7 +259,20 @@ object ExperienceMemoryStore {
         query: String,
         limit: Int = 8
     ): List<String> = synchronized(lock) {
-        ExperienceMemoryIndex.relevant(load(context.applicationContext), query, limit)
+        val app = context.applicationContext
+        // Ensure legacy JSON, if any, is projected into SQLite before expression.
+        val state = load(app)
+        val packet = ContextGenomeStore.express(
+            context = app,
+            query = query,
+            maxChars = 3_200,
+            maxUnits = limit
+        )
+        if (packet.lines.isNotEmpty()) {
+            packet.lines
+        } else {
+            ExperienceMemoryIndex.relevant(state, query, limit)
+        }
     }
 
     fun stats(context: Context): ExperienceMemoryStats = synchronized(lock) {
