@@ -25,7 +25,9 @@ object CompanionProtocol {
         {"tool":"git.status","args":{"cwd":"project"},"reason":"Why this local action is needed"}
 
         Available tools:
-        health, system.time, workspace.list, file.read, project.create, dir.create, file.write,
+        health, system.time, system.info, http.json,
+        workspace.list, file.list, file.search, file.read,
+        project.create, dir.create, file.write,
         git.status, git.diff, git.log, git.add, git.commit, python.run,
         ollama.status, ollama.start, ollama.pull.
 
