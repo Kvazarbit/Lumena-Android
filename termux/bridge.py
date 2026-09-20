@@ -513,6 +513,209 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
         }
 
 
+def http_get(args: dict[str, Any]) -> dict[str, Any]:
+    url = _validated_public_https_url(str(args.get("url", "")).strip())
+    timeout = _bounded_int(args.get("timeout"), 10, 1, 20)
+    request = urllib.request.Request(
+        url,
+        method="GET",
+        headers={
+            "Accept": "text/html,text/plain,application/json,application/xml,text/xml,application/xhtml+xml;q=0.9,*/*;q=0.1",
+            "User-Agent": "LumenaBridge/0.11",
+            "Cache-Control": "no-cache",
+        },
+    )
+
+    try:
+        response = PUBLIC_HTTPS_OPENER.open(request, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            location = exc.headers.get("Location", "")
+            raise ValueError(f"Redirects are blocked; target={location[:300]}") from exc
+        body = exc.read(4096).decode("utf-8", errors="replace")
+        raise ValueError(f"HTTP {exc.code}: {body[:1000]}") from exc
+    except urllib.error.URLError as exc:
+        raise ValueError(f"HTTPS request failed: {exc.reason}") from exc
+
+    with response:
+        content_length = response.headers.get("Content-Length")
+        if content_length and int(content_length) > MAX_HTTP_JSON:
+            raise ValueError("HTTP response exceeds 2 MiB limit")
+
+        content_type = response.headers.get_content_type().lower()
+        textual = (
+            content_type.startswith("text/")
+            or content_type in {
+                "application/json",
+                "application/xml",
+                "application/xhtml+xml",
+                "application/javascript",
+                "application/x-javascript",
+            }
+        )
+        if not textual:
+            raise ValueError(f"http.get only accepts textual responses, got {content_type}")
+
+        raw = response.read(MAX_HTTP_JSON + 1)
+        if len(raw) > MAX_HTTP_JSON:
+            raise ValueError("HTTP response exceeds 2 MiB limit")
+
+        charset = response.headers.get_content_charset() or "utf-8"
+        body = raw.decode(charset, errors="replace")
+        out = {
+            "url": url,
+            "status": getattr(response, "status", 200),
+            "content_type": content_type,
+            "body": body,
+        }
+        return {
+            "ok": True,
+            "exitCode": 0,
+            "stdout": clamp(json.dumps(out, ensure_ascii=False, indent=2)),
+            "stderr": "",
+            "error": None,
+        }
+
+
+def process_status(args: dict[str, Any]) -> dict[str, Any]:
+    requested = str(args.get("requestId", "")).strip()
+    if requested and not REQUEST_ID_RE.fullmatch(requested):
+        raise ValueError("Invalid requestId")
+
+    with ACTIVE_LOCK:
+        items = list(ACTIVE_PROCESSES.items())
+        started = dict(ACTIVE_STARTED)
+
+    rows: list[dict[str, Any]] = []
+    for request_id, process in items:
+        if requested and request_id != requested:
+            continue
+        running = process.poll() is None
+        rss_kb = None
+        status_path = Path(f"/proc/{process.pid}/status")
+        try:
+            for line in status_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("VmRSS:"):
+                    parts = line.split()
+                    rss_kb = int(parts[1]) if len(parts) >= 2 and parts[1].isdigit() else None
+                    break
+        except OSError:
+            pass
+
+        argv = process.args
+        if isinstance(argv, (list, tuple)):
+            command = " ".join(str(x) for x in argv)
+        else:
+            command = str(argv)
+
+        rows.append({
+            "requestId": request_id,
+            "pid": process.pid,
+            "running": running,
+            "returncode": process.returncode,
+            "elapsed_seconds": round(max(0.0, time.monotonic() - started.get(request_id, time.monotonic())), 2),
+            "rss_kb": rss_kb,
+            "command": command[:1200],
+        })
+
+    payload = {
+        "active_count": sum(1 for row in rows if row["running"]),
+        "processes": rows,
+    }
+    return {
+        "ok": True,
+        "exitCode": 0,
+        "stdout": json.dumps(payload, ensure_ascii=False, indent=2),
+        "stderr": "",
+        "error": None,
+    }
+
+
+READ_ONLY_BATCH_TOOLS = {
+    "health",
+    "system.time",
+    "system.info",
+    "http.json",
+    "http.get",
+    "context.snapshot",
+    "process.status",
+    "workspace.list",
+    "file.list",
+    "file.search",
+    "file.read",
+    "git.status",
+    "git.diff",
+    "git.log",
+    "ollama.status",
+}
+
+
+def inspect_batch(args: dict[str, Any], request_id: str | None = None) -> dict[str, Any]:
+    raw = args.get("requests")
+    if isinstance(raw, str):
+        try:
+            requests = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"inspect.batch requests must be valid JSON: {exc}") from exc
+    else:
+        requests = raw
+
+    if not isinstance(requests, list) or not requests:
+        raise ValueError("inspect.batch requires a non-empty requests array")
+    if len(requests) > 8:
+        raise ValueError("inspect.batch supports at most 8 requests")
+
+    prepared: list[tuple[int, str, dict[str, Any]]] = []
+    for index, item in enumerate(requests):
+        if not isinstance(item, dict):
+            raise ValueError(f"inspect.batch item {index} must be an object")
+        tool = str(item.get("tool", "")).strip()
+        sub_args = item.get("args") or {}
+        if tool not in READ_ONLY_BATCH_TOOLS:
+            raise ValueError(f"inspect.batch tool is not read-only or not allowed: {tool}")
+        if not isinstance(sub_args, dict):
+            raise ValueError(f"inspect.batch args for {tool} must be an object")
+        prepared.append((index, tool, sub_args))
+
+    def run_one(item: tuple[int, str, dict[str, Any]]) -> dict[str, Any]:
+        index, tool, sub_args = item
+        sub_id = f"{request_id}:{index}" if request_id else None
+        try:
+            result = execute_tool(tool, sub_args, request_id=sub_id)
+        except Exception as exc:
+            result = {
+                "ok": False,
+                "exitCode": None,
+                "stdout": "",
+                "stderr": "",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        return {
+            "index": index,
+            "tool": tool,
+            "ok": bool(result.get("ok")),
+            "exitCode": result.get("exitCode"),
+            "stdout": str(result.get("stdout", ""))[:20000],
+            "stderr": str(result.get("stderr", ""))[:6000],
+            "error": result.get("error"),
+        }
+
+    results: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=min(4, len(prepared))) as pool:
+        futures = [pool.submit(run_one, item) for item in prepared]
+        for future in as_completed(futures):
+            results.append(future.result())
+
+    results.sort(key=lambda row: row["index"])
+    return {
+        "ok": all(row["ok"] for row in results),
+        "exitCode": 0 if all(row["ok"] for row in results) else 1,
+        "stdout": clamp(json.dumps({"results": results}, ensure_ascii=False, indent=2)),
+        "stderr": "",
+        "error": None if all(row["ok"] for row in results) else "One or more read-only inspections failed",
+    }
+
+
 def _register_process(request_id: str | None, process: subprocess.Popen[str]) -> None:
     if not request_id:
         return
