@@ -299,7 +299,10 @@ fun WorkflowChatScreen(
         if (inferenceBackend == "embedded") {
             EmbeddedLlamaClient(context, ggufPath, computeMode = computeMode)
         } else {
-            OllamaClient(ollamaUrl)
+            OllamaClient(
+                ollamaUrl,
+                runtimeProfile = LlamaHardwareProfile.detect(context)
+            )
         }
 
     fun modelNameForRun(): String = if (inferenceBackend == "embedded") "embedded-gguf" else selectedModel
