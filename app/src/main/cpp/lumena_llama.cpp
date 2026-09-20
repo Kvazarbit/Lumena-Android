@@ -348,6 +348,28 @@ Java_com_lumena_android_llama_LlamaNative_nativeApplyChatTemplate(
 }
 
 
+extern "C" JNIEXPORT jint JNICALL
+Java_com_lumena_android_llama_LlamaNative_nativeCountTokens(
+        JNIEnv * env, jobject, jlong handle, jstring textValue) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    auto * model = reinterpret_cast<llama_model *>(handle);
+    if (!model || model != g_model) return 0;
+
+    const std::string text = jstr(env, textValue);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    const int needed = llama_tokenize(
+        vocab,
+        text.c_str(),
+        text.size(),
+        nullptr,
+        0,
+        true,
+        true
+    );
+    if (needed >= 0) return needed;
+    return -needed;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_lumena_android_llama_LlamaNative_nativeFreeModel(
         JNIEnv *, jobject, jlong handle) {
@@ -401,10 +423,16 @@ Java_com_lumena_android_llama_LlamaNative_nativeGenerate(
     if (tokenized < 0) return env->NewStringUTF("");
     tokens.resize((size_t) tokenized);
 
-    // Hard memory guard: context never grows just because chat history grew.
+    // Kotlin pre-fits chat history with this exact tokenizer. Never silently
+    // drop the beginning of a formatted prompt because it can remove system/template tokens.
     const int max_prompt_tokens = std::max(32, wanted_ctx - wanted_predict - 8);
     if ((int) tokens.size() > max_prompt_tokens) {
-        tokens.erase(tokens.begin(), tokens.end() - max_prompt_tokens);
+        append_log(
+            ("Prompt exceeds exact token budget: " +
+             std::to_string(tokens.size()) + " > " +
+             std::to_string(max_prompt_tokens) + "\n").c_str()
+        );
+        return env->NewStringUTF("");
     }
 
     auto cp = llama_context_default_params();
