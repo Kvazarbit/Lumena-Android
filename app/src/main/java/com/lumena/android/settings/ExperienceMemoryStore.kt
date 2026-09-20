@@ -69,13 +69,16 @@ object ExperienceMemoryIndex {
         val existingIndex = updated.indexOfFirst {
             it.signature == signature &&
                 it.valence == valence &&
-                it.summary == summary &&
-                (valence == ExperienceValence.POSITIVE || it.resolvedAt == null)
+                (
+                    valence == ExperienceValence.POSITIVE ||
+                        (it.summary == summary && it.resolvedAt == null)
+                )
         }
 
         if (existingIndex >= 0) {
             val old = updated[existingIndex]
             updated[existingIndex] = old.copy(
+                summary = if (valence == ExperienceValence.POSITIVE) summary else old.summary,
                 occurrences = old.occurrences + 1,
                 lastSeenAt = now,
                 resolvedAt = if (valence == ExperienceValence.POSITIVE) null else old.resolvedAt
@@ -111,14 +114,19 @@ object ExperienceMemoryIndex {
     ): List<String> {
         val tokens = tokenize(query)
         return state.anchors
-            .map { anchor -> anchor to score(anchor, tokens) }
+            .map { anchor ->
+                val searchable = tokenize("${anchor.tool} ${anchor.target} ${anchor.summary}")
+                val overlap = searchable.count { it in tokens }
+                Triple(anchor, score(anchor, tokens), overlap)
+            }
+            .filter { (_, _, overlap) -> tokens.isEmpty() || overlap > 0 }
             .sortedWith(
-                compareByDescending<Pair<ExperienceAnchor, Int>> { it.second }
+                compareByDescending<Triple<ExperienceAnchor, Int, Int>> { it.second }
                     .thenByDescending { it.first.lastSeenAt }
                     .thenByDescending { it.first.occurrences }
             )
             .take(limit.coerceIn(1, 16))
-            .map { (anchor, _) -> format(anchor) }
+            .map { (anchor, _, _) -> format(anchor) }
     }
 
     private fun score(anchor: ExperienceAnchor, queryTokens: Set<String>): Int {
