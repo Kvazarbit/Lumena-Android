@@ -51,6 +51,7 @@ class WorkflowRunner(
         task: TaskState,
         control: AgentControlState? = null,
         onProgress: (String) -> Unit = {},
+        onModelText: (String) -> Unit = {},
         onState: (AgentControlState) -> Unit = {}
     ): WorkflowOutcome {
         var current = history
@@ -75,9 +76,13 @@ class WorkflowRunner(
                 )
             }
 
-            onProgress("Thinking · step ${state.task.step + 1}/${state.task.maxSteps}")
+            onProgress("MODEL REQUEST · step ${state.task.step + 1}/${state.task.maxSteps}")
+            onModelText("")
             val modelMessages = withDynamicContext(current, state)
-            val replyResult = modelClient.chat(model, modelMessages)
+            val replyResult = modelClient.chatStreaming(model, modelMessages) { partial ->
+                onModelText(partial)
+            }
+
             if (replyResult.isFailure) {
                 val error = replyResult.exceptionOrNull()
                 when (val recovery = controller.onModelFailure(
@@ -88,7 +93,9 @@ class WorkflowRunner(
                         state = recovery.state
                         onState(state)
                         current = current + OllamaMessage("user", recovery.feedback)
-                        onProgress("Retrying model · ${state.modelFailures}")
+                        onProgress(
+                            "MODEL RETRY · ${state.modelFailures}\n${recovery.feedback.take(2_000)}"
+                        )
                         continue
                     }
                     is ControllerInstruction.Stop -> {
@@ -104,16 +111,19 @@ class WorkflowRunner(
                     }
                 }
             }
+
             val reply = replyResult.getOrThrow()
+            onProgress("MODEL REPLY\n${reply.take(6_000)}")
 
             when (val instruction = controller.interpret(reply, state)) {
                 is ControllerInstruction.Execute -> {
                     state = instruction.state
                     onState(state)
+
                     if (state.plan.isNotEmpty() && state.task.step == 0) {
                         onProgress(
                             state.plan.mapIndexed { i, step -> "${i + 1}. $step" }
-                                .joinToString(prefix = "Plan\n", separator = "\n")
+                                .joinToString(prefix = "PLAN\n", separator = "\n")
                         )
                     }
 
@@ -130,6 +140,7 @@ class WorkflowRunner(
                             }
                         )
                     )
+
                     if (!planned.allowed) {
                         val stopped = state.copy(
                             task = state.task.copy(
@@ -145,9 +156,7 @@ class WorkflowRunner(
                         )
                     }
 
-                    onProgress(
-                        "Step ${state.task.step + 1}: ${planned.request.tool} · ${planned.reason}"
-                    )
+                    onProgress(toolCallTrace(planned))
                     val assistantToolMessage = OllamaMessage("assistant", reply.take(12_000))
                     val toolHistory = current + assistantToolMessage
 
@@ -166,8 +175,10 @@ class WorkflowRunner(
                         current,
                         state
                     )
-                    onProgress("Running ${planned.request.tool}…")
+
+                    onProgress("TOOL RUNNING · ${planned.request.tool}")
                     val result = localBridge.execute(planned.request)
+
                     val transition = controller.afterTool(
                         state = state,
                         call = instruction.call,
@@ -178,12 +189,8 @@ class WorkflowRunner(
                     )
                     state = transition.state
                     onState(state)
-                    onProgress(
-                        if (result.ok) "✓ ${planned.request.tool}"
-                        else "✗ ${planned.request.tool}: ${result.error ?: result.stderr.take(300)}"
-                    )
-                    compactToolOutput(planned.request.tool, result.stdout, result.stderr, result.error)
-                        ?.let(onProgress)
+                    onProgress(toolResultTrace(planned.request.tool, result.stdout, result.stderr, result.error, result.ok))
+
                     current = toolHistory + LocalWorkflowAgent.toolResultMessage(
                         tool = planned.request.tool,
                         ok = result.ok,
@@ -191,6 +198,7 @@ class WorkflowRunner(
                         stderr = result.stderr,
                         error = result.error
                     )
+
                     transition.stopReason?.let { reason ->
                         return WorkflowOutcome.Failed(reason, current, state)
                     }
@@ -199,6 +207,7 @@ class WorkflowRunner(
                 is ControllerInstruction.Finish -> {
                     state = instruction.state
                     onState(state)
+                    onProgress("FINISH\n${instruction.text.take(4_000)}")
                     val next = current + OllamaMessage("assistant", instruction.text)
                     return WorkflowOutcome.Finished(instruction.text, next, state)
                 }
@@ -209,11 +218,15 @@ class WorkflowRunner(
                     current = current +
                         OllamaMessage("assistant", reply.take(4_000)) +
                         OllamaMessage("user", instruction.feedback)
-                    onProgress("Protocol correction · retry ${state.protocolRetries}")
+
+                    onProgress(
+                        "PROTOCOL CORRECTION · retry ${state.protocolRetries}\n${instruction.feedback.take(2_000)}"
+                    )
                 }
 
                 is ControllerInstruction.Stop -> {
                     onState(instruction.state)
+                    onProgress("STOP\n${instruction.reason.take(2_000)}")
                     return WorkflowOutcome.Failed(
                         instruction.reason,
                         current,
@@ -240,6 +253,7 @@ class WorkflowRunner(
     suspend fun approve(
         pending: PendingWorkflowTool,
         onProgress: (String) -> Unit = {},
+        onModelText: (String) -> Unit = {},
         onState: (AgentControlState) -> Unit = {}
     ): WorkflowOutcome {
         val localBridge = bridge ?: return WorkflowOutcome.Failed(
@@ -248,8 +262,10 @@ class WorkflowRunner(
             pending.control
         )
 
-        onProgress("Running ${pending.plan.request.tool}…")
+        onProgress(toolCallTrace(pending.plan))
+        onProgress("TOOL RUNNING · ${pending.plan.request.tool}")
         val result = localBridge.execute(pending.plan.request)
+
         val call = AgentDecision.ToolCall(
             tool = pending.plan.request.tool,
             args = pending.plan.request.args,
@@ -265,6 +281,7 @@ class WorkflowRunner(
             error = result.error
         )
         onState(transition.state)
+
         val next = pending.history + LocalWorkflowAgent.toolResultMessage(
             tool = pending.plan.request.tool,
             ok = result.ok,
@@ -272,16 +289,16 @@ class WorkflowRunner(
             stderr = result.stderr,
             error = result.error
         )
+
         onProgress(
-            if (result.ok) "✓ ${pending.plan.request.tool}"
-            else "✗ ${pending.plan.request.tool}: ${result.error ?: result.stderr.take(300)}"
+            toolResultTrace(
+                pending.plan.request.tool,
+                result.stdout,
+                result.stderr,
+                result.error,
+                result.ok
+            )
         )
-        compactToolOutput(
-            pending.plan.request.tool,
-            result.stdout,
-            result.stderr,
-            result.error
-        )?.let(onProgress)
 
         transition.stopReason?.let { reason ->
             return WorkflowOutcome.Failed(reason, next, transition.state)
@@ -292,6 +309,7 @@ class WorkflowRunner(
             task = transition.state.task,
             control = transition.state,
             onProgress = onProgress,
+            onModelText = onModelText,
             onState = onState
         )
     }
@@ -312,22 +330,35 @@ class WorkflowRunner(
     private fun buildRequestId(state: AgentControlState): String =
         "${state.task.id}-${state.task.step + 1}-${UUID.randomUUID()}"
 
-    private fun compactToolOutput(
+    private fun toolCallTrace(planned: PlannedTool): String = buildString {
+        append("TOOL CALL · ").append(planned.request.tool).append('\n')
+        append("Reason · ").append(planned.reason)
+        if (planned.request.args.isNotEmpty()) {
+            append("\nArgs")
+            planned.request.args.toSortedMap().forEach { (key, value) ->
+                append("\n  ").append(key).append(" = ").append(value.take(1_500))
+            }
+        }
+    }
+
+    private fun toolResultTrace(
         tool: String,
         stdout: String,
         stderr: String,
-        error: String?
-    ): String? {
-        val text = when {
-            !error.isNullOrBlank() -> error
-            stdout.isNotBlank() -> stdout
-            stderr.isNotBlank() -> stderr
-            else -> return null
+        error: String?,
+        ok: Boolean
+    ): String = buildString {
+        append("TOOL RESULT · ").append(tool)
+        append(if (ok) " · OK" else " · FAILED")
+
+        if (!error.isNullOrBlank()) {
+            append("\nError\n").append(error.take(2_500))
         }
-        val compact = text
-            .replace(Regex("[\\r\\n]+"), " ")
-            .trim()
-            .take(600)
-        return if (compact.isBlank()) null else "Output · $tool\n$compact"
+        if (stdout.isNotBlank()) {
+            append("\nStdout\n").append(stdout.take(4_000))
+        }
+        if (stderr.isNotBlank()) {
+            append("\nStderr\n").append(stderr.take(3_000))
+        }
     }
 }
