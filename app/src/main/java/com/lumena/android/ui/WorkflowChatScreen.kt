@@ -344,6 +344,11 @@ fun WorkflowChatScreen(
     fun send() {
         val text = input.trim()
         if (text.isBlank() || busy) return
+        if (inferenceBackend == "embedded" && ggufPath.isBlank()) {
+            bubbles += ChatBubble("error", "Choose a GGUF model path in Model settings.")
+            persistSession()
+            return
+        }
         if (inferenceBackend == "ollama" && selectedModel.isBlank()) {
             bubbles += ChatBubble("error", "No Ollama model selected. Start Ollama and refresh models.")
             persistSession()
@@ -455,7 +460,7 @@ fun WorkflowChatScreen(
             Column(modifier = Modifier.weight(1f)) {
                 Text("Lumena", style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    if (selectedModel.isBlank()) status else "$status · $selectedModel",
+                    if (inferenceBackend == "embedded") "Embedded llama.cpp · ${ggufPath.substringAfterLast('/').ifBlank { "no GGUF selected" }}" else if (selectedModel.isBlank()) status else "$status · $selectedModel",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
