@@ -203,15 +203,18 @@ class AgentController(
         state: AgentControlState
     ): ControllerInstruction {
         val trimmed = decision.text.trim()
-        val looksLikeBrokenProtocol =
-            trimmed.startsWith("{") &&
+        val hasProtocolJsonShape =
+            trimmed.contains("{") &&
                 (
-                    trimmed.contains("\"tool\"") ||
-                    trimmed.contains("\"plan\"") ||
-                    trimmed.contains("\"args\"") ||
+                    (
+                        trimmed.contains("\"tool\"") &&
+                            (trimmed.contains("\"args\"") || trimmed.contains("\"plan\""))
+                    ) ||
                     trimmed.contains("\"done\"")
-                ) ||
-            trimmed.contains("<tool_call>", ignoreCase = true)
+                )
+        val looksLikeBrokenProtocol =
+            hasProtocolJsonShape ||
+                trimmed.contains("<tool_call>", ignoreCase = true)
 
         if (looksLikeBrokenProtocol) {
             return protocolRetry(
