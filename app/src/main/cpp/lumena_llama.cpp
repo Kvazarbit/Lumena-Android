@@ -4,13 +4,20 @@
 #include <mutex>
 #include <string>
 #include <vector>
-#include "llama.h"
+#include "llama.h"\n#include "ggml-backend.h"
 
 namespace {
 std::mutex g_mutex;
 std::once_flag g_backend_once;
 std::atomic<bool> g_cancel_requested{false};
 llama_model * g_model = nullptr;
+
+void ensure_backend_init() {
+    std::call_once(g_backend_once, [] {
+        llama_backend_init();
+        ggml_backend_load_all();
+    });
+}
 
 std::string jstr(JNIEnv * env, jstring value) {
     if (!value) return {};
@@ -36,6 +43,24 @@ Java_com_lumena_android_llama_LlamaNative_nativeVersion(JNIEnv * env, jobject) {
     return env->NewStringUTF("llama.cpp embedded adaptive");
 }
 
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_lumena_android_llama_LlamaNative_nativeGpuInfo(JNIEnv * env, jobject) {
+    ensure_backend_init();
+    const size_t count = ggml_backend_dev_count();
+    for (size_t i = 0; i < count; ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (!dev) continue;
+        const auto type = ggml_backend_dev_type(dev);
+        if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+            const char * desc = ggml_backend_dev_description(dev);
+            const char * name = ggml_backend_dev_name(dev);
+            const char * value = (desc && desc[0]) ? desc : name;
+            return env->NewStringUTF(value ? value : "Vulkan GPU");
+        }
+    }
+    return env->NewStringUTF("");
+}
+
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_lumena_android_llama_LlamaNative_nativeLoadModel(
         JNIEnv * env, jobject, jstring modelPath, jint gpuLayers) {
@@ -48,12 +73,9 @@ Java_com_lumena_android_llama_LlamaNative_nativeLoadModel(
         llama_model_free(g_model);
         g_model = nullptr;
     }
-    std::call_once(g_backend_once, [] {
-        llama_backend_init();
-        ggml_backend_load_all();
-    });
+    ensure_backend_init();
     auto params = llama_model_default_params();
-    params.n_gpu_layers = std::max(0, (int) gpuLayers);
+    params.n_gpu_layers = gpuLayers < 0 ? -1 : std::max(0, (int) gpuLayers);
     g_model = llama_model_load_from_file(path.c_str(), params);
     g_cancel_requested.store(false, std::memory_order_release);
     return reinterpret_cast<jlong>(g_model);
