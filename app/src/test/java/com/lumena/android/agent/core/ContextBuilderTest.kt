@@ -121,6 +121,36 @@ class ContextBuilderTest {
     }
 
     @Test
+    fun verifiedMemorySurvivesToolCatalogPressure() {
+        val memoryLine = "NEGATIVE unresolved · image.search · target=query=rare subject · do not repeat identical query"
+        val context = ContextBuilder(
+            maxMemoryItems = 4,
+            maxChars = 2_200
+        ).build(
+            task = TaskState(
+                id = "priority",
+                projectId = null,
+                goal = "Find a better recovery path",
+                status = TaskStatus.WAITING_MODEL
+            ),
+            project = null,
+            relevantMemory = listOf(memoryLine),
+            allowedTools = null,
+            intent = TaskIntent.CODE_WORK,
+            intentConfidence = 82,
+            recommendedTools = listOf("context.snapshot", "file.read", "python.tests"),
+            intentGuidance = "Use verified project state before edits.",
+            recoveryGuidance = "Do not repeat the unchanged failing action."
+        )
+
+        assertTrue(context.length <= 2_200)
+        assertTrue(context.contains("TASK RECIPE"))
+        assertTrue(context.contains("RECOVERY GUIDANCE"))
+        assertTrue(context.contains("RELEVANT VERIFIED MEMORY"))
+        assertTrue(context.contains("image.search"))
+    }
+
+    @Test
     fun includesVerifiedStateAndAllowedToolsOnly() {
         val context = ContextBuilder().build(
             task = TaskState(
