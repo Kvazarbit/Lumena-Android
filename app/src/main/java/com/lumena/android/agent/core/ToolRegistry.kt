@@ -23,6 +23,7 @@ data class ToolValidation(
 object ToolRegistry {
     private val specs = listOf(
         ToolSpec("health", ToolRisk.READ_ONLY, description = "Check the local Termux bridge."),
+        ToolSpec("system.time", ToolRisk.READ_ONLY, description = "Read the phone's current local date, time and timezone."),
         ToolSpec("workspace.list", ToolRisk.READ_ONLY, description = "List projects and files in the workspace root."),
         ToolSpec("file.read", ToolRisk.READ_ONLY, setOf("path"), "Read a text file inside the workspace."),
         ToolSpec("git.status", ToolRisk.READ_ONLY, setOf("cwd"), "Inspect repository status."),
