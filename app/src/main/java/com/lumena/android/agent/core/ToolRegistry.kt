@@ -146,8 +146,11 @@ object ToolRegistry {
             .joinToString("\n") { spec ->
                 val args = if (spec.requiredArgs.isEmpty()) "{}"
                 else spec.requiredArgs.joinToString(prefix = "{", postfix = "}") { "\"$it\":\"...\"" }
-                val description = if (compact) spec.description.take(88) else spec.description
-                "- ${spec.name} $args — $description"
+                if (compact) {
+                    "- ${spec.name} $args"
+                } else {
+                    "- ${spec.name} $args — ${spec.description}"
+                }
             }
     }
 }
