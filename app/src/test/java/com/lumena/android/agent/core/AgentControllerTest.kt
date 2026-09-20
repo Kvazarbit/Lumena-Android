@@ -75,6 +75,36 @@ class AgentControllerTest {
     }
 
     @Test
+    fun successfulPythonRecoveryReservesVerificationSteps() {
+        val recoveredState = controller.initial(task()).copy(
+            pythonFailures = 1,
+            task = task().copy(
+                status = TaskStatus.WAITING_MODEL,
+                step = 3,
+                maxSteps = 4,
+                errors = listOf("ModuleNotFoundError: No module named requests")
+            )
+        )
+        val call = AgentDecision.ToolCall(
+            tool = "python.run",
+            args = mapOf("script" to "install_dependency.py")
+        )
+
+        val after = controller.afterTool(
+            recoveredState,
+            call,
+            ok = true,
+            stdout = "dependency installed",
+            stderr = "",
+            error = null
+        ).state
+
+        assertTrue(after.task.maxSteps >= 6)
+        assertTrue(after.task.canContinue)
+        assertTrue(after.pythonFailures == 0)
+    }
+
+    @Test
     fun repeatedIdenticalCallsAreStopped() {
         var state = controller.initial(task())
         val raw = """{"tool":"workspace.list","args":{},"reason":"inspect"}"""
