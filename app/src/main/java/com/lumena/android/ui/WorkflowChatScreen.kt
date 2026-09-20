@@ -1075,18 +1075,20 @@ private fun loadRemoteWikimediaBitmap(rawUrl: String): ImageBitmap? {
         .build()
 
     return runCatching {
-        remoteImageClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return@use null
-            val body = response.body ?: return@use null
+        remoteImageClient.newCall(request).execute().use responseUse@ { response ->
+            if (!response.isSuccessful) return@responseUse null
+            val body = response.body ?: return@responseUse null
             val contentType = body.contentType()?.toString().orEmpty()
-            if (!contentType.startsWith("image/", ignoreCase = true)) return@use null
+            if (!contentType.startsWith("image/", ignoreCase = true)) return@responseUse null
 
             val maxBytes = 8 * 1024 * 1024
             val declared = body.contentLength()
-            if (declared > maxBytes) return@use null
+            if (declared > maxBytes) return@responseUse null
 
-            val bytes = body.byteStream().use { readBoundedBytes(it, maxBytes) }
-                ?: return@use null
+            val bytes = body.byteStream().use { input ->
+                readBoundedBytes(input, maxBytes)
+            }
+            if (bytes == null) return@responseUse null
 
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
         }
