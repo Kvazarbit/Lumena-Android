@@ -27,7 +27,7 @@ object ToolRegistry {
         ToolSpec("system.info", ToolRisk.READ_ONLY, description = "Inspect CPU, memory, storage and Termux/Android environment."),
         ToolSpec("http.json", ToolRisk.READ_ONLY, setOf("url"), "Fetch a public HTTPS JSON API with SSRF, redirect, timeout and size guards."),
         ToolSpec("http.get", ToolRisk.READ_ONLY, setOf("url"), "Fetch public HTTPS text/HTML with SSRF, redirect, timeout and size guards."),
-        ToolSpec("image.search", ToolRisk.READ_ONLY, setOf("query"), "Search Wikimedia Commons images without an API key and return safe preview URLs plus source pages."),
+        ToolSpec("image.search", ToolRisk.READ_ONLY, setOf("query"), "Search images through multiple public providers with query fallback and return safe display-ready previews plus source pages."),
         ToolSpec("context.snapshot", ToolRisk.READ_ONLY, description = "Return a cached compact snapshot of system, workspace and known repository state."),
         ToolSpec("inspect.batch", ToolRisk.READ_ONLY, setOf("requests"), "Run up to 8 independent read-only inspections in one call."),
         ToolSpec("process.status", ToolRisk.READ_ONLY, description = "Inspect bridge-started process health. Optional arg: requestId."),
