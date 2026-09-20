@@ -136,6 +136,56 @@ class AgentControllerTest {
     }
 
     @Test
+    fun imageGoalCannotFinishBeforeImageSearch() {
+        val visualTask = TaskState(
+            id = "img",
+            projectId = null,
+            goal = "знайди фото жінки в інтернеті і покажи",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val state = controller.initial(visualTask)
+
+        val done = controller.interpret(
+            """{"done":true,"summary":"Ось посилання"}""",
+            state
+        )
+
+        assertTrue(done is ControllerInstruction.AskModelAgain)
+    }
+
+    @Test
+    fun successfulImageSearchSatisfiesVisualGoal() {
+        val visualTask = TaskState(
+            id = "img-ok",
+            projectId = null,
+            goal = "знайди фото жінки в інтернеті і покажи",
+            status = TaskStatus.WAITING_MODEL
+        )
+        var state = controller.initial(visualTask)
+        val call = AgentDecision.ToolCall(
+            tool = "image.search",
+            args = mapOf("query" to "woman portrait")
+        )
+
+        state = controller.afterTool(
+            state = state,
+            call = call,
+            ok = true,
+            stdout = """{"display_ready":true,"images":[{"thumbnail_url":"https://upload.wikimedia.org/example.jpg"}]}""",
+            stderr = "",
+            error = null
+        ).state
+
+        assertTrue(state.visualEvidenceReady)
+
+        val done = controller.interpret(
+            """{"done":true,"summary":"Знайшла фото нижче."}""",
+            state
+        )
+        assertTrue(done is ControllerInstruction.Finish)
+    }
+
+    @Test
     fun repeatedIdenticalCallsAreStopped() {
         var state = controller.initial(task())
         val raw = """{"tool":"workspace.list","args":{},"reason":"inspect"}"""
