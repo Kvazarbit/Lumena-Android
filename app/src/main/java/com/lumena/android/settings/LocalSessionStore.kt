@@ -30,7 +30,8 @@ data class PersistedPendingTool(
     val requestId: String? = null,
     val reason: String = "",
     val control: AgentControlState? = null,
-    val history: List<PersistedHistoryMessage> = emptyList()
+    val history: List<PersistedHistoryMessage> = emptyList(),
+    val images: List<PersistedChatImage> = emptyList()
 )
 
 data class LocalSessionSnapshot(
@@ -98,7 +99,15 @@ object LocalSessionStore {
                 history = snapshot.pending.history
                     .filterNot { it.role == "system" }
                     .takeLast(MAX_HISTORY_MESSAGES)
-                    .map { it.copy(content = it.content.take(MAX_MESSAGE_CHARS)) }
+                    .map { it.copy(content = it.content.take(MAX_MESSAGE_CHARS)) },
+                images = snapshot.pending.images.take(8).map { image ->
+                    image.copy(
+                        title = image.title.take(300),
+                        thumbnailUrl = image.thumbnailUrl.take(2_000),
+                        sourcePage = image.sourcePage.take(2_000),
+                        source = image.source.take(120)
+                    )
+                }
             ),
             inputDraft = snapshot.inputDraft.take(MAX_DRAFT_CHARS)
         )
