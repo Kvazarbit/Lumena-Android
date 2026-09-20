@@ -52,7 +52,11 @@ data class OllamaTagsResponse(
     val models: List<OllamaModel> = emptyList()
 )
 
-class OllamaClient(baseUrl: String) {
+interface ChatModelClient {
+    suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String>
+}
+
+class OllamaClient(baseUrl: String) : ChatModelClient {
     private val base = normalizeLoopbackBaseUrl(baseUrl)
         ?: throw IllegalArgumentException("Ollama URL must use localhost/127.0.0.1 over http")
 
@@ -89,7 +93,7 @@ class OllamaClient(baseUrl: String) {
      * Agent chat is bounded and cancellable. Cancelling the owning coroutine immediately
      * cancels the active OkHttp/Ollama request, which is what the Local STOP button uses.
      */
-    suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String> = withContext(Dispatchers.IO) {
+    override suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String> = withContext(Dispatchers.IO) {
         try {
             require(model.isNotBlank()) { "Choose an Ollama model first" }
             val text = try {
