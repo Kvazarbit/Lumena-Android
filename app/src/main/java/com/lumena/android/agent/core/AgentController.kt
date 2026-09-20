@@ -18,7 +18,13 @@ data class AgentControlState(
     val identicalToolCalls: Int = 0,
     val verificationRequired: Boolean = false,
     val verificationReason: String? = null,
-    val visualEvidenceReady: Boolean = false
+    val visualEvidenceReady: Boolean = false,
+    val intent: TaskIntent = TaskIntent.GENERAL,
+    val intentConfidence: Int = 0,
+    val recommendedTools: List<String> = emptyList(),
+    val intentGuidance: String? = null,
+    val preflightCompleted: Boolean = false,
+    val recoveryHint: String? = null
 )
 
 sealed interface ControllerInstruction {
@@ -55,7 +61,19 @@ class AgentController(
     private val parser: AgentResponseParser = AgentResponseParser(),
     private val budget: FailureBudget = FailureBudget()
 ) {
-    fun initial(task: TaskState): AgentControlState = AgentControlState(task = task)
+    fun initial(task: TaskState): AgentControlState {
+        val profile = TaskIntentRouter.route(task.goal)
+        val reserve = if (profile.preflight != null) 1 else 0
+        return AgentControlState(
+            task = task.copy(
+                maxSteps = (task.maxSteps + reserve).coerceAtMost(budget.maxTotalSteps)
+            ),
+            intent = profile.intent,
+            intentConfidence = profile.confidence,
+            recommendedTools = profile.recommendedTools,
+            intentGuidance = profile.guidance
+        )
+    }
 
     fun onModelFailure(state: AgentControlState, message: String): ControllerInstruction {
         val compactMessage = message.takeLast(4_000)
@@ -353,7 +371,15 @@ class AgentController(
                 verificationRequired = verificationRequired,
                 verificationReason = verificationReason,
                 visualEvidenceReady = state.visualEvidenceReady ||
-                    (ok && ToolRegistry.canonicalize(call.tool) == "image.search")
+                    (ok && ToolRegistry.canonicalize(call.tool) == "image.search"),
+                recoveryHint = RecoveryAdvisor.suggest(
+                    task = state.task,
+                    call = call,
+                    ok = ok,
+                    stdout = stdout,
+                    stderr = stderr,
+                    error = error
+                )
             )
         )
     }
@@ -371,7 +397,12 @@ class AgentController(
             relevantMemory = relevantMemory,
             allowedTools = null,
             plan = state.plan,
-            verificationRequirement = state.verificationReason
+            verificationRequirement = state.verificationReason,
+            intent = state.intent,
+            intentConfidence = state.intentConfidence,
+            recommendedTools = state.recommendedTools,
+            intentGuidance = state.intentGuidance,
+            recoveryGuidance = state.recoveryHint
         )
     }
 
