@@ -95,20 +95,19 @@ object EmbeddedLlamaRuntime {
                 }
             }
 
-            val largeModel = loadedModelBytes >= (3.5 * GIB).toLong()
-            val safeContext = if (largeModel) min(profile.contextSize, 2048) else profile.contextSize
-            val safeBatch = if (largeModel) min(profile.batchSize, 128) else profile.batchSize
-            val safeMaxTokens = if (largeModel) min(profile.maxTokens, 384) else profile.maxTokens
-            val safeThreads = if (largeModel) min(profile.threads, 4) else profile.threads
+            val generation = LlamaRuntimePolicy.generationConfig(
+                profile = profile,
+                modelBytes = loadedModelBytes
+            )
 
             LlamaNative.nativeGenerate(
                 handle = handle,
                 prompt = prompt,
-                contextSize = safeContext,
-                maxTokens = safeMaxTokens,
+                contextSize = generation.contextSize,
+                maxTokens = generation.maxTokens,
                 temperature = temperature,
-                threads = safeThreads,
-                batchSize = safeBatch
+                threads = generation.threads,
+                batchSize = generation.batchSize
             )
         }
     }
@@ -218,7 +217,7 @@ object EmbeddedLlamaRuntime {
     private fun requireSafeMemory(modelBytes: Long, profile: LlamaRuntimeProfile) {
         if (modelBytes <= 0L) return
         val modelGb = modelBytes / GIB
-        val requiredGb = modelGb + if (modelGb >= 3.5) 1.8 else 1.2
+        val requiredGb = LlamaRuntimePolicy.requiredRamGb(modelBytes) ?: return
         check(profile.availableRamGb >= requiredGb) {
             "Not enough free RAM to load this GGUF safely. " +
                 "Model %.1f GB, available %.1f GB, recommended at least %.1f GB."
@@ -232,7 +231,7 @@ object EmbeddedLlamaRuntime {
         computeMode: String,
         loader: (Int) -> Long
     ): Long {
-        val gpuLayers = chooseGpuLayers(profile, modelBytes, computeMode)
+        val gpuLayers = LlamaRuntimePolicy.chooseGpuLayers(profile, modelBytes, computeMode)
         if (gpuLayers != 0) {
             val gpuHandle = loader(gpuLayers)
             if (gpuHandle != 0L) {
@@ -245,54 +244,5 @@ object EmbeddedLlamaRuntime {
         return loader(0)
     }
 
-    private fun chooseGpuLayers(
-        profile: LlamaRuntimeProfile,
-        modelBytes: Long,
-        computeMode: String
-    ): Int {
-        if (computeMode == "cpu") return 0
-        if (profile.gpuName.isNullOrBlank()) return 0
 
-        val modelGb = if (modelBytes > 0) modelBytes / GIB else 0.0
-
-        if (computeMode == "gpu") {
-            val safeFullOffload =
-                modelGb <= 0.0 ||
-                    (
-                        modelGb <= profile.totalRamGb * 0.50 &&
-                            profile.availableRamGb >= modelGb + 1.5
-                    )
-            if (safeFullOffload) return -1
-
-            return when {
-                profile.availableRamGb >= 4.0 -> 20
-                profile.availableRamGb >= 3.0 -> 12
-                profile.availableRamGb >= 2.0 -> 8
-                else -> 0
-            }
-        }
-
-        if (profile.memoryPressure || profile.powerSave || profile.thermalThrottled) return 0
-
-        // AUTO must prioritize stability on Android. Full Vulkan offload can make
-        // some mobile drivers terminate the whole process during model loading, so
-        // AUTO never requests full offload. Large GGUFs stay on CPU; smaller models
-        // may use a modest partial offload.
-        if (modelGb <= 0.0) return 0
-
-        if (modelGb >= 3.5) {
-            return 0
-        }
-
-        if (profile.availableRamGb < modelGb + 2.0) {
-            return 0
-        }
-
-        return when {
-            modelGb <= 1.5 && profile.availableRamGb >= 4.0 -> 12
-            modelGb <= 2.5 && profile.availableRamGb >= 4.5 -> 8
-            modelGb < 3.5 && profile.availableRamGb >= 5.0 -> 4
-            else -> 0
-        }
-    }
 }
