@@ -16,7 +16,13 @@ class AgentControllerTest {
 
     @Test
     fun ordinaryReplyCanFinishBeforeToolWork() {
-        val state = controller.initial(task())
+        val conversational = TaskState(
+            id = "chat",
+            projectId = null,
+            goal = "Поясни різницю між RAM і SSD",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val state = controller.initial(conversational)
         val instruction = controller.interpret("{\"reply\":\"hello\"}", state)
         assertTrue(instruction is ControllerInstruction.Finish)
     }
@@ -113,7 +119,7 @@ class AgentControllerTest {
         )
         assertTrue(atLimit.canContinue)
 
-        val state = controller.initial(atLimit)
+        val state = controller.initial(atLimit).copy(toolUsed = true)
         val done = controller.interpret("""{"done":true,"summary":"verified"}""", state)
         assertTrue(done is ControllerInstruction.Finish)
     }
