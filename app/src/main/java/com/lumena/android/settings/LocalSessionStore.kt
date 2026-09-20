@@ -6,9 +6,17 @@ import com.lumena.android.agent.core.TaskState
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 
+data class PersistedChatImage(
+    val title: String = "",
+    val thumbnailUrl: String,
+    val sourcePage: String = "",
+    val source: String = ""
+)
+
 data class PersistedChatMessage(
     val role: String,
-    val text: String
+    val text: String,
+    val images: List<PersistedChatImage> = emptyList()
 )
 
 data class PersistedHistoryMessage(
@@ -60,8 +68,18 @@ object LocalSessionStore {
 
     fun save(context: Context, snapshot: LocalSessionSnapshot) {
         val bounded = snapshot.copy(
-            chat = snapshot.chat.takeLast(MAX_CHAT_MESSAGES).map {
-                it.copy(text = it.text.take(MAX_MESSAGE_CHARS))
+            chat = snapshot.chat.takeLast(MAX_CHAT_MESSAGES).map { message ->
+                message.copy(
+                    text = message.text.take(MAX_MESSAGE_CHARS),
+                    images = message.images.take(8).map { image ->
+                        image.copy(
+                            title = image.title.take(300),
+                            thumbnailUrl = image.thumbnailUrl.take(2_000),
+                            sourcePage = image.sourcePage.take(2_000),
+                            source = image.source.take(120)
+                        )
+                    }
+                )
             },
             history = snapshot.history
                 .filterNot { it.role == "system" }
