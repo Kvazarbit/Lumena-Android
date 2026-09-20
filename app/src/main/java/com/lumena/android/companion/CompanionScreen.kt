@@ -202,8 +202,9 @@ fun CompanionScreen() {
                 OutlinedTextField(
                     value = token,
                     onValueChange = {
-                        token = it
-                        LumenaPreferences.saveBridgeToken(context, it)
+                        val clean = LumenaPreferences.normalizeBridgeToken(it)
+                        token = clean
+                        LumenaPreferences.saveBridgeToken(context, clean)
                     },
                     label = { Text("Bridge token") },
                     singleLine = true,
