@@ -186,21 +186,25 @@ object EmbeddedLlamaRuntime {
 
         if (profile.memoryPressure || profile.powerSave || profile.thermalThrottled) return 0
 
-        val autoFullOffload = when {
-            modelGb <= 0.0 ->
-                profile.totalRamGb >= 12.0 && profile.availableRamGb >= 6.0
-            else ->
-                modelGb <= min(6.0, profile.totalRamGb * 0.38) &&
-                    profile.availableRamGb >= modelGb + 2.5
+        // AUTO must prioritize stability on Android. Full Vulkan offload can make
+        // some mobile drivers terminate the whole process during model loading, so
+        // AUTO never requests full offload. Large GGUFs stay on CPU; smaller models
+        // may use a modest partial offload.
+        if (modelGb <= 0.0) return 0
+
+        if (modelGb >= 3.5) {
+            return 0
         }
 
-        if (autoFullOffload) return -1
+        if (profile.availableRamGb < modelGb + 2.0) {
+            return 0
+        }
 
-        val autoPartialOffload =
-            modelGb > 0.0 &&
-                modelGb <= profile.totalRamGb * 0.50 &&
-                profile.availableRamGb >= 3.5
-
-        return if (autoPartialOffload) 20 else 0
+        return when {
+            modelGb <= 1.5 && profile.availableRamGb >= 4.0 -> 12
+            modelGb <= 2.5 && profile.availableRamGb >= 4.5 -> 8
+            modelGb < 3.5 && profile.availableRamGb >= 5.0 -> 4
+            else -> 0
+        }
     }
 }
