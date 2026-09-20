@@ -41,6 +41,27 @@ class ChatContextPolicyTest {
     }
 
     @Test
+    fun clipsSystemMiddleButPreservesHeadTailAndLatestUser() {
+        val fit = ChatContextPolicy.fit(
+            roles = arrayOf("system", "user"),
+            contents = arrayOf(
+                "RULES-HEAD-" + "x".repeat(4000) + "-CRITICAL-TASK-TAIL",
+                "latest-user"
+            ),
+            maxPromptTokens = 900,
+            formatter = ::formatter,
+            tokenCounter = ::tokenCounter
+        )
+
+        assertTrue(fit.fits)
+        assertTrue(fit.clippedSystem)
+        assertTrue(fit.prompt.contains("RULES-HEAD-"))
+        assertTrue(fit.prompt.contains("-CRITICAL-TASK-TAIL"))
+        assertTrue(fit.prompt.contains("latest-user"))
+        assertTrue(fit.prompt.contains("middle context omitted"))
+    }
+
+    @Test
     fun neverDropsSystemToForceAFit() {
         val fit = ChatContextPolicy.fit(
             roles = arrayOf("system", "user"),
