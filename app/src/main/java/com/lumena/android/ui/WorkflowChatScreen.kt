@@ -926,7 +926,7 @@ private fun ModelAndConnectionSheet(
                 when (computeMode) {
                     "cpu" -> "Requested: CPU only"
                     "gpu" -> "Requested: Vulkan GPU · CPU fallback if unavailable"
-                    else -> "Requested: Auto · adapts to RAM, temperature and power state"
+                    else -> "Requested: Auto · stability first; large GGUFs use a CPU-safe profile, smaller models may use partial Vulkan offload"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
