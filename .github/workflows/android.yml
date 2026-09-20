@@ -2,9 +2,9 @@ name: Android CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, "feature/**" ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, "feature/**" ]
 
 jobs:
   build:
@@ -26,12 +26,14 @@ jobs:
           python -m py_compile termux/bridge.py
           bash -n termux/install_bridge.sh
           bash -n termux/ollama_sidecar.sh
+      - name: Sync pinned llama.cpp source
+        run: bash scripts/sync_llama_cpp.sh
       - name: Install Android SDK packages
         run: |
           SDKMANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
           test -x "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
       - name: Run agent core unit tests
         run: gradle testDebugUnitTest
       - name: Build debug APK
