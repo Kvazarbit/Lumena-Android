@@ -112,6 +112,31 @@ class LlamaPolicyTest {
     }
 
     @Test
+    fun autoGpuDowngradesWhenRuntimeBecomesUnsafe() {
+        assertTrue(
+            LlamaRuntimePolicy.shouldDowngradeAutoGpu(
+                loadedGpuLayers = 8,
+                computeMode = "auto",
+                profile = profile(thermal = true)
+            )
+        )
+        assertTrue(
+            LlamaRuntimePolicy.shouldDowngradeAutoGpu(
+                loadedGpuLayers = 8,
+                computeMode = "auto",
+                profile = profile(available = 1.5, lowMemory = true)
+            )
+        )
+        assertTrue(
+            !LlamaRuntimePolicy.shouldDowngradeAutoGpu(
+                loadedGpuLayers = 8,
+                computeMode = "gpu",
+                profile = profile(thermal = true)
+            )
+        )
+    }
+
+    @Test
     fun explicitCpuAlwaysMeansZeroGpuLayers() {
         val oneGb = (1.0 * 1024.0 * 1024.0 * 1024.0).toLong()
         assertEquals(0, LlamaRuntimePolicy.chooseGpuLayers(profile(), oneGb, "cpu"))
