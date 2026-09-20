@@ -26,7 +26,7 @@ object CompanionProtocol {
 
         Available tools:
         health, system.time, system.info, context.snapshot, process.status,
-        http.json, http.get, inspect.batch,
+        http.json, http.get, image.search, inspect.batch,
         workspace.list, file.list, file.search, file.read,
         project.create, dir.create, file.write,
         git.status, git.diff, git.log, git.add, git.commit, python.run,
@@ -37,6 +37,7 @@ object CompanionProtocol {
         For several independent read-only checks, prefer inspect.batch instead of many separate turns.
         For broad environment/project orientation, prefer context.snapshot before repeated system.info/workspace.list calls.
         Use http.json for APIs and http.get for public HTTPS text/HTML documentation.
+        For requests to find/show photos or images, use image.search; text/HTML fetches do not count as showing an image.
         Start with workspace.list when you do not know a real path. Never invent cwd/path values.
         The Lumena app repository may appear as @Lumena-Android and is read-only to inspection tools.
         Lumena may auto-run registry-marked read-only tools when Safe Auto is enabled.
