@@ -39,6 +39,16 @@ STATE_DIR = HOME / ".lumena"
 TOKEN_FILE = STATE_DIR / "bridge_token"
 OLLAMA_LOG = STATE_DIR / "ollama.log"
 WORKSPACE = Path(os.environ.get("LUMENA_WORKSPACE", str(HOME / "lumena-workspace"))).expanduser().resolve()
+READONLY_ROOTS_RAW = os.environ.get(
+    "LUMENA_READONLY_ROOTS",
+    str(HOME / "Lumena-Android"),
+)
+READONLY_ROOTS = tuple(
+    Path(item).expanduser().resolve()
+    for item in READONLY_ROOTS_RAW.split(os.pathsep)
+    if item.strip()
+)
+READONLY_ALIASES = {root.name: root for root in READONLY_ROOTS}
 BACKUP_ROOT = WORKSPACE / ".lumena-backups"
 MAX_BODY = 512 * 1024
 MAX_OUTPUT = 128 * 1024
@@ -86,6 +96,93 @@ def safe_path(relative: str, *, must_exist: bool = False) -> Path:
     if must_exist and not candidate.exists():
         raise FileNotFoundError(str(candidate))
     return candidate
+
+
+def _inside(candidate: Path, root: Path) -> bool:
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return False
+    return resolved == root or root in resolved.parents
+
+
+def _readonly_alias(raw: str) -> tuple[Path, str] | None:
+    text = raw.strip()
+    if not text:
+        return None
+
+    if text.startswith("@"):
+        alias_path = Path(text[1:])
+        if not alias_path.parts:
+            return None
+        alias = alias_path.parts[0]
+        root = READONLY_ALIASES.get(alias)
+        if root is None:
+            raise ValueError(f"Unknown read-only root: @{alias}")
+        rest = Path(*alias_path.parts[1:]) if len(alias_path.parts) > 1 else Path()
+        return root, str(rest)
+
+    parts = Path(text).parts
+    if parts and parts[0] in READONLY_ALIASES:
+        workspace_candidate = (WORKSPACE / Path(text)).resolve()
+        if not workspace_candidate.exists():
+            root = READONLY_ALIASES[parts[0]]
+            rest = Path(*parts[1:]) if len(parts) > 1 else Path()
+            return root, str(rest)
+
+    return None
+
+
+def safe_read_path(relative: str, *, must_exist: bool = False) -> Path:
+    raw = str(relative or "").strip()
+    if not raw:
+        candidate = WORKSPACE
+    else:
+        supplied = Path(raw).expanduser()
+        if supplied.is_absolute():
+            candidate = supplied.resolve()
+        else:
+            alias = _readonly_alias(raw)
+            if alias is not None:
+                root, rest = alias
+                candidate = (root / rest).resolve()
+            else:
+                candidate = (WORKSPACE / supplied).resolve()
+
+    allowed = _inside(candidate, WORKSPACE) or any(
+        _inside(candidate, root) for root in READONLY_ROOTS
+    )
+    if not allowed:
+        raise ValueError("Path is outside Lumena's allowed read roots")
+    if must_exist and not candidate.exists():
+        raise FileNotFoundError(str(candidate))
+    return candidate
+
+
+def _read_root(path: Path) -> tuple[Path, str]:
+    resolved = path.resolve()
+    if _inside(resolved, WORKSPACE):
+        return WORKSPACE, ""
+    for root in READONLY_ROOTS:
+        if _inside(resolved, root):
+            return root, f"@{root.name}"
+    raise ValueError("Path is outside Lumena's allowed read roots")
+
+
+def display_read_path(path: Path) -> str:
+    root, label = _read_root(path)
+    rel = path.resolve().relative_to(root)
+    if label:
+        return label if not rel.parts else f"{label}/{rel}"
+    return "." if not rel.parts else str(rel)
+
+
+def _is_allowed_read_path(path: Path) -> bool:
+    try:
+        safe_read_path(str(path), must_exist=False)
+        return True
+    except (ValueError, OSError):
+        return False
 
 
 def clamp(text: str) -> str:
