@@ -137,13 +137,17 @@ object ToolRegistry {
         )
     }
 
-    fun renderForPrompt(allowed: Set<String>? = null): String {
+    fun renderForPrompt(
+        allowed: Set<String>? = null,
+        compact: Boolean = false
+    ): String {
         return all()
             .filter { allowed == null || it.name in allowed }
             .joinToString("\n") { spec ->
                 val args = if (spec.requiredArgs.isEmpty()) "{}"
                 else spec.requiredArgs.joinToString(prefix = "{", postfix = "}") { "\"$it\":\"...\"" }
-                "- ${spec.name} $args — ${spec.description}"
+                val description = if (compact) spec.description.take(88) else spec.description
+                "- ${spec.name} $args — $description"
             }
     }
 }
