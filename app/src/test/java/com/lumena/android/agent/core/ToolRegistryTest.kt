@@ -84,6 +84,24 @@ class ToolRegistryTest {
     }
 
     @Test
+    fun ollamaGenerateRequiresExplicitApproval() {
+        val missing = ToolRegistry.validate(
+            AgentDecision.ToolCall("ollama.generate", mapOf("model" to "ornith-1.5:9b"))
+        )
+        assertFalse(missing.allowed)
+        assertTrue(missing.error!!.contains("prompt"))
+
+        val valid = ToolRegistry.validate(
+            AgentDecision.ToolCall(
+                "ollama.generate",
+                mapOf("model" to "ornith-1.5:9b", "prompt" to "Hi")
+            )
+        )
+        assertTrue(valid.allowed)
+        assertTrue(valid.requiresConfirmation)
+    }
+
+    @Test
     fun explicitAliasCanonicalizesWithoutFuzzyMatching() {
         assertEquals("git.status", ToolRegistry.canonicalize("git_status"))
         assertEquals("mystery-status", ToolRegistry.canonicalize("mystery-status"))
