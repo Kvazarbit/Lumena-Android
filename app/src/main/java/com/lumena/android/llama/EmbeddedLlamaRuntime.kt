@@ -48,6 +48,13 @@ object EmbeddedLlamaRuntime {
         LlamaNative.nativeCancel()
     }
 
+    fun backendLabel(): String = when {
+        handle == 0L -> "not loaded yet"
+        loadedGpuLayers < 0 -> "Vulkan GPU · full offload"
+        loadedGpuLayers > 0 -> "Vulkan GPU · $loadedGpuLayers layers"
+        else -> "CPU"
+    }
+
     suspend fun unload() = gate.withLock {
         withContext(Dispatchers.IO) {
             val current = handle
