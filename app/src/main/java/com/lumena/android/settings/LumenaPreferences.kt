@@ -8,6 +8,7 @@ data class LumenaConnectionSettings(
     val ollamaUrl: String = DEFAULT_OLLAMA_URL,
     val selectedModel: String = "",
     val companionAutoReturn: Boolean = true,
+    val companionSafeAuto: Boolean = true,
     val inferenceBackend: String = "ollama",
     val ggufPath: String = "",
     val computeMode: String = "auto"
@@ -33,6 +34,7 @@ object LumenaPreferences {
     private const val KEY_OLLAMA_URL = "ollama_url"
     private const val KEY_SELECTED_MODEL = "selected_model"
     private const val KEY_COMPANION_AUTO_RETURN = "companion_auto_return"
+    private const val KEY_COMPANION_SAFE_AUTO = "companion_safe_auto"
     private const val KEY_LEGACY_MIGRATED = "legacy_companion_migrated"
     private const val KEY_INFERENCE_BACKEND = "inference_backend"
     private const val KEY_GGUF_PATH = "gguf_path"
@@ -68,6 +70,7 @@ object LumenaPreferences {
             ollamaUrl = ollamaUrl,
             selectedModel = prefs.getString(KEY_SELECTED_MODEL, "") ?: "",
             companionAutoReturn = prefs.getBoolean(KEY_COMPANION_AUTO_RETURN, true),
+            companionSafeAuto = prefs.getBoolean(KEY_COMPANION_SAFE_AUTO, true),
             inferenceBackend = prefs.getString(KEY_INFERENCE_BACKEND, "ollama") ?: "ollama",
             ggufPath = prefs.getString(KEY_GGUF_PATH, "") ?: "",
             computeMode = (prefs.getString(KEY_COMPUTE_MODE, "auto") ?: "auto")
@@ -109,6 +112,10 @@ object LumenaPreferences {
 
     fun saveCompanionAutoReturn(context: Context, value: Boolean) {
         prefs(context).edit().putBoolean(KEY_COMPANION_AUTO_RETURN, value).apply()
+    }
+
+    fun saveCompanionSafeAuto(context: Context, value: Boolean) {
+        prefs(context).edit().putBoolean(KEY_COMPANION_SAFE_AUTO, value).apply()
     }
 
     private fun prefs(context: Context) =
