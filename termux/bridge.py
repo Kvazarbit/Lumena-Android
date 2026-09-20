@@ -623,6 +623,18 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
             "error": None,
         }
 
+    if tool == "system.info":
+        return system_info()
+
+    if tool == "http.json":
+        return http_json(args)
+
+    if tool == "file.list":
+        return file_list(args)
+
+    if tool == "file.search":
+        return file_search(args)
+
     if tool == "workspace.list":
         return {"ok": True, "exitCode": 0, "stdout": workspace_listing(), "stderr": "", "error": None}
 
