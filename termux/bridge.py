@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.11
+Lumena Termux Bridge v0.12
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -467,7 +467,7 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.11",
+            "User-Agent": "LumenaBridge/0.12",
             "Cache-Control": "no-cache",
         },
     )
@@ -521,7 +521,7 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "text/html,text/plain,application/json,application/xml,text/xml,application/xhtml+xml;q=0.9,*/*;q=0.1",
-            "User-Agent": "LumenaBridge/0.11",
+            "User-Agent": "LumenaBridge/0.12",
             "Cache-Control": "no-cache",
         },
     )
@@ -1047,7 +1047,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"Lumena bridge OK\n"
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + root.name for root in READONLY_ROOTS if root.exists()) or '(none)'}\n"
-                f"version=0.11\n"
+                f"version=0.12\n"
             ),
             "stderr": "",
             "error": None,
@@ -1300,7 +1300,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.11"
+    server_version = "LumenaBridge/0.12"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[bridge] {self.address_string()} - {fmt % args}")
@@ -1330,7 +1330,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.11"})
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.12"})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
@@ -1382,7 +1382,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Lumena Termux Bridge v0.11")
+    print("Lumena Termux Bridge v0.12")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")
