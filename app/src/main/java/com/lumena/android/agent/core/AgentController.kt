@@ -331,11 +331,14 @@ class AgentController(
         )
     }
 
-    fun dynamicContext(state: AgentControlState): String {
+    fun dynamicContext(
+        state: AgentControlState,
+        relevantMemory: List<String> = emptyList()
+    ): String {
         return ContextBuilder(maxChars = 9_000).build(
             task = state.task,
             project = null,
-            relevantMemory = emptyList(),
+            relevantMemory = relevantMemory,
             allowedTools = null,
             plan = state.plan,
             verificationRequirement = state.verificationReason
