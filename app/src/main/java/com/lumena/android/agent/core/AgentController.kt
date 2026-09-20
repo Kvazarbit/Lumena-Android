@@ -199,6 +199,13 @@ class AgentController(
         decision: AgentDecision.Done,
         state: AgentControlState
     ): ControllerInstruction {
+        if (requiresToolEvidence(state.intent) && !state.toolUsed) {
+            return protocolRetry(
+                state,
+                "This operational task requires a real TOOL_RESULT before completion. Use a recommended tool from TASK RECIPE; do not claim unverified work."
+            )
+        }
+
         if (requiresVisualEvidence(state.task.goal) && !state.visualEvidenceReady) {
             return protocolRetry(
                 state,
@@ -246,6 +253,13 @@ class AgentController(
             return protocolRetry(
                 state,
                 "The previous output looked like a tool/protocol message but could not be parsed safely. Return one valid Lumena JSON tool call, or ordinary prose with no protocol fields."
+            )
+        }
+
+        if (requiresToolEvidence(state.intent) && !state.toolUsed) {
+            return protocolRetry(
+                state,
+                "This operational task requires a real TOOL_RESULT before replying. Use a recommended tool from TASK RECIPE; do not substitute prose for execution."
             )
         }
 
@@ -426,6 +440,15 @@ class AgentController(
             )
         }
     }
+
+    private fun requiresToolEvidence(intent: TaskIntent): Boolean =
+        intent in setOf(
+            TaskIntent.VISUAL_SEARCH,
+            TaskIntent.OLLAMA_OPERATION,
+            TaskIntent.CODE_WORK,
+            TaskIntent.FILE_INSPECTION,
+            TaskIntent.PUBLIC_WEB
+        )
 
     private fun requiresVisualEvidence(goal: String): Boolean =
         VisualGoalRouter.route(goal) != null
