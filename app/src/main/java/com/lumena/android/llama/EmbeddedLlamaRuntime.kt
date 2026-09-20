@@ -28,13 +28,72 @@ object EmbeddedLlamaRuntime {
     suspend fun generate(
         context: Context,
         modelRef: String,
-        prompt: String,
+        roles: Array<String>,
+        contents: Array<String>,
         profile: LlamaRuntimeProfile,
         computeMode: String,
         temperature: Float
     ): String = gate.withLock {
         withContext(Dispatchers.IO) {
             ensureLoaded(context.applicationContext, modelRef, profile, computeMode)
+
+            var prompt = LlamaNative.nativeApplyChatTemplate(
+                handle = handle,
+                roles = roles,
+                contents = contents,
+                addAssistant = true
+            )
+
+            if (prompt.isBlank() && roles.any { it == "system" }) {
+                val systemText = roles.indices
+                    .filter { roles[it] == "system" }
+                    .joinToString("\n\n") { contents[it] }
+                    .trim()
+
+                val compactRoles = mutableListOf<String>()
+                val compactContents = mutableListOf<String>()
+                var systemMerged = false
+
+                for (i in roles.indices) {
+                    if (roles[i] == "system") continue
+                    if (!systemMerged && roles[i] == "user") {
+                        compactRoles += "user"
+                        compactContents += buildString {
+                            if (systemText.isNotBlank()) {
+                                append("System instructions:\n")
+                                append(systemText)
+                                append("\n\n")
+                            }
+                            append(contents[i])
+                        }
+                        systemMerged = true
+                    } else {
+                        compactRoles += roles[i]
+                        compactContents += contents[i]
+                    }
+                }
+
+                if (!systemMerged && systemText.isNotBlank()) {
+                    compactRoles.add(0, "user")
+                    compactContents.add(0, "System instructions:\n$systemText")
+                }
+
+                prompt = LlamaNative.nativeApplyChatTemplate(
+                    handle = handle,
+                    roles = compactRoles.toTypedArray(),
+                    contents = compactContents.toTypedArray(),
+                    addAssistant = true
+                )
+            }
+
+            check(prompt.isNotBlank()) {
+                val native = LlamaNative.nativeLastError().trim()
+                if (native.isBlank()) {
+                    "This GGUF has no usable chat template."
+                } else {
+                    "Could not apply this GGUF chat template.\n$native"
+                }
+            }
 
             val largeModel = loadedModelBytes >= (3.5 * GIB).toLong()
             val safeContext = if (largeModel) min(profile.contextSize, 2048) else profile.contextSize
