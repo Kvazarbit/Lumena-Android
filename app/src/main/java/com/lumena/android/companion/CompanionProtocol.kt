@@ -30,7 +30,7 @@ object CompanionProtocol {
         workspace.list, file.list, file.search, file.read,
         project.create, dir.create, file.write,
         git.status, git.diff, git.log, git.add, git.commit, python.run,
-        ollama.status, ollama.start, ollama.pull.
+        ollama.status, ollama.generate, ollama.start, ollama.pull.
 
         Never invent tool results. Wait for a LUMENA_RESULT message before continuing the task.
         Prefer read-only inspection before edits. Use only one top-level tool request at a time.
