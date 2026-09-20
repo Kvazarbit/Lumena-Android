@@ -38,6 +38,11 @@ data class TaskState(
     val modifiedFiles: List<String> = emptyList(),
     val errors: List<String> = emptyList()
 ) {
+    /**
+     * maxSteps limits tool executions, not the final model conclusion.
+     * At step == maxSteps the model still gets one last turn to return done/reply;
+     * AgentController blocks any additional tool call at that point.
+     */
     val canContinue: Boolean
-        get() = status !in setOf(TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED) && step < maxSteps
+        get() = status !in setOf(TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED) && step <= maxSteps
 }
