@@ -8,6 +8,7 @@
 
 namespace {
 std::mutex g_mutex;
+std::once_flag g_backend_once;
 std::atomic<bool> g_cancel_requested{false};
 llama_model * g_model = nullptr;
 
@@ -47,8 +48,10 @@ Java_com_lumena_android_llama_LlamaNative_nativeLoadModel(
         llama_model_free(g_model);
         g_model = nullptr;
     }
-    llama_backend_init();
-    ggml_backend_load_all();
+    std::call_once(g_backend_once, [] {
+        llama_backend_init();
+        ggml_backend_load_all();
+    });
     auto params = llama_model_default_params();
     params.n_gpu_layers = std::max(0, (int) gpuLayers);
     g_model = llama_model_load_from_file(path.c_str(), params);
