@@ -35,6 +35,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.LumenaAccessibilityService
+import com.lumena.android.agent.core.ToolRegistry
+import com.lumena.android.agent.core.ToolRisk
 import com.lumena.android.agent.local.TermuxBridgeClient
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
@@ -51,6 +53,7 @@ fun CompanionScreen() {
     var bridgeUrl by rememberSaveable { mutableStateOf(initial.bridgeUrl) }
     var token by rememberSaveable { mutableStateOf(initial.bridgeToken) }
     var autoReturn by rememberSaveable { mutableStateOf(initial.companionAutoReturn) }
+    var safeAuto by rememberSaveable { mutableStateOf(initial.companionSafeAuto) }
     var detected by remember { mutableStateOf<CompanionCommand?>(null) }
     var handledFingerprint by remember { mutableStateOf<String?>(null) }
     var lastResult by remember { mutableStateOf("") }
