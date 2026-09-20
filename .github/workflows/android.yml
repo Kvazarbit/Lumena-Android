@@ -111,6 +111,57 @@ jobs:
               pass
           else:
               raise AssertionError("image.search must reject an empty query")
+
+          fake_payload = {
+              "query": {
+                  "pages": [{
+                      "title": "File:Portrait.jpg",
+                      "imageinfo": [{
+                          "thumburl": "https://upload.wikimedia.org/example-thumb.jpg",
+                          "url": "https://upload.wikimedia.org/example.jpg",
+                          "descriptionurl": "https://commons.wikimedia.org/wiki/File:Portrait.jpg",
+                          "mime": "image/jpeg",
+                          "width": 1200,
+                          "height": 800,
+                      }],
+                  }]
+              }
+          }
+
+          class FakeResponse:
+              def __enter__(self):
+                  return self
+
+              def __exit__(self, exc_type, exc, tb):
+                  return False
+
+              def read(self, _limit):
+                  import json
+                  return json.dumps(fake_payload).encode("utf-8")
+
+          class FakeOpener:
+              def open(self, _request, timeout=None):
+                  return FakeResponse()
+
+          old_opener = bridge.PUBLIC_HTTPS_OPENER
+          bridge.PUBLIC_HTTPS_OPENER = FakeOpener()
+          try:
+              image_result = bridge.image_search({
+                  "query": "woman portrait",
+                  "limit": "2",
+              })
+              assert image_result["ok"] is True
+              image_payload = json.loads(image_result["stdout"])
+              assert image_payload["display_ready"] is True
+              assert len(image_payload["images"]) == 1
+              assert image_payload["images"][0]["thumbnail_url"].startswith(
+                  "https://upload.wikimedia.org/"
+              )
+              assert image_payload["images"][0]["source_page"].startswith(
+                  "https://commons.wikimedia.org/"
+              )
+          finally:
+              bridge.PUBLIC_HTTPS_OPENER = old_opener
           PY
           bash -n termux/install_bridge.sh
           bash -n termux/ollama_sidecar.sh
