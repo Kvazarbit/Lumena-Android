@@ -38,7 +38,11 @@ jobs:
           python -m py_compile termux/bridge.py
           python - <<'PY'
           import importlib.util
+          import os
           from pathlib import Path
+
+          repo_root = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          os.environ["LUMENA_READONLY_ROOTS"] = str(repo_root)
 
           spec = importlib.util.spec_from_file_location("lumena_bridge", "termux/bridge.py")
           bridge = importlib.util.module_from_spec(spec)
@@ -46,6 +50,19 @@ jobs:
 
           assert bridge.system_info()["ok"] is True
           assert bridge.file_list({})["ok"] is True
+
+          alias = f"@{repo_root.name}"
+          assert bridge.safe_read_path(alias, must_exist=True) == repo_root
+          assert bridge.file_list({"path": alias, "depth": "1", "limit": "20"})["ok"] is True
+          assert alias in bridge.workspace_listing()
+          assert bridge.execute_tool("git.status", {"cwd": alias})["ok"] is True
+
+          try:
+              bridge.safe_path(str(repo_root), must_exist=True)
+          except ValueError:
+              pass
+          else:
+              raise AssertionError("Read-only repo root must not be writable through safe_path")
 
           try:
               bridge._validated_public_https_url("http://example.com")
