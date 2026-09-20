@@ -6,11 +6,19 @@ import com.lumena.android.agent.core.AgentDecision
 import com.lumena.android.agent.core.ControllerInstruction
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
+import com.lumena.android.agent.core.ToolRegistry
+import com.lumena.android.agent.core.ToolRisk
 import com.lumena.android.agent.local.PlannedTool
 import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.TermuxBridgeClient
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
+import com.lumena.android.agent.local.ToolResult
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.util.UUID
 
 data class PendingWorkflowTool(
@@ -52,6 +60,7 @@ class WorkflowRunner(
         control: AgentControlState? = null,
         onProgress: (String) -> Unit = {},
         onModelText: (String) -> Unit = {},
+        onToolTelemetry: (String) -> Unit = {},
         isApprovedForTask: (String, ToolRequest) -> Boolean = { _, _ -> false },
         onState: (AgentControlState) -> Unit = {}
     ): WorkflowOutcome {
@@ -192,7 +201,11 @@ class WorkflowRunner(
                     )
 
                     onProgress("TOOL RUNNING · ${planned.request.tool}")
-                    val result = localBridge.execute(planned.request)
+                    val result = executeWithTelemetry(
+                        localBridge,
+                        planned.request,
+                        onToolTelemetry
+                    )
 
                     val transition = controller.afterTool(
                         state = state,
@@ -269,6 +282,7 @@ class WorkflowRunner(
         pending: PendingWorkflowTool,
         onProgress: (String) -> Unit = {},
         onModelText: (String) -> Unit = {},
+        onToolTelemetry: (String) -> Unit = {},
         isApprovedForTask: (String, ToolRequest) -> Boolean = { _, _ -> false },
         onState: (AgentControlState) -> Unit = {}
     ): WorkflowOutcome {
@@ -280,7 +294,11 @@ class WorkflowRunner(
 
         onProgress(toolCallTrace(pending.plan))
         onProgress("TOOL RUNNING · ${pending.plan.request.tool}")
-        val result = localBridge.execute(pending.plan.request)
+        val result = executeWithTelemetry(
+            localBridge,
+            pending.plan.request,
+            onToolTelemetry
+        )
 
         val call = AgentDecision.ToolCall(
             tool = pending.plan.request.tool,
@@ -326,9 +344,45 @@ class WorkflowRunner(
             control = transition.state,
             onProgress = onProgress,
             onModelText = onModelText,
+            onToolTelemetry = onToolTelemetry,
             isApprovedForTask = isApprovedForTask,
             onState = onState
         )
+    }
+
+    private suspend fun executeWithTelemetry(
+        localBridge: TermuxBridgeClient,
+        request: ToolRequest,
+        onToolTelemetry: (String) -> Unit
+    ): ToolResult = coroutineScope {
+        val risk = ToolRegistry.get(request.tool)?.risk
+        val requestId = request.requestId
+        if (risk != ToolRisk.EXECUTABLE || requestId.isNullOrBlank()) {
+            return@coroutineScope localBridge.execute(request)
+        }
+
+        val monitor = launch {
+            delay(750)
+            while (isActive) {
+                val status = localBridge.execute(
+                    ToolRequest(
+                        tool = "process.status",
+                        args = mapOf("requestId" to requestId)
+                    )
+                )
+                if (status.ok && status.stdout.isNotBlank()) {
+                    onToolTelemetry(status.stdout)
+                }
+                delay(2_000)
+            }
+        }
+
+        try {
+            localBridge.execute(request)
+        } finally {
+            monitor.cancelAndJoin()
+            onToolTelemetry("")
+        }
     }
 
     private fun withDynamicContext(
