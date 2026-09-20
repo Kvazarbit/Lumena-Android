@@ -365,6 +365,10 @@ fun WorkflowChatScreen(
                     history = turnHistory,
                     task = task,
                     onProgress = { reportProgress(task.id, runToken, it) },
+                    onModelText = { text ->
+                        if (text.isEmpty()) coordinator.beginModelTurn(runToken)
+                        else coordinator.updateModelText(runToken, text)
+                    },
                     onState = { acceptControl(task.id, runToken, it) }
                 )
             } catch (_: CancellationException) {
@@ -557,6 +561,10 @@ fun WorkflowChatScreen(
                             WorkflowRunner(modelClient(), bridgeOrNull(), modelNameForRun()).approve(
                                 pending = requested,
                                 onProgress = { reportProgress(taskId, runToken, it) },
+                                onModelText = { text ->
+                                    if (text.isEmpty()) coordinator.beginModelTurn(runToken)
+                                    else coordinator.updateModelText(runToken, text)
+                                },
                                 onState = { acceptControl(taskId, runToken, it) }
                             )
                         } catch (_: CancellationException) {
