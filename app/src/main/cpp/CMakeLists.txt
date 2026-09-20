@@ -27,12 +27,23 @@ set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
 # Vulkan remains optional at configure time so local CPU-only builds still work.
 # glslc and SPIRV-Headers are host build tools; Vulkan headers/library come from NDK.
 find_program(LUMENA_GLSLC NAMES glslc NO_CMAKE_FIND_ROOT_PATH)
+find_path(LUMENA_VULKAN_HPP_ROOT NAMES vulkan/vulkan.hpp NO_CMAKE_FIND_ROOT_PATH)
 if(LUMENA_GLSLC)
     set(Vulkan_GLSLC_EXECUTABLE "${LUMENA_GLSLC}" CACHE FILEPATH "" FORCE)
 endif()
 find_package(SPIRV-Headers CONFIG QUIET NO_CMAKE_FIND_ROOT_PATH)
 find_package(Vulkan QUIET)
-if(Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE AND TARGET SPIRV-Headers::SPIRV-Headers)
+
+set(LUMENA_VULKAN_HPP_INCLUDE "")
+if(LUMENA_VULKAN_HPP_ROOT)
+    set(LUMENA_VULKAN_HPP_INCLUDE "${CMAKE_BINARY_DIR}/lumena-vulkan-headers")
+    file(MAKE_DIRECTORY "${LUMENA_VULKAN_HPP_INCLUDE}")
+    file(COPY "${LUMENA_VULKAN_HPP_ROOT}/vulkan"
+         DESTINATION "${LUMENA_VULKAN_HPP_INCLUDE}")
+endif()
+
+if(Vulkan_FOUND AND Vulkan_GLSLC_EXECUTABLE AND LUMENA_VULKAN_HPP_INCLUDE
+   AND TARGET SPIRV-Headers::SPIRV-Headers)
     message(STATUS "Lumena: enabling llama.cpp Vulkan backend")
     set(GGML_VULKAN ON CACHE BOOL "" FORCE)
 else()
@@ -41,6 +52,10 @@ else()
 endif()
 
 add_subdirectory("${LLAMA_CPP_DIR}" "${CMAKE_BINARY_DIR}/llama.cpp" EXCLUDE_FROM_ALL)
+
+if(TARGET ggml-vulkan AND LUMENA_VULKAN_HPP_INCLUDE)
+    target_include_directories(ggml-vulkan PRIVATE "${LUMENA_VULKAN_HPP_INCLUDE}")
+endif()
 
 add_library(lumena_llama SHARED lumena_llama.cpp)
 target_link_libraries(lumena_llama PRIVATE llama android log)
