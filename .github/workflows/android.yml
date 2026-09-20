@@ -56,6 +56,8 @@ jobs:
           APK=app/build/outputs/apk/debug/app-debug.apk
           test -s "$APK"
           unzip -l "$APK" | grep 'lib/arm64-v8a/liblumena_llama.so'
+          unzip -p "$APK" lib/arm64-v8a/liblumena_llama.so > /tmp/liblumena_llama.so
+          strings /tmp/liblumena_llama.so | grep -F 'llama.cpp embedded adaptive + vulkan'
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose "$APK"
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "$APK"
           mkdir -p dist
