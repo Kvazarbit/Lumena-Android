@@ -118,6 +118,7 @@ fun WorkflowChatScreen(
     var bridgeToken by rememberSaveable { mutableStateOf(initial.bridgeToken) }
     var selectedModel by rememberSaveable { mutableStateOf(initial.selectedModel) }
     var inferenceBackend by rememberSaveable { mutableStateOf(initial.inferenceBackend) }
+    var computeMode by rememberSaveable { mutableStateOf(initial.computeMode) }
     var ggufPath by rememberSaveable { mutableStateOf(initial.ggufPath) }
     var ggufPickerStatus by rememberSaveable { mutableStateOf("") }
     var models by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -269,7 +270,11 @@ fun WorkflowChatScreen(
         ?.let { TermuxBridgeClient(bridgeUrl, it, context) }
 
     fun modelClient(): ChatModelClient =
-        if (inferenceBackend == "embedded") EmbeddedLlamaClient(context, ggufPath) else OllamaClient(ollamaUrl)
+        if (inferenceBackend == "embedded") {
+            EmbeddedLlamaClient(context, ggufPath, computeMode = computeMode)
+        } else {
+            OllamaClient(ollamaUrl)
+        }
 
     fun modelNameForRun(): String = if (inferenceBackend == "embedded") "embedded-gguf" else selectedModel
 
@@ -490,6 +495,15 @@ fun WorkflowChatScreen(
                 onBackend = {
                     inferenceBackend = it
                     LumenaPreferences.saveInferenceBackend(context, it)
+                },
+                computeMode = computeMode,
+                onComputeMode = { mode ->
+                    if (!busy && mode != computeMode) {
+                        EmbeddedLlamaClient.cancelActiveGeneration()
+                        computeMode = mode
+                        LumenaPreferences.saveComputeMode(context, mode)
+                        uiScope.launch { EmbeddedLlamaRuntime.unload() }
+                    }
                 },
                 ggufPath = ggufPath,
                 ggufDisplayName = ggufDisplayName,
@@ -800,6 +814,8 @@ private fun FriendlyErrorBubble(raw: String) {
 private fun ModelAndConnectionSheet(
     inferenceBackend: String,
     onBackend: (String) -> Unit,
+    computeMode: String,
+    onComputeMode: (String) -> Unit,
     ggufPath: String,
     ggufDisplayName: String,
     ggufPickerStatus: String,
@@ -835,9 +851,33 @@ private fun ModelAndConnectionSheet(
         }
 
         if (inferenceBackend == "embedded") {
+            Text("Compute", style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedButton(
+                    enabled = !busy,
+                    onClick = { onComputeMode("auto") }
+                ) { Text(if (computeMode == "auto") "✓ Auto" else "Auto") }
+                OutlinedButton(
+                    enabled = !busy,
+                    onClick = { onComputeMode("cpu") }
+                ) { Text(if (computeMode == "cpu") "✓ CPU" else "CPU") }
+                OutlinedButton(
+                    enabled = !busy,
+                    onClick = { onComputeMode("gpu") }
+                ) { Text(if (computeMode == "gpu") "✓ GPU" else "GPU") }
+            }
+            Text(
+                when (computeMode) {
+                    "cpu" -> "Requested: CPU only"
+                    "gpu" -> "Requested: Vulkan GPU · CPU fallback if unavailable"
+                    else -> "Requested: Auto · adapts to RAM, temperature and power state"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Text(if (ggufPath.isBlank()) "No GGUF selected" else ggufDisplayName, fontWeight = FontWeight.Medium)
-            Text("Auto: $hardwareSummary", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Inference: $runtimeSummary", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Hardware: $hardwareSummary", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Actual inference: $runtimeSummary", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(enabled = !busy, onClick = onChooseGguf) { Text(if (ggufPath.isBlank()) "Choose GGUF" else "Change GGUF") }
                 if (ggufPath.isNotBlank()) TextButton(enabled = !busy, onClick = onForgetGguf) { Text("Forget") }
