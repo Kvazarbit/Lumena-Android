@@ -52,6 +52,7 @@ class WorkflowRunner(
         control: AgentControlState? = null,
         onProgress: (String) -> Unit = {},
         onModelText: (String) -> Unit = {},
+        isApprovedForTask: (String, ToolRequest) -> Boolean = { _, _ -> false },
         onState: (AgentControlState) -> Unit = {}
     ): WorkflowOutcome {
         var current = history
@@ -166,7 +167,11 @@ class WorkflowRunner(
                     val assistantToolMessage = OllamaMessage("assistant", reply.take(12_000))
                     val toolHistory = current + assistantToolMessage
 
-                    if (instruction.requiresConfirmation) {
+                    val approvedForTask =
+                        instruction.requiresConfirmation &&
+                            isApprovedForTask(state.task.id, planned.request)
+
+                    if (instruction.requiresConfirmation && !approvedForTask) {
                         val pending = PendingWorkflowTool(
                             plan = planned,
                             history = toolHistory,
@@ -174,6 +179,10 @@ class WorkflowRunner(
                         )
                         onState(state)
                         return WorkflowOutcome.NeedsConfirmation(pending)
+                    }
+
+                    if (approvedForTask) {
+                        onProgress("APPROVAL CACHE · exact action approved for this task")
                     }
 
                     val localBridge = bridge ?: return WorkflowOutcome.Failed(
@@ -260,6 +269,7 @@ class WorkflowRunner(
         pending: PendingWorkflowTool,
         onProgress: (String) -> Unit = {},
         onModelText: (String) -> Unit = {},
+        isApprovedForTask: (String, ToolRequest) -> Boolean = { _, _ -> false },
         onState: (AgentControlState) -> Unit = {}
     ): WorkflowOutcome {
         val localBridge = bridge ?: return WorkflowOutcome.Failed(
@@ -316,6 +326,7 @@ class WorkflowRunner(
             control = transition.state,
             onProgress = onProgress,
             onModelText = onModelText,
+            isApprovedForTask = isApprovedForTask,
             onState = onState
         )
     }
