@@ -173,8 +173,8 @@ object LlamaLoadDiagnostics {
                     "returned null" in l ||
                     "loading tensor" in l
             }
-            .takeLast(10)
             .toList()
+            .takeLast(10)
 
         val technicalSummary = buildString {
             append("kind=")
