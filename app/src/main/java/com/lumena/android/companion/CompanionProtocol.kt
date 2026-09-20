@@ -31,6 +31,8 @@ object CompanionProtocol {
 
         Never invent tool results. Wait for a LUMENA_RESULT message before continuing the task.
         Prefer read-only inspection before edits. Use only one tool request at a time.
+        Lumena may auto-run registry-marked read-only tools when Safe Auto is enabled.
+        Mutating or executable tools still require explicit user approval.
     """.trimIndent()
 
     fun parse(snapshot: ScreenSnapshot?): CompanionCommand? {
