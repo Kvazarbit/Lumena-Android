@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.13
+Lumena Termux Bridge v0.14
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -467,7 +467,7 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.13",
+            "User-Agent": "LumenaBridge/0.14",
             "Cache-Control": "no-cache",
         },
     )
@@ -521,7 +521,7 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "text/html,text/plain,application/json,application/xml,text/xml,application/xhtml+xml;q=0.9,*/*;q=0.1",
-            "User-Agent": "LumenaBridge/0.13",
+            "User-Agent": "LumenaBridge/0.14",
             "Cache-Control": "no-cache",
         },
     )
@@ -933,6 +933,9 @@ def ollama_status() -> dict[str, Any]:
 
     summary = {
         "installed": installed,
+        "running": server_ok,
+        "models": tags,
+        "loaded_models": api_ps_models,
         "binary": binary,
         "bridge_endpoint": OLLAMA_API,
         "env_OLLAMA_HOST": os.environ.get("OLLAMA_HOST"),
@@ -1025,7 +1028,11 @@ def ollama_generate(args: dict[str, Any]) -> dict[str, Any]:
 def ollama_start() -> dict[str, Any]:
     binary = ollama_binary()
     current = ollama_status()
-    if "running=true" in current.get("stdout", ""):
+    try:
+        current_payload = json.loads(current.get("stdout", "{}"))
+    except json.JSONDecodeError:
+        current_payload = {}
+    if current_payload.get("api_running") is True or current_payload.get("running") is True:
         return current
     env = os.environ.copy()
     env["OLLAMA_HOST"] = OLLAMA_HOST
@@ -1173,7 +1180,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"Lumena bridge OK\n"
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + root.name for root in READONLY_ROOTS if root.exists()) or '(none)'}\n"
-                f"version=0.13\n"
+                f"version=0.14\n"
             ),
             "stderr": "",
             "error": None,
@@ -1429,7 +1436,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.13"
+    server_version = "LumenaBridge/0.14"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[bridge] {self.address_string()} - {fmt % args}")
@@ -1459,7 +1466,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.13"})
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.14"})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
@@ -1511,7 +1518,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Lumena Termux Bridge v0.13")
+    print("Lumena Termux Bridge v0.14")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")
