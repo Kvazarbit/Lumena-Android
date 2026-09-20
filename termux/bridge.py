@@ -840,29 +840,61 @@ def ollama_binary() -> str:
 
 def ollama_status() -> dict[str, Any]:
     installed = shutil.which("ollama") is not None
+    tags: list[str] = []
+    running: list[dict[str, Any]] = []
+    server_ok = False
+
     try:
         with urllib.request.urlopen(f"{OLLAMA_API}/api/tags", timeout=2) as response:
             payload = json.loads(response.read().decode("utf-8"))
-        models = [m.get("name", "") for m in payload.get("models", []) if m.get("name")]
-        return {
-            "ok": True,
-            "exitCode": 0,
-            "stdout": "installed=%s\nrunning=true\nmodels=%s\n" % (
-                str(installed).lower(),
-                ", ".join(models) if models else "(none)",
-            ),
-            "stderr": "",
-            "error": None,
-        }
+        tags = [m.get("name", "") for m in payload.get("models", []) if m.get("name")]
+        server_ok = True
     except Exception:
+        pass
+
+    if server_ok:
+        try:
+            with urllib.request.urlopen(f"{OLLAMA_API}/api/ps", timeout=2) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            for model in payload.get("models", []):
+                if not isinstance(model, dict):
+                    continue
+                details = model.get("details") if isinstance(model.get("details"), dict) else {}
+                running.append({
+                    "name": model.get("name") or model.get("model"),
+                    "size": model.get("size"),
+                    "size_vram": model.get("size_vram"),
+                    "context_length": model.get("context_length"),
+                    "expires_at": model.get("expires_at"),
+                    "family": details.get("family"),
+                    "parameter_size": details.get("parameter_size"),
+                    "quantization_level": details.get("quantization_level"),
+                })
+        except Exception:
+            pass
+
+    if not server_ok:
         return {
             "ok": True,
             "exitCode": 0,
-            "stdout": "installed=%s\nrunning=false\n" % str(installed).lower(),
+            "stdout": f"installed={str(installed).lower()}\nrunning=false\n",
             "stderr": "",
             "error": None,
         }
 
+    summary = {
+        "installed": installed,
+        "running": True,
+        "models": tags,
+        "loaded_models": running,
+    }
+    return {
+        "ok": True,
+        "exitCode": 0,
+        "stdout": json.dumps(summary, ensure_ascii=False, indent=2),
+        "stderr": "",
+        "error": None,
+    }
 
 def ollama_start() -> dict[str, Any]:
     binary = ollama_binary()
