@@ -48,6 +48,7 @@ import com.lumena.android.agent.local.TermuxBridgeClient
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.runtime.AgentRunCoordinator
+import com.lumena.android.llama.EmbeddedLlamaClient
 import com.lumena.android.ollama.LocalWorkflowAgent
 import com.lumena.android.ollama.OllamaClient
 import com.lumena.android.ollama.OllamaMessage
@@ -104,6 +105,8 @@ fun WorkflowChatScreen(
     var bridgeUrl by rememberSaveable { mutableStateOf(initial.bridgeUrl) }
     var bridgeToken by rememberSaveable { mutableStateOf(initial.bridgeToken) }
     var selectedModel by rememberSaveable { mutableStateOf(initial.selectedModel) }
+    var inferenceBackend by rememberSaveable { mutableStateOf(initial.inferenceBackend) }
+    var ggufPath by rememberSaveable { mutableStateOf(initial.ggufPath) }
     var models by remember { mutableStateOf<List<String>>(emptyList()) }
     var status by remember { mutableStateOf("Checking Ollama…") }
     var showSettings by rememberSaveable { mutableStateOf(false) }
@@ -333,7 +336,7 @@ fun WorkflowChatScreen(
     fun send() {
         val text = input.trim()
         if (text.isBlank() || busy) return
-        if (selectedModel.isBlank()) {
+        if (inferenceBackend == "ollama" && selectedModel.isBlank()) {
             bubbles += ChatBubble("error", "No Ollama model selected. Start Ollama and refresh models.")
             persistSession()
             return
@@ -486,6 +489,20 @@ fun WorkflowChatScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text("Local model", style = MaterialTheme.typography.titleMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { inferenceBackend = "embedded"; LumenaPreferences.saveInferenceBackend(context, "embedded") }) { Text(if (inferenceBackend == "embedded") "✓ Embedded" else "Embedded") }
+                        OutlinedButton(onClick = { inferenceBackend = "ollama"; LumenaPreferences.saveInferenceBackend(context, "ollama") }) { Text(if (inferenceBackend == "ollama") "✓ Ollama" else "Ollama") }
+                    }
+                    if (inferenceBackend == "embedded") {
+                        OutlinedTextField(
+                            value = ggufPath,
+                            onValueChange = { ggufPath = it; LumenaPreferences.saveGgufPath(context, it) },
+                            label = { Text("GGUF model path") },
+                            supportingText = { Text("Example: /storage/emulated/0/Download/model.gguf") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                     Text(
                         "Lumena restores the model automatically and keeps AgentController state outside the model.",
                         style = MaterialTheme.typography.bodySmall
