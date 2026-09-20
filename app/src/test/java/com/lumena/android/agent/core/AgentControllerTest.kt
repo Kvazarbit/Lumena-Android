@@ -186,6 +186,27 @@ class AgentControllerTest {
     }
 
     @Test
+    fun plainReplyMayFinishAfterVerifiedVisualEvidence() {
+        val visualTask = TaskState(
+            id = "img-reply",
+            projectId = null,
+            goal = "знайди фото жінки в інтернеті і покажи",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val state = controller.initial(visualTask).copy(
+            toolUsed = true,
+            visualEvidenceReady = true
+        )
+
+        val instruction = controller.interpret(
+            """{"reply":"Ось знайдені фото."}""",
+            state
+        )
+
+        assertTrue(instruction is ControllerInstruction.Finish)
+    }
+
+    @Test
     fun repeatedIdenticalCallsAreStopped() {
         var state = controller.initial(task())
         val raw = """{"tool":"workspace.list","args":{},"reason":"inspect"}"""
