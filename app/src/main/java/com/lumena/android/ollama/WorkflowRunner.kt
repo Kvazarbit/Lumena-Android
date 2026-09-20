@@ -52,7 +52,9 @@ class WorkflowRunner(
     private val modelClient: ChatModelClient,
     private val bridge: TermuxBridgeClient?,
     private val model: String,
-    private val controller: AgentController = AgentController()
+    private val controller: AgentController = AgentController(),
+    private val relevantMemoryProvider: (TaskState) -> List<String> = { emptyList() },
+    private val onToolExperience: (ToolRequest, ToolResult) -> Unit = { _, _ -> }
 ) {
     suspend fun run(
         history: List<OllamaMessage>,
@@ -206,6 +208,7 @@ class WorkflowRunner(
                         planned.request,
                         onToolTelemetry
                     )
+                    runCatching { onToolExperience(planned.request, result) }
 
                     val transition = controller.afterTool(
                         state = state,
@@ -299,6 +302,7 @@ class WorkflowRunner(
             pending.plan.request,
             onToolTelemetry
         )
+        runCatching { onToolExperience(pending.plan.request, result) }
 
         val call = AgentDecision.ToolCall(
             tool = pending.plan.request.tool,
@@ -401,7 +405,10 @@ class WorkflowRunner(
     ): List<OllamaMessage> {
         val staticSystem = history.firstOrNull { it.role == "system" }?.content
             ?: LocalWorkflowAgent.systemPrompt
-        val mergedSystem = staticSystem + "\n\n" + controller.dynamicContext(state)
+        val mergedSystem = staticSystem + "\n\n" + controller.dynamicContext(
+            state,
+            relevantMemory = relevantMemoryProvider(state.task)
+        )
         return buildList {
             add(OllamaMessage("system", mergedSystem))
             addAll(history.filterNot { it.role == "system" })
