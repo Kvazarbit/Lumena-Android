@@ -89,14 +89,14 @@ class OllamaContextPolicyTest {
         )
         val messages = listOf(
             OllamaMessage("system", "system"),
-            OllamaMessage("user", "old-user-" + "a".repeat(1800)),
-            OllamaMessage("assistant", "old-assistant-" + "b".repeat(1800)),
+            OllamaMessage("user", "a".repeat(2500) + "-OLD-USER-END"),
+            OllamaMessage("assistant", "b".repeat(2500) + "-OLD-ASSISTANT-END"),
             OllamaMessage("user", "latest-user")
         )
 
         val compacted = OllamaContextPolicy.compact(messages, budget)
 
         assertTrue(compacted.last().content.contains("latest-user"))
-        assertFalse(compacted.joinToString("\n") { it.content }.contains("old-user-" + "a".repeat(1800)))
+        assertFalse(compacted.any { it.content.contains("-OLD-USER-END") })
     }
 }
