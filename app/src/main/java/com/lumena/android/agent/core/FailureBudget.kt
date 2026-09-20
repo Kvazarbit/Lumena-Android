@@ -4,7 +4,7 @@ data class FailureBudget(
     val maxModelRetries: Int = 2,
     val maxIdenticalToolFailures: Int = 2,
     val maxPythonFailures: Int = 3,
-    val maxTotalSteps: Int = 8
+    val maxTotalSteps: Int = 12
 )
 
 enum class BudgetViolation {
