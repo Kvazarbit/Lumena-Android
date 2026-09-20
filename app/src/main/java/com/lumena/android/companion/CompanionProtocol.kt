@@ -22,7 +22,7 @@ object CompanionProtocol {
         When you actually need a local tool, output a block in exactly this form and nothing else in that block:
 
         LUMENA_TOOL
-        {"tool":"git.status","args":{"cwd":"project"},"reason":"Why this local action is needed"}
+        {"tool":"workspace.list","args":{},"reason":"Discover the real workspace and read-only roots before choosing paths"}
 
         Available tools:
         health, system.time, system.info, http.json,
@@ -33,6 +33,8 @@ object CompanionProtocol {
 
         Never invent tool results. Wait for a LUMENA_RESULT message before continuing the task.
         Prefer read-only inspection before edits. Use only one tool request at a time.
+        Start with workspace.list when you do not know a real path. Never invent cwd/path values.
+        The Lumena app repository may appear as @Lumena-Android and is read-only to inspection tools.
         Lumena may auto-run registry-marked read-only tools when Safe Auto is enabled.
         Mutating or executable tools still require explicit user approval.
     """.trimIndent()
