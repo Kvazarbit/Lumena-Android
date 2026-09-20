@@ -28,6 +28,9 @@ object LocalWorkflowAgent {
         TOOL CALL:
         {"plan":["discover","inspect","report"],"tool":"workspace.list","args":{},"reason":"Discover real local paths before inspection"}
 
+        BATCH READ-ONLY TOOL CALL:
+        {"tool":"inspect.batch","args":{"requests":[{"tool":"system.info","args":{}},{"tool":"git.status","args":{"cwd":"@Lumena-Android"}}]},"reason":"Inspect independent read-only facts in one round trip"}
+
         DONE:
         {"done":true,"summary":"What was actually completed and verified"}
 
