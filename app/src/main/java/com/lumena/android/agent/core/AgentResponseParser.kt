@@ -17,6 +17,7 @@ class AgentResponseParser {
             Any::class.java
         )
     )
+    private val anyAdapter = moshi.adapter(Any::class.java)
 
     fun parse(raw: String): AgentDecision {
         val text = raw.trim()
@@ -47,7 +48,12 @@ class AgentResponseParser {
         }
         val args = buildMap {
             rawArgs.forEach { (key, value) ->
-                if (key != null && value != null) put(key.toString(), value.toString())
+                if (key == null || value == null) return@forEach
+                val rendered = when (value) {
+                    is Map<*, *>, is List<*> -> anyAdapter.toJson(value)
+                    else -> value.toString()
+                }
+                put(key.toString(), rendered)
             }
         }
         val reason = obj["reason"]?.toString()?.trim().orEmpty()
