@@ -56,6 +56,26 @@ jobs:
           assert bridge.file_list({"path": alias, "depth": "1", "limit": "20"})["ok"] is True
           assert alias in bridge.workspace_listing()
           assert bridge.execute_tool("git.status", {"cwd": alias})["ok"] is True
+          assert bridge.process_status({})["ok"] is True
+          assert bridge.context_snapshot({"refresh": "true"})["ok"] is True
+
+          batch = bridge.inspect_batch({
+              "requests": [
+                  {"tool": "health", "args": {}},
+                  {"tool": "system.time", "args": {}},
+                  {"tool": "git.status", "args": {"cwd": alias}},
+              ]
+          })
+          assert batch["ok"] is True
+
+          try:
+              bridge.inspect_batch({
+                  "requests": [{"tool": "file.write", "args": {"path": "x", "content": "bad"}}]
+              })
+          except ValueError:
+              pass
+          else:
+              raise AssertionError("inspect.batch must reject mutating tools")
 
           try:
               bridge.safe_path(str(repo_root), must_exist=True)
