@@ -7,7 +7,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.math.min
 
 /**
  * One process-wide embedded runtime.
@@ -37,56 +36,26 @@ object EmbeddedLlamaRuntime {
         withContext(Dispatchers.IO) {
             ensureLoaded(context.applicationContext, modelRef, profile, computeMode)
 
-            var prompt = LlamaNative.nativeApplyChatTemplate(
-                handle = handle,
+            val generation = LlamaRuntimePolicy.generationConfig(
+                profile = profile,
+                modelBytes = loadedModelBytes
+            )
+            val maxPromptTokens = (generation.contextSize - generation.maxTokens - 8)
+                .coerceAtLeast(32)
+
+            val fitted = ChatContextPolicy.fit(
                 roles = roles,
                 contents = contents,
-                addAssistant = true
+                maxPromptTokens = maxPromptTokens,
+                formatter = { candidateRoles, candidateContents ->
+                    applyChatTemplate(candidateRoles, candidateContents)
+                },
+                tokenCounter = { text ->
+                    LlamaNative.nativeCountTokens(handle, text)
+                }
             )
 
-            if (prompt.isBlank() && roles.any { it == "system" }) {
-                val systemText = roles.indices
-                    .filter { roles[it] == "system" }
-                    .joinToString("\n\n") { contents[it] }
-                    .trim()
-
-                val compactRoles = mutableListOf<String>()
-                val compactContents = mutableListOf<String>()
-                var systemMerged = false
-
-                for (i in roles.indices) {
-                    if (roles[i] == "system") continue
-                    if (!systemMerged && roles[i] == "user") {
-                        compactRoles += "user"
-                        compactContents += buildString {
-                            if (systemText.isNotBlank()) {
-                                append("System instructions:\n")
-                                append(systemText)
-                                append("\n\n")
-                            }
-                            append(contents[i])
-                        }
-                        systemMerged = true
-                    } else {
-                        compactRoles += roles[i]
-                        compactContents += contents[i]
-                    }
-                }
-
-                if (!systemMerged && systemText.isNotBlank()) {
-                    compactRoles.add(0, "user")
-                    compactContents.add(0, "System instructions:\n$systemText")
-                }
-
-                prompt = LlamaNative.nativeApplyChatTemplate(
-                    handle = handle,
-                    roles = compactRoles.toTypedArray(),
-                    contents = compactContents.toTypedArray(),
-                    addAssistant = true
-                )
-            }
-
-            check(prompt.isNotBlank()) {
+            check(fitted.prompt.isNotBlank()) {
                 val native = LlamaNative.nativeLastError().trim()
                 if (native.isBlank()) {
                     "This GGUF has no usable chat template."
@@ -95,14 +64,15 @@ object EmbeddedLlamaRuntime {
                 }
             }
 
-            val generation = LlamaRuntimePolicy.generationConfig(
-                profile = profile,
-                modelBytes = loadedModelBytes
-            )
+            check(fitted.fits) {
+                "Conversation is too large for the safe context budget even after dropping " +
+                    "old history. prompt=${fitted.promptTokens}, limit=$maxPromptTokens tokens. " +
+                    "System instructions and the newest user turn were preserved."
+            }
 
             LlamaNative.nativeGenerate(
                 handle = handle,
-                prompt = prompt,
+                prompt = fitted.prompt,
                 contextSize = generation.contextSize,
                 maxTokens = generation.maxTokens,
                 temperature = temperature,
@@ -110,6 +80,60 @@ object EmbeddedLlamaRuntime {
                 batchSize = generation.batchSize
             )
         }
+    }
+
+    private fun applyChatTemplate(
+        roles: Array<String>,
+        contents: Array<String>
+    ): String {
+        var prompt = LlamaNative.nativeApplyChatTemplate(
+            handle = handle,
+            roles = roles,
+            contents = contents,
+            addAssistant = true
+        )
+        if (prompt.isNotBlank() || roles.none { it == "system" }) return prompt
+
+        val systemText = roles.indices
+            .filter { roles[it] == "system" }
+            .joinToString("\n\n") { contents[it] }
+            .trim()
+
+        val compactRoles = mutableListOf<String>()
+        val compactContents = mutableListOf<String>()
+        var systemMerged = false
+
+        for (i in roles.indices) {
+            if (roles[i] == "system") continue
+            if (!systemMerged && roles[i] == "user") {
+                compactRoles += "user"
+                compactContents += buildString {
+                    if (systemText.isNotBlank()) {
+                        append("System instructions:\n")
+                        append(systemText)
+                        append("\n\n")
+                    }
+                    append(contents[i])
+                }
+                systemMerged = true
+            } else {
+                compactRoles += roles[i]
+                compactContents += contents[i]
+            }
+        }
+
+        if (!systemMerged && systemText.isNotBlank()) {
+            compactRoles.add(0, "user")
+            compactContents.add(0, "System instructions:\n$systemText")
+        }
+
+        prompt = LlamaNative.nativeApplyChatTemplate(
+            handle = handle,
+            roles = compactRoles.toTypedArray(),
+            contents = compactContents.toTypedArray(),
+            addAssistant = true
+        )
+        return prompt
     }
 
     fun cancelActiveGeneration() {
