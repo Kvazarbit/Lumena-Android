@@ -1,5 +1,6 @@
 package com.lumena.android.agent.local
 
+import android.content.Context
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -18,7 +19,8 @@ import kotlin.coroutines.resume
 
 class TermuxBridgeClient(
     baseUrl: String,
-    private val token: String
+    private val token: String,
+    private val context: Context? = null
 ) {
     private val base: HttpUrl = normalizeLoopbackBaseUrl(baseUrl)
         ?: throw IllegalArgumentException("Bridge URL must use localhost/127.0.0.1 over http")
@@ -39,7 +41,18 @@ class TermuxBridgeClient(
     private val resultAdapter = moshi.adapter(ToolResult::class.java)
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
-    suspend fun execute(toolRequest: ToolRequest): ToolResult = suspendCancellableCoroutine { continuation ->
+    suspend fun execute(toolRequest: ToolRequest): ToolResult {
+        context?.let { appContext ->
+            val started = TermuxBridgeAutoStarter.ensureRunning(appContext, base)
+            if (started.isFailure) {
+                val error = started.exceptionOrNull()
+                return ToolResult(
+                    ok = false,
+                    error = error?.message ?: "Could not start the Termux bridge"
+                )
+            }
+        }
+        return suspendCancellableCoroutine { continuation ->
         val json = requestAdapter.toJson(toolRequest)
         val request = Request.Builder()
             .url(endpoint)
@@ -78,6 +91,7 @@ class TermuxBridgeClient(
                 if (continuation.isActive) continuation.resume(result)
             }
         })
+        }
     }
 
     /**
