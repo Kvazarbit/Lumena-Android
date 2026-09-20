@@ -48,6 +48,7 @@ import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.local.AgentPanel
 import com.lumena.android.agent.runtime.AgentRunCoordinator
 import com.lumena.android.companion.CompanionScreen
+import com.lumena.android.llama.EmbeddedLlamaClient
 import com.lumena.android.settings.HistoryTreeStore
 import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.settings.LumenaPreferences
@@ -104,7 +105,11 @@ class MainActivity : ComponentActivity() {
         var model by remember { mutableStateOf(LumenaPreferences.load(this@MainActivity).selectedModel) }
 
         fun reloadHistory() { historyState = HistoryTreeStore.load(this@MainActivity) }
-        fun stopBeforeSwitch(reason: String) { coordinator.cancel(reason); cancelPersistedTask(reason) }
+        fun stopBeforeSwitch(reason: String) {
+            EmbeddedLlamaClient.cancelActiveGeneration()
+            coordinator.cancel(reason)
+            cancelPersistedTask(reason)
+        }
         fun closeRight() { agentOpen = false }
         fun openLeft() { agentOpen = false; reloadHistory(); scope.launch { leftDrawer.open() } }
         fun openRight() { scope.launch { leftDrawer.close() }; liveSession = LocalSessionStore.load(this@MainActivity); model = LumenaPreferences.load(this@MainActivity).selectedModel; agentOpen = true }
@@ -192,7 +197,12 @@ class MainActivity : ComponentActivity() {
                                     coordinator = coordinator,
                                     model = model,
                                     pendingApproval = liveSession.pending != null,
-                                    onStop = { coordinator.cancel("Stopped from Agent panel"); cancelPersistedTask("Stopped from Agent panel"); liveSession = LocalSessionStore.load(this@MainActivity) },
+                                    onStop = {
+                                        EmbeddedLlamaClient.cancelActiveGeneration()
+                                        coordinator.cancel("Stopped from Agent panel")
+                                        cancelPersistedTask("Stopped from Agent panel")
+                                        liveSession = LocalSessionStore.load(this@MainActivity)
+                                    },
                                     onClose = ::closeRight
                                 )
                             }
