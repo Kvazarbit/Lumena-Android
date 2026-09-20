@@ -172,6 +172,7 @@ object ContextGenomeStore {
             db.insertOrThrow("genome_events", null, values)
 
             syncAnchors(db, projection)
+            pruneSignatureCapsules(db, projection)
 
             val matching = projection.anchors.filter { it.signature == signature }
             val supported = if (result.ok) {
@@ -441,6 +442,24 @@ object ContextGenomeStore {
         }
     }
 
+    private fun pruneSignatureCapsules(
+        db: SQLiteDatabase,
+        state: ExperienceMemoryState
+    ) {
+        val signatures = state.anchors.map { it.signature }.distinct()
+        if (signatures.isEmpty()) {
+            db.delete("genome_capsules", "level=1", null)
+            return
+        }
+
+        val placeholders = signatures.joinToString(",") { "?" }
+        db.delete(
+            "genome_capsules",
+            "level=1 AND scope_key NOT IN ($placeholders)",
+            signatures.toTypedArray()
+        )
+    }
+
     private fun updateSignatureCapsule(
         db: SQLiteDatabase,
         state: ExperienceMemoryState,
@@ -528,7 +547,20 @@ object ContextGenomeStore {
             }
         }
 
-        levelOne.groupBy { it.topicKey }.forEach { (topic, children) ->
+        val grouped = levelOne.groupBy { it.topicKey }
+        val topics = grouped.keys
+        if (topics.isEmpty()) {
+            db.delete("genome_capsules", "level=2", null)
+        } else {
+            val placeholders = topics.joinToString(",") { "?" }
+            db.delete(
+                "genome_capsules",
+                "level=2 AND topic_key NOT IN ($placeholders)",
+                topics.toTypedArray()
+            )
+        }
+
+        grouped.forEach { (topic, children) ->
             val top = children
                 .sortedWith(
                     compareByDescending<GenomeCapsule> { it.importance }
