@@ -263,6 +263,31 @@ class AgentControllerTest {
     }
 
     @Test
+    fun longEmbeddedLoadErrorIsNonRetryableBeforeTruncation() {
+        val state = controller.initial(
+            TaskState(
+                id = "load-fail",
+                projectId = null,
+                goal = "Answer using the selected local model",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        val hugeTail = buildString {
+            repeat(200) {
+                append("create_tensor: loading tensor blk.38.ffn_up.input_scale\n")
+            }
+        }
+        val instruction = controller.onModelFailure(
+            state,
+            "Embedded model load failed. GGUF metadata is readable, but the full model load failed before inference started.\n" +
+                hugeTail
+        )
+
+        assertTrue(instruction is ControllerInstruction.Stop)
+        assertFalse(instruction is ControllerInstruction.AskModelAgain)
+    }
+
+    @Test
     fun repeatedIdenticalCallsAreStopped() {
         var state = controller.initial(task())
         val raw = """{"tool":"workspace.list","args":{},"reason":"inspect"}"""
