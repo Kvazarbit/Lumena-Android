@@ -539,8 +539,9 @@ fun WorkflowChatScreen(
                 },
                 bridgeToken = bridgeToken,
                 onBridgeToken = {
-                    bridgeToken = it
-                    LumenaPreferences.saveBridgeToken(context, it)
+                    val clean = LumenaPreferences.normalizeBridgeToken(it)
+                    bridgeToken = clean
+                    LumenaPreferences.saveBridgeToken(context, clean)
                 }
             )
         }
@@ -921,6 +922,7 @@ private fun ModelAndConnectionSheet(
             value = bridgeToken,
             onValueChange = onBridgeToken,
             label = { Text("Bridge token") },
+            singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth()
         )
