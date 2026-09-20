@@ -1,6 +1,7 @@
 package com.lumena.android.agent.local
 
 import android.content.Context
+import com.lumena.android.settings.LumenaPreferences
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -19,9 +20,10 @@ import kotlin.coroutines.resume
 
 class TermuxBridgeClient(
     baseUrl: String,
-    private val token: String,
+    token: String,
     private val context: Context? = null
 ) {
+    private val token = LumenaPreferences.normalizeBridgeToken(token)
     private val base: HttpUrl = normalizeLoopbackBaseUrl(baseUrl)
         ?: throw IllegalArgumentException("Bridge URL must use localhost/127.0.0.1 over http")
     private val endpoint = base.newBuilder().addPathSegment("tool").build()
