@@ -163,6 +163,68 @@ jobs:
               )
           finally:
               bridge.PUBLIC_HTTPS_OPENER = old_opener
+
+          assert bridge._image_query_variants(
+              "micro bikini beach photography"
+          )[1] == "micro bikini beach"
+
+          openverse_payload = {
+              "results": [{
+                  "id": "abc-123",
+                  "title": "Beach portrait",
+                  "thumbnail": "https://api.openverse.org/v1/images/abc-123/thumb/",
+                  "filetype": "jpeg",
+                  "width": 1024,
+                  "height": 768,
+                  "license": "cc-by",
+                  "creator": "Example",
+              }]
+          }
+          empty_wikimedia = {"query": {"pages": []}}
+
+          class FallbackOpener:
+              def open(self, request, timeout=None):
+                  class Response:
+                      def __init__(self, payload):
+                          self.payload = payload
+
+                      def __enter__(self):
+                          return self
+
+                      def __exit__(self, exc_type, exc, tb):
+                          return False
+
+                      def read(self, _limit):
+                          return json.dumps(self.payload).encode("utf-8")
+
+                  url = request.full_url
+                  if "commons.wikimedia.org" in url:
+                      return Response(empty_wikimedia)
+                  if "api.openverse.org" in url:
+                      return Response(openverse_payload)
+                  raise AssertionError(f"unexpected image provider URL: {url}")
+
+          old_opener = bridge.PUBLIC_HTTPS_OPENER
+          bridge.PUBLIC_HTTPS_OPENER = FallbackOpener()
+          try:
+              fallback = bridge.image_search({
+                  "query": "micro bikini beach photography",
+                  "limit": "4",
+              })
+              assert fallback["ok"] is True
+              fallback_payload = json.loads(fallback["stdout"])
+              assert fallback_payload["display_ready"] is True
+              assert "Openverse" in fallback_payload["providers_used"]
+              assert "micro bikini beach" in fallback_payload["queries_tried"]
+              assert len(fallback_payload["images"]) == 1
+              assert fallback_payload["images"][0]["thumbnail_url"].startswith(
+                  "https://api.openverse.org/"
+              )
+              assert fallback_payload["images"][0]["source_page"].startswith(
+                  "https://openverse.org/image/"
+              )
+          finally:
+              bridge.PUBLIC_HTTPS_OPENER = old_opener
           PY
           bash -n termux/install_bridge.sh
           bash -n termux/ollama_sidecar.sh
