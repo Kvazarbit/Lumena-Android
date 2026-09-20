@@ -175,29 +175,13 @@ class MainActivity : ComponentActivity() {
                 when (tab) {
                     0 -> Column(Modifier.fillMaxSize().padding(inner)) { CompanionScreen() }
                     1 -> Box(Modifier.fillMaxSize().padding(inner)) {
-                        Column(Modifier.fillMaxSize()) {
-                            Row(
-                                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                TextButton(onClick = ::openLeft) { Text("☰") }
-                                val task = liveSession.task
-                                Text(
-                                    when {
-                                        coordinator.active && task != null -> "● ${task.step}/${task.maxSteps} · ${coordinator.stage}"
-                                        model.isNotBlank() -> "Lumena · $model"
-                                        else -> "Lumena"
-                                    },
-                                    style = MaterialTheme.typography.titleSmall
-                                )
-                                TextButton(onClick = ::openRight) { Text("☷") }
-                            }
-                            Box(Modifier.weight(1f)) {
-                                key(historyState.activeBranchId) {
-                                    WorkflowChatScreen(agentWorkScope = agentWorkScope, runCoordinator = coordinator)
-                                }
-                            }
+                        key(historyState.activeBranchId) {
+                            WorkflowChatScreen(
+                                agentWorkScope = agentWorkScope,
+                                runCoordinator = coordinator,
+                                onOpenHistory = ::openLeft,
+                                onOpenAgent = ::openRight
+                            )
                         }
                         if (agentOpen) {
                             Surface(
