@@ -46,6 +46,8 @@ import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.LumenaAccessibilityService
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.local.AgentPanel
+import com.lumena.android.agent.local.TermuxBridgeClient
+import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.runtime.AgentRunCoordinator
 import com.lumena.android.companion.CompanionScreen
 import com.lumena.android.llama.EmbeddedLlamaClient
@@ -103,6 +105,17 @@ class MainActivity : ComponentActivity() {
         var historyState by remember { mutableStateOf(HistoryTreeStore.load(this@MainActivity)) }
         var liveSession by remember { mutableStateOf(LocalSessionStore.load(this@MainActivity)) }
         var model by remember { mutableStateOf(LumenaPreferences.load(this@MainActivity).selectedModel) }
+
+        LaunchedEffect(refreshToken) {
+            val bridgeSettings = LumenaPreferences.load(this@MainActivity)
+            if (bridgeSettings.bridgeToken.isNotBlank()) {
+                TermuxBridgeClient(
+                    bridgeSettings.bridgeUrl,
+                    bridgeSettings.bridgeToken,
+                    this@MainActivity
+                ).execute(ToolRequest("health"))
+            }
+        }
 
         fun reloadHistory() { historyState = HistoryTreeStore.load(this@MainActivity) }
         fun stopBeforeSwitch(reason: String) {
