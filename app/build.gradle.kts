@@ -7,6 +7,7 @@ plugins {
 android {
     namespace = "com.lumena.android"
     compileSdk = 35
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "com.lumena.android"
@@ -16,7 +17,10 @@ android {
         versionName = "0.12.0"
         ndk { abiFilters += listOf("arm64-v8a") }
         externalNativeBuild {
-            cmake { cppFlags += listOf("-O3") }
+            cmake {
+                cppFlags += listOf("-O3")
+                arguments += "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
+            }
         }
     }
 
