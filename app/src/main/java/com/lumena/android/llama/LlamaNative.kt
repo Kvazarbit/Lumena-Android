@@ -12,6 +12,7 @@ object LlamaNative {
     external fun nativeVersion(): String
     external fun nativeLoadModel(modelPath: String, gpuLayers: Int = 0): Long
     external fun nativeFreeModel(handle: Long)
+    external fun nativeGenerate(handle: Long, prompt: String, contextSize: Int, maxTokens: Int, temperature: Float): String
 
     fun isAvailable(): Boolean = runCatching { nativeVersion().isNotBlank() }.getOrDefault(false)
 }
