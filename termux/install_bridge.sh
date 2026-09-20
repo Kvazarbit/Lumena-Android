@@ -5,7 +5,13 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 STATE="$HOME/.lumena"
 WORKSPACE="${LUMENA_WORKSPACE:-$HOME/lumena-workspace}"
 
-pkg install -y python git
+MISSING=()
+command -v python >/dev/null 2>&1 || MISSING+=(python)
+command -v git >/dev/null 2>&1 || MISSING+=(git)
+if [ "${#MISSING[@]}" -gt 0 ]; then
+  pkg install -y "${MISSING[@]}"
+fi
+
 mkdir -p "$STATE" "$WORKSPACE"
 cp "$HERE/bridge.py" "$STATE/bridge.py"
 chmod 700 "$STATE/bridge.py"
@@ -26,7 +32,9 @@ command -v termux-reload-settings >/dev/null 2>&1 && termux-reload-settings || t
 cat <<MSG
 
 Lumena bridge installed.
-Workspace: $WORKSPACE
+Workspace (read/write): $WORKSPACE
+Read-only repo root: $HOME/Lumena-Android
+Read-only alias: @Lumena-Android
 
 Lumena can now start the bridge automatically when a local tool is first used.
 Manual start still works with:
