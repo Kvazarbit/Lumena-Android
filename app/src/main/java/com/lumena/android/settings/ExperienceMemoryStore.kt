@@ -223,7 +223,14 @@ object ExperienceMemoryStore {
     private val lock = Any()
 
     fun load(context: Context): ExperienceMemoryState = synchronized(lock) {
-        ExperienceMemoryFileCodec.load(file(context.applicationContext))
+        val app = context.applicationContext
+        ContextGenomeStore.loadProjection(app)?.let { return@synchronized it }
+
+        val legacy = ExperienceMemoryFileCodec.load(file(app))
+        if (legacy.anchors.isNotEmpty()) {
+            ContextGenomeStore.importLegacyProjection(app, legacy)
+        }
+        legacy
     }
 
     fun record(
@@ -234,7 +241,17 @@ object ExperienceMemoryStore {
     ) = synchronized(lock) {
         val app = context.applicationContext
         val next = ExperienceMemoryIndex.record(load(app), request, result, now)
-        save(app, next)
+        ContextGenomeStore.record(
+            context = app,
+            request = request,
+            result = result,
+            projection = next,
+            now = now
+        )
+        // SQLite is authoritative after the first verified event. Keep no diverging
+        // writable JSON mirror; the legacy file is only an import source.
+        val legacy = file(app)
+        if (legacy.exists()) legacy.delete()
     }
 
     fun relevant(
@@ -258,12 +275,10 @@ object ExperienceMemoryStore {
     }
 
     fun clear(context: Context) = synchronized(lock) {
-        val file = file(context.applicationContext)
-        if (file.exists()) file.delete()
-    }
-
-    private fun save(context: Context, state: ExperienceMemoryState) {
-        ExperienceMemoryFileCodec.save(file(context), state)
+        val app = context.applicationContext
+        ContextGenomeStore.clear(app)
+        val legacy = file(app)
+        if (legacy.exists()) legacy.delete()
     }
 
     private fun file(context: Context) = File(context.filesDir, FILE_NAME)
