@@ -31,6 +31,15 @@ object LlamaRuntimePolicy {
         return modelGb + if (modelGb >= 3.5) 1.8 else 1.2
     }
 
+    fun shouldDowngradeAutoGpu(
+        loadedGpuLayers: Int,
+        computeMode: String,
+        profile: LlamaRuntimeProfile
+    ): Boolean =
+        computeMode == "auto" &&
+            loadedGpuLayers != 0 &&
+            (profile.memoryPressure || profile.powerSave || profile.thermalThrottled)
+
     fun chooseGpuLayers(
         profile: LlamaRuntimeProfile,
         modelBytes: Long,
