@@ -23,30 +23,22 @@ class ContextBuilder(
         val sections = mutableListOf<String>()
 
         sections += buildString {
-            appendLine("SYSTEM")
-            appendLine("You are Lumena Local Agent. Choose only the single next safe action.")
-            appendLine("Never claim a tool ran unless a TOOL_RESULT was provided.")
-            appendLine("Never invent files, project state, command results, or capabilities.")
-            appendLine("For an active tool task, finish only with explicit done JSON after required verification.")
-            appendLine()
-            appendLine("OUTPUT RULE")
-            appendLine("For one tool call return ONLY JSON: {\"plan\":[\"optional first-step plan\"],\"tool\":\"...\",\"args\":{},\"reason\":\"...\"}")
-            appendLine("If complete return ONLY JSON: {\"done\":true,\"summary\":\"...\"}")
-            appendLine("For ordinary conversation before tool work return ONLY JSON: {\"reply\":\"...\"}")
+            appendLine("DYNAMIC VERIFIED CONTEXT")
+            appendLine("Protocol reminder: tool/done/reply outputs are JSON only; TOOL_RESULT is the only execution proof.")
         }
 
         sections += buildString {
             appendLine("TASK STATE")
-            appendLine("goal=${sanitize(task.goal).take(2_000)}")
+            appendLine("goal=${sanitize(task.goal).take(1_000)}")
             appendLine("status=${task.status}")
             appendLine("step=${task.step}/${task.maxSteps}")
             task.lastTool?.let { appendLine("last_tool=$it") }
-            task.lastResult?.let { appendLine("last_result=${sanitize(it).take(2_000)}") }
+            task.lastResult?.let { appendLine("last_result=${sanitize(it).take(800)}") }
             if (task.createdFiles.isNotEmpty()) appendLine("created=${task.createdFiles.take(16).joinToString()}")
             if (task.modifiedFiles.isNotEmpty()) appendLine("modified=${task.modifiedFiles.take(16).joinToString()}")
             if (task.errors.isNotEmpty()) {
                 appendLine("recent_errors:")
-                task.errors.takeLast(3).forEach { error -> appendLine("- ${sanitize(error).take(1_000)}") }
+                task.errors.takeLast(2).forEach { error -> appendLine("- ${sanitize(error).take(500)}") }
             }
         }
 
@@ -59,7 +51,7 @@ class ContextBuilder(
 
         sections += buildString {
             appendLine("AVAILABLE TOOLS")
-            appendLine(ToolRegistry.renderForPrompt(allowedTools))
+            appendLine(ToolRegistry.renderForPrompt(allowedTools, compact = true))
         }
 
         if (plan.isNotEmpty()) {
@@ -79,7 +71,7 @@ class ContextBuilder(
         if (memory.isNotEmpty()) {
             sections += buildString {
                 appendLine("RELEVANT VERIFIED MEMORY")
-                memory.forEach { appendLine("- ${it.take(1_000)}") }
+                memory.forEach { appendLine("- ${it.take(360)}") }
             }
         }
 
