@@ -75,6 +75,7 @@ import com.lumena.android.ollama.WorkflowOutcome
 import com.lumena.android.ollama.WorkflowRunner
 import com.lumena.android.settings.LocalSessionSnapshot
 import com.lumena.android.settings.LocalSessionStore
+import com.lumena.android.settings.ExperienceMemoryStore
 import com.lumena.android.settings.LumenaPreferences
 import com.lumena.android.settings.PersistedChatMessage
 import com.lumena.android.settings.PersistedHistoryMessage
@@ -390,7 +391,17 @@ fun WorkflowChatScreen(
 
         coordinator.launch(workScope, task.id, resetProgress = true) { runToken ->
             val outcome = try {
-                WorkflowRunner(modelClient(), bridgeOrNull(), modelNameForRun()).run(
+                WorkflowRunner(
+                    modelClient(),
+                    bridgeOrNull(),
+                    modelNameForRun(),
+                    relevantMemoryProvider = { task ->
+                        ExperienceMemoryStore.relevant(context, task.goal)
+                    },
+                    onToolExperience = { request, result ->
+                        ExperienceMemoryStore.record(context, request, result)
+                    }
+                ).run(
                     history = turnHistory,
                     task = task,
                     onProgress = { reportProgress(task.id, runToken, it) },
@@ -594,7 +605,17 @@ fun WorkflowChatScreen(
                 }
 
                 val outcome = try {
-                    WorkflowRunner(modelClient(), bridgeOrNull(), modelNameForRun()).approve(
+                    WorkflowRunner(
+                        modelClient(),
+                        bridgeOrNull(),
+                        modelNameForRun(),
+                        relevantMemoryProvider = { task ->
+                            ExperienceMemoryStore.relevant(context, task.goal)
+                        },
+                        onToolExperience = { request, result ->
+                            ExperienceMemoryStore.record(context, request, result)
+                        }
+                    ).approve(
                         pending = requested,
                         onProgress = { reportProgress(taskId, runToken, it) },
                         onModelText = { text ->
