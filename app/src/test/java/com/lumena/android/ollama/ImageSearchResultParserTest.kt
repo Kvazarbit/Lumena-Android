@@ -37,6 +37,37 @@ class ImageSearchResultParserTest {
     }
 
     @Test
+    fun acceptsWhitelistedOpenversePreviewAndSource() {
+        val json = """
+            {
+              "provider":"multi",
+              "display_ready":true,
+              "images":[
+                {
+                  "title":"Openverse result",
+                  "thumbnail_url":"https://api.openverse.org/v1/images/abc/thumb/",
+                  "source_page":"https://openverse.org/image/abc",
+                  "source":"Openverse"
+                },
+                {
+                  "title":"Blocked host",
+                  "thumbnail_url":"https://evil.example/image.jpg",
+                  "source_page":"https://evil.example/source",
+                  "source":"Openverse"
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val images = ImageSearchResultParser.parse(json)
+
+        assertEquals(1, images.size)
+        assertEquals("Openverse", images.single().source)
+        assertTrue(images.single().thumbnailUrl.startsWith("https://api.openverse.org/"))
+        assertTrue(images.single().sourcePage.startsWith("https://openverse.org/"))
+    }
+
+    @Test
     fun rejectsNonDisplayReadyPayloads() {
         val json = """
             {
