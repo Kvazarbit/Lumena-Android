@@ -405,10 +405,31 @@ class WorkflowRunner(
     ): List<OllamaMessage> {
         val staticSystem = history.firstOrNull { it.role == "system" }?.content
             ?: LocalWorkflowAgent.systemPrompt
-        val mergedSystem = staticSystem + "\n\n" + controller.dynamicContext(
+        val dynamic = controller.dynamicContext(
             state,
             relevantMemory = relevantMemoryProvider(state.task)
         )
+        val compactGoal = state.task.goal
+            .replace(Regex("[\\r\\n]+"), " ")
+            .trim()
+            .take(1_000)
+        val compactLastResult = state.task.lastResult
+            ?.replace(Regex("[\\r\\n]+"), " ")
+            ?.trim()
+            ?.take(800)
+        val recap = buildString {
+            appendLine("CRITICAL TASK RECAP")
+            appendLine("goal=$compactGoal")
+            appendLine("status=${state.task.status}")
+            appendLine("step=${state.task.step}/${state.task.maxSteps}")
+            state.task.lastTool?.let { appendLine("last_tool=$it") }
+            compactLastResult?.let { appendLine("last_result=$it") }
+            state.verificationReason?.let {
+                appendLine("verification_required=${it.replace(Regex("[\\r\\n]+"), " ").take(500)}")
+            }
+        }.trimEnd()
+
+        val mergedSystem = staticSystem + "\n\n" + dynamic + "\n\n" + recap
         return buildList {
             add(OllamaMessage("system", mergedSystem))
             addAll(history.filterNot { it.role == "system" })
