@@ -24,7 +24,8 @@ import java.util.UUID
 data class PendingWorkflowTool(
     val plan: PlannedTool,
     val history: List<OllamaMessage>,
-    val control: AgentControlState
+    val control: AgentControlState,
+    val images: List<WorkflowImage> = emptyList()
 ) {
     val taskPlan: List<String>
         get() = control.plan
@@ -34,7 +35,8 @@ sealed interface WorkflowOutcome {
     data class Finished(
         val text: String,
         val history: List<OllamaMessage>,
-        val control: AgentControlState
+        val control: AgentControlState,
+        val images: List<WorkflowImage> = emptyList()
     ) : WorkflowOutcome
 
     data class NeedsConfirmation(
@@ -60,6 +62,7 @@ class WorkflowRunner(
         history: List<OllamaMessage>,
         task: TaskState,
         control: AgentControlState? = null,
+        initialImages: List<WorkflowImage> = emptyList(),
         onProgress: (String) -> Unit = {},
         onModelText: (String) -> Unit = {},
         onToolTelemetry: (String) -> Unit = {},
@@ -68,6 +71,7 @@ class WorkflowRunner(
     ): WorkflowOutcome {
         var current = history
         var state = control ?: controller.initial(task)
+        val collectedImages = initialImages.toMutableList()
         var protocolTurns = 0
         onState(state)
 
@@ -197,7 +201,8 @@ class WorkflowRunner(
                         val pending = PendingWorkflowTool(
                             plan = planned,
                             history = toolHistory,
-                            control = state
+                            control = state,
+                            images = collectedImages.toList()
                         )
                         onState(state)
                         return WorkflowOutcome.NeedsConfirmation(pending)
@@ -219,6 +224,14 @@ class WorkflowRunner(
                         planned.request,
                         onToolTelemetry
                     )
+                    if (planned.request.tool == "image.search" && result.ok) {
+                        val found = ImageSearchResultParser.parse(result.stdout)
+                        found.forEach { image ->
+                            if (collectedImages.none { it.thumbnailUrl == image.thumbnailUrl }) {
+                                collectedImages += image
+                            }
+                        }
+                    }
                     runCatching { onToolExperience(planned.request, result) }
 
                     val transition = controller.afterTool(
@@ -251,7 +264,12 @@ class WorkflowRunner(
                     onState(state)
                     onProgress("FINISH\n${instruction.text.take(4_000)}")
                     val next = current + OllamaMessage("assistant", instruction.text)
-                    return WorkflowOutcome.Finished(instruction.text, next, state)
+                    return WorkflowOutcome.Finished(
+                        instruction.text,
+                        next,
+                        state,
+                        images = collectedImages.toList()
+                    )
                 }
 
                 is ControllerInstruction.AskModelAgain -> {
@@ -357,6 +375,7 @@ class WorkflowRunner(
             history = next,
             task = transition.state.task,
             control = transition.state,
+            initialImages = pending.images,
             onProgress = onProgress,
             onModelText = onModelText,
             onToolTelemetry = onToolTelemetry,
