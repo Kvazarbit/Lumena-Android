@@ -8,6 +8,7 @@ import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.core.ToolRegistry
 import com.lumena.android.agent.core.ToolRisk
+import com.lumena.android.agent.core.VisualGoalRouter
 import com.lumena.android.agent.local.PlannedTool
 import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.TermuxBridgeClient
@@ -74,6 +75,98 @@ class WorkflowRunner(
         val collectedImages = initialImages.toMutableList()
         var protocolTurns = 0
         onState(state)
+
+        val visualRoute = if (
+            state.task.step == 0 &&
+            !state.visualEvidenceReady
+        ) {
+            VisualGoalRouter.route(state.task.goal)
+        } else {
+            null
+        }
+
+        if (visualRoute != null) {
+            val localBridge = bridge
+            if (localBridge == null) {
+                val stopped = state.copy(
+                    task = state.task.copy(
+                        status = TaskStatus.FAILED,
+                        errors = (state.task.errors +
+                            "Bridge token is required for mandatory image.search").takeLast(8)
+                    )
+                )
+                onState(stopped)
+                return WorkflowOutcome.Failed(
+                    "Bridge token is required to find and show images.",
+                    current,
+                    stopped
+                )
+            }
+
+            val request = ToolRequest(
+                tool = "image.search",
+                args = mapOf(
+                    "query" to visualRoute.query,
+                    "limit" to "4"
+                ),
+                requestId = buildRequestId(state)
+            )
+            onProgress(
+                "VISUAL ROUTE · required image.search\nquery=${visualRoute.query.take(300)}"
+            )
+
+            val rawResult = executeWithTelemetry(
+                localBridge,
+                request,
+                onToolTelemetry
+            )
+            val (result, displayImages) = normalizeDisplayResult(
+                request,
+                rawResult
+            )
+            displayImages.forEach { image ->
+                if (collectedImages.none { it.thumbnailUrl == image.thumbnailUrl }) {
+                    collectedImages += image
+                }
+            }
+            runCatching { onToolExperience(request, result) }
+
+            val transition = controller.afterTool(
+                state = state,
+                call = AgentDecision.ToolCall(
+                    tool = "image.search",
+                    args = request.args,
+                    reason = "Application-required visual evidence"
+                ),
+                ok = result.ok,
+                stdout = result.stdout,
+                stderr = result.stderr,
+                error = result.error
+            )
+            state = transition.state
+            onState(state)
+            onProgress(
+                toolResultTrace(
+                    request.tool,
+                    result.stdout,
+                    result.stderr,
+                    result.error,
+                    result.ok
+                )
+            )
+
+            current = current + LocalWorkflowAgent.toolResultMessage(
+                tool = request.tool,
+                ok = result.ok,
+                stdout = result.stdout,
+                stderr = result.stderr,
+                error = result.error
+            )
+
+            transition.stopReason?.let { reason ->
+                return WorkflowOutcome.Failed(reason, current, state)
+            }
+        }
 
         while (state.task.canContinue) {
             protocolTurns++
