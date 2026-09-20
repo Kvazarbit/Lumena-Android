@@ -6,6 +6,8 @@ data class ChatContextFit(
     val prompt: String,
     val promptTokens: Int,
     val droppedMessages: Int,
+    val clippedSystem: Boolean,
+    val clippedLatestUser: Boolean,
     val fits: Boolean
 )
 
@@ -23,6 +25,8 @@ object ChatContextPolicy {
         val mutableRoles = roles.toMutableList()
         val mutableContents = contents.toMutableList()
         var dropped = 0
+        var clippedSystem = false
+        var clippedLatestUser = false
 
         fun render(): Pair<String, Int> {
             val prompt = formatter(
@@ -33,6 +37,7 @@ object ChatContextPolicy {
         }
 
         var rendered = render()
+
         while (rendered.second > maxPromptTokens) {
             val lastUser = mutableRoles.indexOfLast { it == "user" }
             val removable = mutableRoles.indices.firstOrNull { index ->
@@ -58,13 +63,90 @@ object ChatContextPolicy {
             rendered = render()
         }
 
+        fun clipMessageToFit(index: Int, minimumChars: Int): Boolean {
+            if (index !in mutableContents.indices) return false
+            val original = mutableContents[index]
+            if (original.length <= minimumChars) return false
+
+            var low = minimumChars.coerceAtMost(original.length)
+            var high = original.length
+            var best: String? = null
+            var bestRendered: Pair<String, Int>? = null
+
+            while (low <= high) {
+                val mid = low + (high - low) / 2
+                mutableContents[index] = clipMiddle(original, mid)
+                val candidate = render()
+                if (candidate.second in 1..maxPromptTokens) {
+                    best = mutableContents[index]
+                    bestRendered = candidate
+                    low = mid + 1
+                } else {
+                    high = mid - 1
+                }
+            }
+
+            if (best != null && bestRendered != null) {
+                mutableContents[index] = best
+                rendered = bestRendered
+                return true
+            }
+
+            mutableContents[index] = clipMiddle(original, minimumChars)
+            rendered = render()
+            return rendered.second in 1..maxPromptTokens
+        }
+
+        if (rendered.second > maxPromptTokens) {
+            val systemIndex = mutableRoles.indexOfFirst { it == "system" }
+            if (systemIndex >= 0) {
+                val before = mutableContents[systemIndex]
+                val fit = clipMessageToFit(systemIndex, minimumChars = 256)
+                clippedSystem = mutableContents[systemIndex] != before
+                if (fit) {
+                    return ChatContextFit(
+                        roles = mutableRoles.toTypedArray(),
+                        contents = mutableContents.toTypedArray(),
+                        prompt = rendered.first,
+                        promptTokens = rendered.second,
+                        droppedMessages = dropped,
+                        clippedSystem = clippedSystem,
+                        clippedLatestUser = false,
+                        fits = true
+                    )
+                }
+            }
+        }
+
+        if (rendered.second > maxPromptTokens) {
+            val latestUser = mutableRoles.indexOfLast { it == "user" }
+            if (latestUser >= 0) {
+                val before = mutableContents[latestUser]
+                clipMessageToFit(latestUser, minimumChars = 256)
+                clippedLatestUser = mutableContents[latestUser] != before
+            }
+        }
+
         return ChatContextFit(
             roles = mutableRoles.toTypedArray(),
             contents = mutableContents.toTypedArray(),
             prompt = rendered.first,
             promptTokens = rendered.second,
             droppedMessages = dropped,
+            clippedSystem = clippedSystem,
+            clippedLatestUser = clippedLatestUser,
             fits = rendered.second in 1..maxPromptTokens
         )
+    }
+
+    private fun clipMiddle(text: String, limit: Int): String {
+        if (text.length <= limit) return text
+        val marker = "\n...[middle context omitted]...\n"
+        if (limit <= marker.length + 8) return text.take(limit)
+
+        val available = limit - marker.length
+        val head = (available * 2) / 3
+        val tail = available - head
+        return text.take(head) + marker + text.takeLast(tail)
     }
 }
