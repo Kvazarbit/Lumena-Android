@@ -187,7 +187,6 @@ fun CompanionScreen() {
             if (
                 command != null &&
                 command.fingerprint != handledFingerprint &&
-                command.fingerprint != detected?.fingerprint &&
                 !busy
             ) {
                 acceptDetected(command)
