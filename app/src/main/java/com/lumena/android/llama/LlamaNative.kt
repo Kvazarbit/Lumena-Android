@@ -22,6 +22,7 @@ object LlamaNative {
         contents: Array<String>,
         addAssistant: Boolean = true
     ): String
+    external fun nativeCountTokens(handle: Long, text: String): Int
     external fun nativeFreeModel(handle: Long)
     external fun nativeCancel()
     external fun nativeGenerate(
