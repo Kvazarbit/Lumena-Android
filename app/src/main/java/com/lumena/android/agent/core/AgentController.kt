@@ -252,6 +252,11 @@ class AgentController(
         val signature = signature(call)
         var pythonFailures = state.pythonFailures
         val repeatedFailures = state.repeatedToolFailures.toMutableMap()
+        val recoveredFromPythonFailure =
+            ok && call.tool.startsWith("python.") && state.pythonFailures > 0
+        val recoveredFromRepeatedToolFailure =
+            ok && (state.repeatedToolFailures[signature] ?: 0) > 0
+        val recovered = recoveredFromPythonFailure || recoveredFromRepeatedToolFailure
 
         if (ok) {
             repeatedFailures.remove(signature)
@@ -293,9 +298,20 @@ class AgentController(
             if (stderr.isNotBlank()) append(" stderr=").append(stderr.take(1_000))
         }
 
+        val nextStep = state.task.step + 1
+        val recoveryMaxSteps = if (recovered) {
+            maxOf(
+                state.task.maxSteps,
+                (nextStep + 2).coerceAtMost(budget.maxTotalSteps)
+            )
+        } else {
+            state.task.maxSteps
+        }
+
         val nextTask = state.task.copy(
             status = TaskStatus.WAITING_MODEL,
-            step = state.task.step + 1,
+            step = nextStep,
+            maxSteps = recoveryMaxSteps,
             lastTool = call.tool,
             lastResult = resultText,
             errors = if (ok) state.task.errors else (state.task.errors + resultText).takeLast(8)
