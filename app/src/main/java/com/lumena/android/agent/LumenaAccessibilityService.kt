@@ -52,15 +52,41 @@ class LumenaAccessibilityService : AccessibilityService() {
     fun isChatGptActive(): Boolean =
         rootInActiveWindow?.packageName?.toString() == CHATGPT_PACKAGE
 
-    fun scheduleChatGptInsert(text: String, send: Boolean = false, attempts: Int = 14) {
-        fun tryOnce(remaining: Int) {
-            if (fillChatGptComposer(text)) {
-                if (send) mainHandler.postDelayed({ clickChatGptSend() }, 350)
+    fun scheduleChatGptInsert(
+        text: String,
+        send: Boolean = false,
+        attempts: Int = 14,
+        onFinished: ((Boolean) -> Unit)? = null
+    ) {
+        fun trySend(remaining: Int) {
+            if (!send) {
+                onFinished?.invoke(true)
                 return
             }
-            if (remaining > 0) mainHandler.postDelayed({ tryOnce(remaining - 1) }, 350)
+            if (clickChatGptSend()) {
+                onFinished?.invoke(true)
+                return
+            }
+            if (remaining > 0) {
+                mainHandler.postDelayed({ trySend(remaining - 1) }, 350)
+            } else {
+                onFinished?.invoke(false)
+            }
         }
-        mainHandler.post { tryOnce(attempts) }
+
+        fun tryInsert(remaining: Int) {
+            if (fillChatGptComposer(text)) {
+                mainHandler.postDelayed({ trySend(attempts) }, 350)
+                return
+            }
+            if (remaining > 0) {
+                mainHandler.postDelayed({ tryInsert(remaining - 1) }, 350)
+            } else {
+                onFinished?.invoke(false)
+            }
+        }
+
+        mainHandler.post { tryInsert(attempts) }
     }
 
     fun fillChatGptComposer(text: String): Boolean {
@@ -84,17 +110,33 @@ class LumenaAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: return false
         if (root.packageName?.toString() != CHATGPT_PACKAGE) return false
 
-        val tokens = listOf("send", "wyślij", "wyslij", "надісл", "отправ", "відправ", "submit")
-        val candidate = walk(root)
+        val tokens = listOf(
+            "send", "send message",
+            "wyślij", "wyslij",
+            "надісл", "відправ",
+            "отправ", "submit"
+        )
+
+        val labeled = walk(root)
             .filter { it.isVisibleToUser && it.isEnabled }
             .firstOrNull { node ->
                 val label = listOfNotNull(node.text, node.contentDescription)
                     .joinToString(" ")
                     .lowercase()
-                node.isClickable && tokens.any { label.contains(it) }
+                tokens.any { label.contains(it) }
             } ?: return false
 
-        return candidate.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        var candidate: AccessibilityNodeInfo? = labeled
+        var hops = 0
+        while (candidate != null && hops < 5) {
+            if (candidate.isVisibleToUser && candidate.isEnabled && candidate.isClickable) {
+                return candidate.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            }
+            candidate = candidate.parent
+            hops++
+        }
+
+        return false
     }
 
     fun execute(action: AgentAction): Boolean = when (action) {
