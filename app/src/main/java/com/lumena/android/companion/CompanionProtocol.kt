@@ -25,14 +25,18 @@ object CompanionProtocol {
         {"tool":"workspace.list","args":{},"reason":"Discover the real workspace and read-only roots before choosing paths"}
 
         Available tools:
-        health, system.time, system.info, http.json,
+        health, system.time, system.info, context.snapshot, process.status,
+        http.json, http.get, inspect.batch,
         workspace.list, file.list, file.search, file.read,
         project.create, dir.create, file.write,
         git.status, git.diff, git.log, git.add, git.commit, python.run,
         ollama.status, ollama.start, ollama.pull.
 
         Never invent tool results. Wait for a LUMENA_RESULT message before continuing the task.
-        Prefer read-only inspection before edits. Use only one tool request at a time.
+        Prefer read-only inspection before edits. Use only one top-level tool request at a time.
+        For several independent read-only checks, prefer inspect.batch instead of many separate turns.
+        For broad environment/project orientation, prefer context.snapshot before repeated system.info/workspace.list calls.
+        Use http.json for APIs and http.get for public HTTPS text/HTML documentation.
         Start with workspace.list when you do not know a real path. Never invent cwd/path values.
         The Lumena app repository may appear as @Lumena-Android and is read-only to inspection tools.
         Lumena may auto-run registry-marked read-only tools when Safe Auto is enabled.
