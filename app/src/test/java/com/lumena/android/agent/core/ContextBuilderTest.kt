@@ -65,6 +65,36 @@ class ContextBuilderTest {
     }
 
     @Test
+    fun omissionMarkerNeverExceedsTheHardCharacterBudget() {
+        val task = TaskState(
+            id = "boundary",
+            projectId = null,
+            goal = "Check context limits",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val project = VerifiedProjectContext(
+            projectName = "large-project",
+            cwd = "@Lumena-Android",
+            verifiedFacts = List(16) { "fact-$it-" + "x".repeat(600) }
+        )
+        val memory = List(8) { "memory-$it-" + "m".repeat(500) }
+
+        // Exercise all remaining-space boundaries, including the omission marker.
+        for (limit in 0..4_096) {
+            val context = ContextBuilder(maxChars = limit).build(
+                task = task,
+                project = project,
+                relevantMemory = memory,
+                allowedTools = setOf("file.read", "git.status")
+            )
+            assertTrue(
+                "Character budget $limit was exceeded: ${context.length}",
+                context.length <= limit
+            )
+        }
+    }
+
+    @Test
     fun verifiedMemoryIsSanitizedAndBounded() {
         val context = ContextBuilder(
             maxMemoryItems = 2,
