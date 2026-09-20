@@ -9,10 +9,13 @@ request-scoped cancellation for long-running subprocess tools.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
+import platform
 from datetime import datetime
 import re
+import socket
 import secrets
 import shlex
 import shutil
@@ -20,6 +23,8 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,6 +42,9 @@ WORKSPACE = Path(os.environ.get("LUMENA_WORKSPACE", str(HOME / "lumena-workspace
 BACKUP_ROOT = WORKSPACE / ".lumena-backups"
 MAX_BODY = 512 * 1024
 MAX_OUTPUT = 128 * 1024
+MAX_HTTP_JSON = 2 * 1024 * 1024
+MAX_SEARCH_FILE_BYTES = 1024 * 1024
+MAX_SEARCH_RESULTS = 120
 DEFAULT_TIMEOUT = 120
 MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 PROJECT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
