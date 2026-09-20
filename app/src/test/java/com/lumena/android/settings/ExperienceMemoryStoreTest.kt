@@ -52,6 +52,58 @@ class ExperienceMemoryStoreTest {
     }
 
     @Test
+    fun recoveredFailureRemainsHistoricalButPositiveRanksFirst() {
+        val request = ToolRequest(
+            tool = "python.run",
+            args = mapOf("script" to "demo.py")
+        )
+        var state = ExperienceMemoryIndex.record(
+            ExperienceMemoryState(),
+            request,
+            ToolResult(ok = false, tool = "python.run", error = "dependency missing"),
+            now = 1000L
+        )
+        state = ExperienceMemoryIndex.record(
+            state,
+            request,
+            ToolResult(ok = true, tool = "python.run", stdout = "verified"),
+            now = 2000L
+        )
+
+        val relevant = ExperienceMemoryIndex.relevant(
+            state,
+            query = "python demo.py",
+            limit = 2
+        )
+
+        assertTrue(relevant.first().startsWith("POSITIVE verified"))
+        assertTrue(relevant.any { it.startsWith("NEGATIVE resolved") })
+    }
+
+    @Test
+    fun memoryIsHardBoundedTo128Anchors() {
+        var state = ExperienceMemoryState()
+        repeat(150) { index ->
+            state = ExperienceMemoryIndex.record(
+                state,
+                ToolRequest(
+                    tool = "file.read",
+                    args = mapOf("path" to "file-$index.txt")
+                ),
+                ToolResult(
+                    ok = index % 2 == 0,
+                    tool = "file.read",
+                    stdout = "ok-$index",
+                    error = if (index % 2 == 0) null else "missing-$index"
+                ),
+                now = index.toLong()
+            )
+        }
+
+        assertEquals(128, state.anchors.size)
+    }
+
+    @Test
     fun repeatedVerifiedSuccessCompactsIntoOccurrences() {
         val request = ToolRequest(
             tool = "git.status",
