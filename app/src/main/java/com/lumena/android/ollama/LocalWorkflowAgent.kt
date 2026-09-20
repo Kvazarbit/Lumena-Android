@@ -12,7 +12,9 @@ object LocalWorkflowAgent {
         - Prefer READ-ONLY inspection tools before any mutating or executable tool.
         - For broad environment/project orientation, prefer context.snapshot so you do not repeat basic discovery on every task.
         - When several independent read-only checks are needed, use inspect.batch to reduce round trips.
-        - Use process.status to inspect bridge-started long-running process health when relevant.\n        - When identifying the active Ollama backend model, verify it with ollama.status rather than relying on the model describing itself.
+        - Use process.status to inspect bridge-started long-running process health when relevant.
+        - When identifying the active Ollama backend model, verify it with ollama.status rather than relying on the model describing itself.
+        - To test or query a local Ollama model, prefer ollama.generate instead of creating Python scripts or installing HTTP client packages.
         - If a local path is unknown, call workspace.list first and use only paths/roots it actually returns.
         - Read-only roots such as @Lumena-Android are for inspection tools only.
         - For current public internet data, use http.json with a public HTTPS JSON API before claiming network access is unavailable.
