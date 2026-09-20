@@ -49,6 +49,7 @@ import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.runtime.AgentRunCoordinator
 import com.lumena.android.llama.EmbeddedLlamaClient
+import com.lumena.android.ollama.ChatModelClient
 import com.lumena.android.ollama.LocalWorkflowAgent
 import com.lumena.android.ollama.OllamaClient
 import com.lumena.android.ollama.OllamaMessage
@@ -240,6 +241,13 @@ fun WorkflowChatScreen(
         .takeIf { it.isNotBlank() }
         ?.let { TermuxBridgeClient(bridgeUrl, it) }
 
+    fun modelClient(): ChatModelClient =
+        if (inferenceBackend == "embedded") EmbeddedLlamaClient(ggufPath)
+        else OllamaClient(ollamaUrl)
+
+    fun modelNameForRun(): String =
+        if (inferenceBackend == "embedded") "embedded-gguf" else selectedModel
+
     fun refreshModels() {
         status = "Checking Ollama…"
         uiScope.launch {
@@ -358,8 +366,8 @@ fun WorkflowChatScreen(
 
         coordinator.launch(workScope, task.id, resetProgress = true) { runToken ->
             val outcome = try {
-                val ollama = OllamaClient(ollamaUrl)
-                WorkflowRunner(ollama, bridgeOrNull(), selectedModel).run(
+                val backend = modelClient()
+                WorkflowRunner(backend, bridgeOrNull(), modelNameForRun()).run(
                     history = turnHistory,
                     task = task,
                     onProgress = { reportProgress(task.id, runToken, it) },
@@ -637,8 +645,8 @@ fun WorkflowChatScreen(
 
                     coordinator.launch(workScope, taskId, resetProgress = false) { runToken ->
                         val outcome = try {
-                            val ollama = OllamaClient(ollamaUrl)
-                            WorkflowRunner(ollama, bridgeOrNull(), selectedModel).approve(
+                            val backend = modelClient()
+                            WorkflowRunner(backend, bridgeOrNull(), modelNameForRun()).approve(
                                 pending = requested,
                                 onProgress = { reportProgress(taskId, runToken, it) },
                                 onState = { acceptControl(taskId, runToken, it) }
