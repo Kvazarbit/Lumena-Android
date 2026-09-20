@@ -86,15 +86,23 @@ class AgentController(
             )
         )
 
-        val lower = compactMessage.lowercase()
+        // Classify against the FULL error before truncating it for UI/state.
+        // Long native llama.cpp logs can otherwise push the actual load-error
+        // prefix out of compactMessage and cause pointless retries.
+        val fullLower = message.lowercase()
         val nonRetryable = listOf(
+            "embedded model load failed",
             "could not load this gguf model",
             "gguf model not found",
             "invalid android file descriptor",
+            "metadata could not be parsed",
+            "full model load failed",
+            "allocation/mmap failed",
+            "tensor layout is not accepted",
             "unauthorized",
             "http 401",
             "bridge token is required"
-        ).any(lower::contains)
+        ).any(fullLower::contains)
 
         return when {
             nonRetryable ->
