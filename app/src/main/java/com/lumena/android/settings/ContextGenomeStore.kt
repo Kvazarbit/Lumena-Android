@@ -253,6 +253,80 @@ object ContextGenomeStore {
         out
     }
 
+    fun express(
+        context: Context,
+        query: String,
+        maxChars: Int = 3_200,
+        maxUnits: Int = 8
+    ): GenomeExpressionPacket = synchronized(lock) {
+        val db = helper(context).readableDatabase
+        val projection = loadProjection(context) ?: ExperienceMemoryState()
+
+        val evidenceByAnchor = mutableMapOf<String, MutableList<String>>()
+        db.query(
+            "genome_links",
+            arrayOf("from_id", "to_id"),
+            "relation=?",
+            arrayOf("SUPPORTS"),
+            null, null,
+            "created_at DESC"
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val eventId = cursor.getString(0)
+                val anchorId = cursor.getString(1)
+                evidenceByAnchor
+                    .getOrPut(anchorId) { mutableListOf() }
+                    .add(eventId)
+            }
+        }
+
+        val anchorUnits = projection.anchors.map { anchor ->
+            val state = when {
+                anchor.valence == ExperienceValence.POSITIVE -> "POSITIVE verified"
+                anchor.resolvedAt == null -> "NEGATIVE unresolved"
+                else -> "NEGATIVE resolved"
+            }
+            val target = anchor.target.ifBlank { "(general)" }
+            val importance =
+                (if (anchor.valence == ExperienceValence.NEGATIVE && anchor.resolvedAt == null) 18.0 else 0.0) +
+                    (if (anchor.valence == ExperienceValence.POSITIVE) 8.0 else 3.0) +
+                    anchor.occurrences.coerceAtMost(10) * 1.5
+
+            GenomeMemoryUnit(
+                id = anchor.id,
+                layer = GenomeLayer.ANCHOR,
+                topicKey = topicOf(anchor.tool, anchor.target),
+                text = "$state · ${anchor.tool} · target=$target · ${anchor.summary} · seen=${anchor.occurrences}x",
+                importance = importance,
+                updatedAt = anchor.lastSeenAt,
+                evidenceIds = evidenceByAnchor[anchor.id].orEmpty().distinct().take(16)
+            )
+        }
+
+        val capsuleUnits = capsules(context, limit = 128).map { capsule ->
+            GenomeMemoryUnit(
+                id = capsule.id,
+                layer = if (capsule.level >= 2) {
+                    GenomeLayer.TOPIC_CAPSULE
+                } else {
+                    GenomeLayer.SIGNATURE_CAPSULE
+                },
+                topicKey = capsule.topicKey,
+                text = capsule.summary,
+                importance = capsule.importance,
+                updatedAt = capsule.updatedAt,
+                evidenceIds = capsule.evidenceIds
+            )
+        }
+
+        ContextGenomePolicy.express(
+            units = anchorUnits + capsuleUnits,
+            query = query,
+            maxChars = maxChars.coerceIn(256, 12_000),
+            maxUnits = maxUnits.coerceIn(1, 16)
+        )
+    }
+
     fun recentEvents(
         context: Context,
         limit: Int = 50
