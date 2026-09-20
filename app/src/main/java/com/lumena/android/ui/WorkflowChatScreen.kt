@@ -1,11 +1,14 @@
 package com.lumena.android.ui
 
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,12 +49,16 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -72,6 +79,7 @@ import com.lumena.android.ollama.OllamaClient
 import com.lumena.android.ollama.OllamaMessage
 import com.lumena.android.ollama.PendingWorkflowTool
 import com.lumena.android.ollama.WorkflowOutcome
+import com.lumena.android.ollama.WorkflowImage
 import com.lumena.android.ollama.WorkflowRunner
 import com.lumena.android.settings.LocalSessionSnapshot
 import com.lumena.android.settings.LocalSessionStore
@@ -81,16 +89,35 @@ import com.lumena.android.settings.ExperienceMemoryStore
 import com.lumena.android.settings.GenomeCapsule
 import com.lumena.android.settings.GenomeUnpackedUnit
 import com.lumena.android.settings.LumenaPreferences
+import com.lumena.android.settings.PersistedChatImage
 import com.lumena.android.settings.PersistedChatMessage
 import com.lumena.android.settings.PersistedHistoryMessage
 import com.lumena.android.settings.PersistedPendingTool
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
-private data class ChatBubble(val role: String, val text: String)
+private data class ChatBubble(
+    val role: String,
+    val text: String,
+    val images: List<WorkflowImage> = emptyList()
+)
+
+private val remoteImageClient = OkHttpClient.Builder()
+    .connectTimeout(5, TimeUnit.SECONDS)
+    .readTimeout(15, TimeUnit.SECONDS)
+    .callTimeout(20, TimeUnit.SECONDS)
+    .followRedirects(false)
+    .followSslRedirects(false)
+    .build()
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -114,7 +141,20 @@ fun WorkflowChatScreen(
 
     val bubbles = remember {
         mutableStateListOf<ChatBubble>().apply {
-            val restoredChat = restored.chat.map { ChatBubble(it.role, it.text) }
+            val restoredChat = restored.chat.map { message ->
+                ChatBubble(
+                    role = message.role,
+                    text = message.text,
+                    images = message.images.map { image ->
+                        WorkflowImage(
+                            title = image.title,
+                            thumbnailUrl = image.thumbnailUrl,
+                            sourcePage = image.sourcePage,
+                            source = image.source
+                        )
+                    }
+                )
+            }
             if (restoredChat.isNotEmpty()) addAll(restoredChat)
             else add(ChatBubble("assistant", "Привіт. Я Lumena. Чим можу допомогти?"))
         }
@@ -199,7 +239,15 @@ fun WorkflowChatScreen(
             PendingWorkflowTool(
                 plan = planned,
                 history = listOf(systemMessage) + it.history.map { h -> OllamaMessage(h.role, h.content) },
-                control = control
+                control = control,
+                images = it.images.map { image ->
+                    WorkflowImage(
+                        title = image.title,
+                        thumbnailUrl = image.thumbnailUrl,
+                        sourcePage = image.sourcePage,
+                        source = image.source
+                    )
+                }
             )
         } else null
     }
@@ -210,7 +258,20 @@ fun WorkflowChatScreen(
         LocalSessionStore.save(
             context,
             LocalSessionSnapshot(
-                chat = bubbles.map { PersistedChatMessage(it.role, it.text) },
+                chat = bubbles.map { bubble ->
+                    PersistedChatMessage(
+                        role = bubble.role,
+                        text = bubble.text,
+                        images = bubble.images.map { image ->
+                            PersistedChatImage(
+                                title = image.title,
+                                thumbnailUrl = image.thumbnailUrl,
+                                sourcePage = image.sourcePage,
+                                source = image.source
+                            )
+                        }
+                    )
+                },
                 history = history.filterNot { it.role == "system" }
                     .map { PersistedHistoryMessage(it.role, it.content) },
                 task = currentTask,
@@ -221,7 +282,15 @@ fun WorkflowChatScreen(
                         reason = active.plan.reason,
                         control = active.control,
                         history = active.history.filterNot { it.role == "system" }
-                            .map { PersistedHistoryMessage(it.role, it.content) }
+                            .map { PersistedHistoryMessage(it.role, it.content) },
+                        images = active.images.map { image ->
+                            PersistedChatImage(
+                                title = image.title,
+                                thumbnailUrl = image.thumbnailUrl,
+                                sourcePage = image.sourcePage,
+                                source = image.source
+                            )
+                        }
                     )
                 },
                 inputDraft = input
@@ -250,7 +319,20 @@ fun WorkflowChatScreen(
         if (stored.task?.id != currentTask?.id) return
         if (stored.task != currentTask) currentTask = stored.task
 
-        val storedChat = stored.chat.map { ChatBubble(it.role, it.text) }
+        val storedChat = stored.chat.map { message ->
+            ChatBubble(
+                role = message.role,
+                text = message.text,
+                images = message.images.map { image ->
+                    WorkflowImage(
+                        title = image.title,
+                        thumbnailUrl = image.thumbnailUrl,
+                        sourcePage = image.sourcePage,
+                        source = image.source
+                    )
+                }
+            )
+        }
         if (storedChat.isNotEmpty() && storedChat != bubbles.toList()) {
             bubbles.clear()
             bubbles.addAll(storedChat)
@@ -353,7 +435,11 @@ fun WorkflowChatScreen(
                 history = outcome.history
                 pending = null
                 currentTask = outcome.control.task
-                bubbles += ChatBubble("assistant", outcome.text)
+                bubbles += ChatBubble(
+                    role = "assistant",
+                    text = outcome.text,
+                    images = outcome.images
+                )
                 coordinator.finish(runToken, "Done")
                 taskApprovals.remove(taskId)
             }
