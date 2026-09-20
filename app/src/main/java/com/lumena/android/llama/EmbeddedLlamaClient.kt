@@ -44,6 +44,16 @@ class EmbeddedLlamaClient(
     override suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String> =
         chat(messages)
 
+    override suspend fun chatStreaming(
+        model: String,
+        messages: List<OllamaMessage>,
+        onPartial: (String) -> Unit
+    ): Result<String> {
+        val result = chat(messages)
+        result.getOrNull()?.let(onPartial)
+        return result
+    }
+
     /**
      * Clients are intentionally cheap facades. Closing one must not evict the process-wide model,
      * otherwise every agent step would pay the GGUF load cost again.
