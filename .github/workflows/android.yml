@@ -38,6 +38,7 @@ jobs:
           python -m py_compile termux/bridge.py
           python - <<'PY'
           import importlib.util
+          import json
           import os
           from pathlib import Path
 
