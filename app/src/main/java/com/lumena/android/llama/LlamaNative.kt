@@ -10,6 +10,7 @@ object LlamaNative {
     }
 
     external fun nativeVersion(): String
+    external fun nativeGpuInfo(): String
     external fun nativeLoadModel(modelPath: String, gpuLayers: Int = 0): Long
     external fun nativeFreeModel(handle: Long)
     external fun nativeCancel()
