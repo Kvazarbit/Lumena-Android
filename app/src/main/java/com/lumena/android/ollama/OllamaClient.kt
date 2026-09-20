@@ -1,5 +1,6 @@
 package com.lumena.android.ollama
 
+import com.lumena.android.llama.LlamaRuntimeProfile
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CancellationException
@@ -69,7 +70,10 @@ interface ChatModelClient {
     }
 }
 
-class OllamaClient(baseUrl: String) : ChatModelClient {
+class OllamaClient(
+    baseUrl: String,
+    private val runtimeProfile: LlamaRuntimeProfile? = null
+) : ChatModelClient {
     private val base = normalizeLoopbackBaseUrl(baseUrl)
         ?: throw IllegalArgumentException("Ollama URL must use localhost/127.0.0.1 over http")
 
@@ -116,19 +120,21 @@ class OllamaClient(baseUrl: String) : ChatModelClient {
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             require(model.isNotBlank()) { "Choose an Ollama model first" }
+            val normalBudget = OllamaContextPolicy.budget(runtimeProfile, retry = false)
             val text = try {
                 executeStreamingChat(
                     model = model,
-                    messages = compactMessages(messages, maxChars = 14_000, maxPerMessage = 5_000),
-                    options = OllamaOptions(num_ctx = 4096, num_predict = 768, temperature = 0.15),
+                    messages = OllamaContextPolicy.compact(messages, normalBudget),
+                    options = normalBudget.options,
                     onPartial = onPartial
                 )
             } catch (timeout: SocketTimeoutException) {
                 onPartial("")
+                val retryBudget = OllamaContextPolicy.budget(runtimeProfile, retry = true)
                 executeStreamingChat(
                     model = model,
-                    messages = compactMessages(messages, maxChars = 8_000, maxPerMessage = 3_000),
-                    options = OllamaOptions(num_ctx = 3072, num_predict = 512, temperature = 0.1),
+                    messages = OllamaContextPolicy.compact(messages, retryBudget),
+                    options = retryBudget.options,
                     onPartial = onPartial
                 )
             }
@@ -235,30 +241,6 @@ class OllamaClient(baseUrl: String) : ChatModelClient {
         })
     }
 
-    private fun compactMessages(
-        messages: List<OllamaMessage>,
-        maxChars: Int,
-        maxPerMessage: Int
-    ): List<OllamaMessage> {
-        if (messages.isEmpty()) return messages
-        val system = messages.firstOrNull { it.role == "system" }
-        val nonSystem = messages.filterNot { it.role == "system" }
-
-        var used = system?.content?.length?.coerceAtMost(maxPerMessage) ?: 0
-        val recent = ArrayList<OllamaMessage>()
-        for (message in nonSystem.asReversed()) {
-            val clipped = message.content.takeLast(maxPerMessage)
-            if (recent.isNotEmpty() && used + clipped.length > maxChars) break
-            recent += message.copy(content = clipped)
-            used += clipped.length
-        }
-        recent.reverse()
-
-        return buildList {
-            system?.let { add(it.copy(content = it.content.take(maxPerMessage))) }
-            addAll(recent)
-        }
-    }
 
     private fun normalizeLoopbackBaseUrl(raw: String) = raw.trim().trimEnd('/')
         .toHttpUrlOrNull()
