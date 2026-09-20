@@ -26,6 +26,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,7 @@ HOME = Path.home()
 STATE_DIR = HOME / ".lumena"
 TOKEN_FILE = STATE_DIR / "bridge_token"
 OLLAMA_LOG = STATE_DIR / "ollama.log"
+CONTEXT_CACHE_FILE = STATE_DIR / "context_snapshot.json"
 WORKSPACE = Path(os.environ.get("LUMENA_WORKSPACE", str(HOME / "lumena-workspace"))).expanduser().resolve()
 READONLY_ROOTS_RAW = os.environ.get(
     "LUMENA_READONLY_ROOTS",
@@ -61,6 +63,7 @@ PROJECT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,220}$")
 
 ACTIVE_PROCESSES: dict[str, subprocess.Popen[str]] = {}
+ACTIVE_STARTED: dict[str, float] = {}
 ACTIVE_LOCK = threading.Lock()
 
 
