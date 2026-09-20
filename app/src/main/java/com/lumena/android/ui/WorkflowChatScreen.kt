@@ -43,6 +43,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -103,6 +104,8 @@ fun WorkflowChatScreen(
     val initial = remember { LumenaPreferences.load(context) }
     val restored = remember { LocalSessionStore.load(context) }
     val systemMessage = remember { OllamaMessage("system", LocalWorkflowAgent.systemPrompt) }
+
+    val taskApprovals = remember { mutableStateMapOf<String, Set<String>>() }
 
     val bubbles = remember {
         mutableStateListOf<ChatBubble>().apply {
@@ -212,6 +215,14 @@ fun WorkflowChatScreen(
     }
 
     fun isCurrentTask(taskId: String): Boolean = LocalSessionStore.load(context).task?.id == taskId
+
+    fun isApprovedForTask(taskId: String, request: ToolRequest): Boolean =
+        ToolGate.approvalKey(request) in taskApprovals[taskId].orEmpty()
+
+    fun grantApprovalForTask(taskId: String, request: ToolRequest) {
+        val key = ToolGate.approvalKey(request)
+        taskApprovals[taskId] = taskApprovals[taskId].orEmpty() + key
+    }
 
     fun acceptControl(taskId: String, runToken: Long, control: AgentControlState) {
         if (!coordinator.isCurrent(runToken, taskId) || !isCurrentTask(taskId)) return
@@ -324,6 +335,7 @@ fun WorkflowChatScreen(
                 currentTask = outcome.control.task
                 bubbles += ChatBubble("assistant", outcome.text)
                 coordinator.finish(runToken, "Done")
+                taskApprovals.remove(taskId)
             }
             is WorkflowOutcome.NeedsConfirmation -> {
                 pending = outcome.pending
@@ -337,6 +349,7 @@ fun WorkflowChatScreen(
                 currentTask = outcome.control.task
                 bubbles += ChatBubble("error", outcome.message)
                 coordinator.finish(runToken, "Failed")
+                taskApprovals.remove(taskId)
             }
         }
         busy = currentTask?.status in setOf(
@@ -365,6 +378,7 @@ fun WorkflowChatScreen(
             goal = text,
             status = TaskStatus.WAITING_MODEL
         )
+        taskApprovals.clear()
         currentTask = task
         bubbles += ChatBubble("user", text)
         val turnHistory = history + OllamaMessage("user", text)
@@ -382,6 +396,7 @@ fun WorkflowChatScreen(
                         if (text.isEmpty()) coordinator.beginModelTurn(runToken)
                         else coordinator.updateModelText(runToken, text)
                     },
+                    isApprovedForTask = ::isApprovedForTask,
                     onState = { acceptControl(task.id, runToken, it) }
                 )
             } catch (_: CancellationException) {
