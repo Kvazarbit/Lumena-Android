@@ -144,7 +144,11 @@ fun WorkflowChatScreen(
         )
     }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var experienceMemoryRevision by remember { mutableStateOf(0) }
 
+    val experienceStats = remember(showSettings, experienceMemoryRevision) {
+        ExperienceMemoryStore.stats(context)
+    }
     val ggufDisplayName = remember(ggufPath) { resolveGgufDisplayName(context, ggufPath) }
     val hardwareProfile = remember(showSettings, busy) { LlamaHardwareProfile.detect(context) }
     val modelLabel = when {
@@ -579,6 +583,16 @@ fun WorkflowChatScreen(
                     val clean = LumenaPreferences.normalizeBridgeToken(it)
                     bridgeToken = clean
                     LumenaPreferences.saveBridgeToken(context, clean)
+                },
+                experiencePositive = experienceStats.positive,
+                experienceNegative = experienceStats.negative,
+                experienceUnresolved = experienceStats.unresolvedNegative,
+                experienceTotal = experienceStats.total,
+                onClearExperience = {
+                    if (!busy) {
+                        ExperienceMemoryStore.clear(context)
+                        experienceMemoryRevision += 1
+                    }
                 }
             )
         }
@@ -913,7 +927,12 @@ private fun ModelAndConnectionSheet(
     bridgeUrl: String,
     onBridgeUrl: (String) -> Unit,
     bridgeToken: String,
-    onBridgeToken: (String) -> Unit
+    onBridgeToken: (String) -> Unit,
+    experiencePositive: Int,
+    experienceNegative: Int,
+    experienceUnresolved: Int,
+    experienceTotal: Int,
+    onClearExperience: () -> Unit
 ) {
     Column(
         modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
@@ -1004,6 +1023,25 @@ private fun ModelAndConnectionSheet(
             visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth()
         )
+
+        HorizontalDivider()
+        Text("Verified experience memory", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Only real TOOL_RESULT outcomes are stored. Model prose is never written as an experience anchor.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            "Total $experienceTotal · positive $experiencePositive · negative $experienceNegative · unresolved $experienceUnresolved",
+            style = MaterialTheme.typography.bodySmall
+        )
+        TextButton(
+            enabled = !busy && experienceTotal > 0,
+            onClick = onClearExperience
+        ) {
+            Text("Clear verified experience")
+        }
+
         Spacer(Modifier.height(18.dp))
     }
 }
