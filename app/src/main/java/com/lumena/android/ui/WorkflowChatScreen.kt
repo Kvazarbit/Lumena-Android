@@ -54,6 +54,8 @@ import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.runtime.AgentRunCoordinator
 import com.lumena.android.llama.EmbeddedLlamaClient
+import com.lumena.android.llama.EmbeddedLlamaRuntime
+import com.lumena.android.llama.LlamaHardwareProfile
 import com.lumena.android.ollama.ChatModelClient
 import com.lumena.android.ollama.LocalWorkflowAgent
 import com.lumena.android.ollama.OllamaClient
@@ -137,6 +139,9 @@ fun WorkflowChatScreen(
     val ggufDisplayName = remember(ggufPath) {
         resolveGgufDisplayName(context, ggufPath)
     }
+    val hardwareProfile = remember(showSettings, busy) {
+        LlamaHardwareProfile.detect(context)
+    }
     val ggufPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             val selectedName = resolveGgufDisplayName(context, uri.toString())
@@ -149,6 +154,8 @@ fun WorkflowChatScreen(
                         Intent.FLAG_GRANT_READ_URI_PERMISSION
                     )
                 }.isSuccess
+                EmbeddedLlamaClient.cancelActiveGeneration()
+                uiScope.launch { EmbeddedLlamaRuntime.unload() }
                 ggufPath = uri.toString()
                 inferenceBackend = "embedded"
                 LumenaPreferences.saveGgufPath(context, ggufPath)
@@ -248,6 +255,7 @@ fun WorkflowChatScreen(
 
     fun stopCurrentTask(reason: String = "Stopped by user") {
         val task = currentTask ?: return
+        EmbeddedLlamaClient.cancelActiveGeneration()
         coordinator.cancel(reason)
         pending = null
         busy = false
@@ -257,6 +265,7 @@ fun WorkflowChatScreen(
     }
 
     fun clearConversation() {
+        EmbeddedLlamaClient.cancelActiveGeneration()
         coordinator.cancel("New conversation")
         coordinator.clearFinished()
         input = ""
@@ -549,6 +558,11 @@ fun WorkflowChatScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        Text(
+                            "Auto profile: ${hardwareProfile.summary}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
                                 enabled = !busy,
@@ -560,8 +574,10 @@ fun WorkflowChatScreen(
                                 TextButton(
                                     enabled = !busy,
                                     onClick = {
+                                        EmbeddedLlamaClient.cancelActiveGeneration()
+                                        uiScope.launch { EmbeddedLlamaRuntime.unload() }
                                         ggufPath = ""
-                                        ggufPickerStatus = "GGUF selection cleared."
+                                        ggufPickerStatus = "GGUF selection cleared and model memory released."
                                         LumenaPreferences.saveGgufPath(context, "")
                                     }
                                 ) {
