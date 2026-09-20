@@ -1,5 +1,6 @@
 package com.lumena.android.llama
 
+import com.lumena.android.ollama.ChatModelClient
 import com.lumena.android.ollama.OllamaMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -12,7 +13,7 @@ class EmbeddedLlamaClient(
     private val contextSize: Int = 4096,
     private val maxTokens: Int = 768,
     private val temperature: Float = 0.15f
-) : Closeable {
+) : Closeable, ChatModelClient {
     @Volatile private var handle: Long = 0
 
     suspend fun load(): Result<Unit> = withContext(Dispatchers.IO) {
@@ -51,6 +52,8 @@ class EmbeddedLlamaClient(
             Result.failure(t)
         }
     }
+
+    override suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String> = chat(messages)
 
     override fun close() {
         val current = handle
