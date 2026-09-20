@@ -65,19 +65,29 @@ fun CompanionScreen() {
         LumenaPreferences.saveBridgeToken(context, token)
     }
 
-    fun openChatGptWith(text: String, send: Boolean) {
+    fun openChatGptWith(
+        text: String,
+        send: Boolean,
+        onFinished: ((Boolean) -> Unit)? = null
+    ) {
         val service = LumenaAccessibilityService.instance
         if (service == null) {
             status = "Enable Lumena Accessibility service first."
+            onFinished?.invoke(false)
             context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             return
         }
         val launch = context.packageManager.getLaunchIntentForPackage(LumenaAccessibilityService.CHATGPT_PACKAGE)
         if (launch == null) {
             status = "Official ChatGPT app was not found as ${LumenaAccessibilityService.CHATGPT_PACKAGE}."
+            onFinished?.invoke(false)
             return
         }
-        service.scheduleChatGptInsert(text, send = send)
+        service.scheduleChatGptInsert(
+            text = text,
+            send = send,
+            onFinished = onFinished
+        )
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(launch)
         status = if (send) "Opening ChatGPT and sending…" else "Opening ChatGPT and inserting text…"
@@ -133,7 +143,17 @@ fun CompanionScreen() {
                     "${plan.request.tool} returned an error. Returning the real error to ChatGPT…"
                 }
                 delay(250)
-                openChatGptWith(formatted, send = true)
+                openChatGptWith(
+                    formatted,
+                    send = true,
+                    onFinished = { sent ->
+                        status = if (sent) {
+                            "${plan.request.tool} result sent to ChatGPT."
+                        } else {
+                            "${plan.request.tool} finished, but ChatGPT Send was not confirmed. Result is ready below."
+                        }
+                    }
+                )
             } else {
                 status = if (result.ok) {
                     "${plan.request.tool} completed. Result is ready below."
