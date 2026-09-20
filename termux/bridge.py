@@ -680,6 +680,11 @@ def ollama_start() -> dict[str, Any]:
 
 def workspace_listing() -> str:
     lines: list[str] = []
+
+    for root in READONLY_ROOTS:
+        if root.exists() and root.is_dir():
+            lines.append(f"@{root.name}/\t[read-only root]")
+
     for path in sorted(WORKSPACE.rglob("*")):
         try:
             rel = path.relative_to(WORKSPACE)
@@ -702,7 +707,12 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         return {
             "ok": True,
             "exitCode": 0,
-            "stdout": f"Lumena bridge OK\nworkspace={WORKSPACE}\nversion=0.9\n",
+            "stdout": (
+                f"Lumena bridge OK\n"
+                f"workspace={WORKSPACE}\n"
+                f"read_only_roots={','.join('@' + root.name for root in READONLY_ROOTS if root.exists()) or '(none)'}\n"
+                f"version=0.9\n"
+            ),
             "stderr": "",
             "error": None,
         }
@@ -739,7 +749,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         return {"ok": True, "exitCode": 0, "stdout": workspace_listing(), "stderr": "", "error": None}
 
     if tool == "file.read":
-        path = safe_path(str(args.get("path", "")), must_exist=True)
+        path = safe_read_path(str(args.get("path", "")), must_exist=True)
         if not path.is_file():
             raise ValueError("Requested path is not a file")
         data = path.read_text(encoding="utf-8", errors="replace")
@@ -811,17 +821,60 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
             "error": None,
         }
 
-    if tool in {"git.status", "git.diff", "git.log", "git.add", "git.commit"}:
+    if tool in {"git.status", "git.diff", "git.log"}:
+        cwd = safe_read_path(str(args.get("cwd", "")), must_exist=True)
+        if not cwd.is_dir():
+            raise ValueError("cwd is not a directory")
+
+        env = os.environ.copy()
+        env["GIT_OPTIONAL_LOCKS"] = "0"
+        env["GIT_PAGER"] = "cat"
+        env["PAGER"] = "cat"
+
+        if tool == "git.status":
+            argv = [
+                "git",
+                "-c",
+                "core.fsmonitor=false",
+                "--no-optional-locks",
+                "status",
+                "--short",
+                "--branch",
+            ]
+        elif tool == "git.diff":
+            argv = [
+                "git",
+                "--no-pager",
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--",
+            ]
+        else:
+            argv = [
+                "git",
+                "--no-pager",
+                "log",
+                "-n",
+                "12",
+                "--oneline",
+                "--decorate",
+            ]
+
+        return run_process(
+            argv,
+            cwd,
+            int(args.get("timeout", DEFAULT_TIMEOUT)),
+            request_id=request_id,
+            env=env,
+        )
+
+    if tool in {"git.add", "git.commit"}:
         cwd = safe_path(str(args.get("cwd", "")), must_exist=True)
         if not cwd.is_dir():
             raise ValueError("cwd is not a directory")
-        if tool == "git.status":
-            argv = ["git", "status", "--short", "--branch"]
-        elif tool == "git.diff":
-            argv = ["git", "diff", "--"]
-        elif tool == "git.log":
-            argv = ["git", "log", "-n", "12", "--oneline", "--decorate"]
-        elif tool == "git.add":
+
+        if tool == "git.add":
             raw_paths = str(args.get("paths", ".")).strip() or "."
             parts = shlex.split(raw_paths)
             argv = ["git", "add", "--", *parts]
@@ -830,6 +883,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
             if not message or len(message) > 200:
                 raise ValueError("git.commit requires a message up to 200 chars")
             argv = ["git", "commit", "-m", message]
+
         return run_process(
             argv,
             cwd,
