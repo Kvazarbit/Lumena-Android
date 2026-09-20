@@ -121,8 +121,7 @@ class ContextGenomePolicyTest {
                 maxUnits = 8
             )
             assertTrue(packet.usedChars <= limit)
-            assertTrue(packet.lines.joinToString("
-").length <= limit)
+            assertTrue(packet.lines.joinToString("\n").length <= limit)
         }
     }
 
