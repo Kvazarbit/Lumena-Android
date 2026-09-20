@@ -563,6 +563,11 @@ fun WorkflowChatScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        Text(
+                            "Inference: ${EmbeddedLlamaRuntime.backendLabel()}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
                                 enabled = !busy,
