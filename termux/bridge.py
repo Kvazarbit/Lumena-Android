@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 import re
 import secrets
 import shlex
@@ -283,6 +284,22 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
             "ok": True,
             "exitCode": 0,
             "stdout": f"Lumena bridge OK\nworkspace={WORKSPACE}\nversion=0.8\n",
+            "stderr": "",
+            "error": None,
+        }
+
+    if tool == "system.time":
+        now = datetime.now().astimezone()
+        return {
+            "ok": True,
+            "exitCode": 0,
+            "stdout": (
+                f"local_time={now.isoformat(timespec='seconds')}\n"
+                f"date={now.date().isoformat()}\n"
+                f"time={now.strftime('%H:%M:%S')}\n"
+                f"timezone={now.tzname() or ''}\n"
+                f"utc_offset={now.strftime('%z')}\n"
+            ),
             "stderr": "",
             "error": None,
         }
