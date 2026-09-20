@@ -31,7 +31,7 @@ data class TaskState(
     val goal: String,
     val status: TaskStatus = TaskStatus.NEW,
     val step: Int = 0,
-    val maxSteps: Int = 8,
+    val maxSteps: Int = 4,
     val lastTool: String? = null,
     val lastResult: String? = null,
     val createdFiles: List<String> = emptyList(),
