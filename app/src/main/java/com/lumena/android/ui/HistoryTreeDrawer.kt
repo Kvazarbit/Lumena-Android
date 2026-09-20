@@ -41,10 +41,10 @@ import java.util.Date
 fun HistoryTreeDrawer(
     state: HistoryTreeState,
     onActivate: (String) -> Unit,
-    onForkActive: () -> Unit,
+    onForkOpen now: () -> Unit,
     onCreateTask: (String) -> Unit,
     onCreateTopic: (String) -> Unit,
-    onRenameActive: (String) -> Unit,
+    onRenameOpen now: (String) -> Unit,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
@@ -77,8 +77,8 @@ fun HistoryTreeDrawer(
     ) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column {
-                Text("History tree", style = MaterialTheme.typography.headlineSmall)
-                Text("Topic → Task → Branch", style = MaterialTheme.typography.bodySmall)
+                Text("Chats & work", style = MaterialTheme.typography.headlineSmall)
+                Text("Choose a conversation, start new work, or continue from an earlier point.", style = MaterialTheme.typography.bodySmall)
             }
             TextButton(onClick = onClose) { Text("Close") }
         }
@@ -86,32 +86,32 @@ fun HistoryTreeDrawer(
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
-            label = { Text("Search history") },
+            label = { Text("Search chats") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onForkActive, enabled = active != null) {
-                Text("Continue from here")
+                Text("Continue from selected point")
             }
         }
 
         if (active != null) {
             Text(
-                "Active: ${active.topic} / ${active.taskTitle} / ${active.title}",
+                "Open now: ${active.topic} / ${active.taskTitle} / ${active.title}",
                 style = MaterialTheme.typography.bodySmall
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = {
                     copyToClipboard("Lumena compact report", WorkReportFormatter.compact(active))
                 }) {
-                    Text("Copy compact")
+                    Text("Copy summary")
                 }
                 OutlinedButton(onClick = {
                     copyToClipboard("Lumena full report", WorkReportFormatter.full(active))
                 }) {
-                    Text("Copy full")
+                    Text("Copy full report")
                 }
             }
             if (copiedNotice.isNotBlank()) {
@@ -169,11 +169,11 @@ fun HistoryTreeDrawer(
         HorizontalDivider()
 
         if (active != null) {
-            Text("New task in this topic", style = MaterialTheme.typography.titleSmall)
+            Text("Start another task here", style = MaterialTheme.typography.titleSmall)
             OutlinedTextField(
                 value = newTask,
                 onValueChange = { newTask = it },
-                label = { Text("Task name") },
+                label = { Text("What do you want to do?") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -183,10 +183,10 @@ fun HistoryTreeDrawer(
                     onCreateTask(newTask.trim())
                     newTask = ""
                 }
-            ) { Text("Create task") }
+            ) { Text("Start task") }
         }
 
-        Text("New topic", style = MaterialTheme.typography.titleSmall)
+        Text("Start a new topic", style = MaterialTheme.typography.titleSmall)
         OutlinedTextField(
             value = newTopic,
             onValueChange = { newTopic = it },
@@ -200,14 +200,14 @@ fun HistoryTreeDrawer(
                 onCreateTopic(newTopic.trim())
                 newTopic = ""
             }
-        ) { Text("Create topic") }
+        ) { Text("Start topic") }
 
         if (active != null) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = rename,
                     onValueChange = { rename = it },
-                    label = { Text("Rename active branch") },
+                    label = { Text("Rename this chat") },
                     singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
@@ -217,7 +217,7 @@ fun HistoryTreeDrawer(
                         onRenameActive(rename.trim())
                         rename = ""
                     }
-                ) { Text("Save") }
+                ) { Text("Rename") }
             }
         }
     }
