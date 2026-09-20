@@ -1,9 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
 
     <queries>
         <package android:name="com.openai.chatgpt" />
+        <package android:name="com.termux" />
     </queries>
 
     <application
