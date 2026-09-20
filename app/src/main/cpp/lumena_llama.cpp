@@ -1,23 +1,60 @@
 #include <jni.h>
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
 #include <mutex>
 #include <string>
+#include <unistd.h>
 #include <vector>
 #include "llama.h"
 #include "ggml-backend.h"
 
 namespace {
 std::mutex g_mutex;
+std::mutex g_log_mutex;
 std::once_flag g_backend_once;
 std::atomic<bool> g_cancel_requested{false};
 llama_model * g_model = nullptr;
+std::string g_last_log;
+
+void append_log(const char * text) {
+    if (!text || !text[0]) return;
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    g_last_log.append(text);
+    constexpr size_t MAX_LOG = 24 * 1024;
+    if (g_last_log.size() > MAX_LOG) {
+        g_last_log.erase(0, g_last_log.size() - MAX_LOG);
+    }
+}
+
+void llama_log_capture(enum ggml_log_level, const char * text, void *) {
+    append_log(text);
+}
+
+void clear_last_log() {
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    g_last_log.clear();
+}
+
+std::string last_log_copy() {
+    std::lock_guard<std::mutex> lock(g_log_mutex);
+    return g_last_log;
+}
 
 void ensure_backend_init() {
     std::call_once(g_backend_once, [] {
+        llama_log_set(llama_log_capture, nullptr);
         llama_backend_init();
         ggml_backend_load_all();
     });
+}
+
+llama_model_params model_params_for(jint gpuLayers) {
+    auto params = llama_model_default_params();
+    params.n_gpu_layers = gpuLayers < 0 ? -1 : std::max(0, (int) gpuLayers);
+    return params;
 }
 
 std::string jstr(JNIEnv * env, jstring value) {
@@ -69,21 +106,69 @@ Java_com_lumena_android_llama_LlamaNative_nativeGpuInfo(JNIEnv * env, jobject) {
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_lumena_android_llama_LlamaNative_nativeLoadModel(
         JNIEnv * env, jobject, jstring modelPath, jint gpuLayers) {
-    // If a load is requested while generation is still finishing, ask generation to exit first.
     g_cancel_requested.store(true, std::memory_order_release);
     std::lock_guard<std::mutex> lock(g_mutex);
+    clear_last_log();
+
     const std::string path = jstr(env, modelPath);
-    if (path.empty()) return 0;
+    if (path.empty()) {
+        append_log("Model path is empty.\n");
+        return 0;
+    }
     if (g_model) {
         llama_model_free(g_model);
         g_model = nullptr;
     }
+
     ensure_backend_init();
-    auto params = llama_model_default_params();
-    params.n_gpu_layers = gpuLayers < 0 ? -1 : std::max(0, (int) gpuLayers);
-    g_model = llama_model_load_from_file(path.c_str(), params);
+    g_model = llama_model_load_from_file(path.c_str(), model_params_for(gpuLayers));
+    if (!g_model) append_log("llama_model_load_from_file returned null.\n");
     g_cancel_requested.store(false, std::memory_order_release);
     return reinterpret_cast<jlong>(g_model);
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_lumena_android_llama_LlamaNative_nativeLoadModelFd(
+        JNIEnv *, jobject, jint fd, jint gpuLayers) {
+    g_cancel_requested.store(true, std::memory_order_release);
+    std::lock_guard<std::mutex> lock(g_mutex);
+    clear_last_log();
+
+    if (fd < 0) {
+        append_log("Invalid Android file descriptor.\n");
+        return 0;
+    }
+    if (g_model) {
+        llama_model_free(g_model);
+        g_model = nullptr;
+    }
+
+    const int dup_fd = ::dup(fd);
+    if (dup_fd < 0) {
+        append_log((std::string("dup(fd) failed: ") + std::strerror(errno) + "\n").c_str());
+        return 0;
+    }
+
+    FILE * file = ::fdopen(dup_fd, "rb");
+    if (!file) {
+        append_log((std::string("fdopen failed: ") + std::strerror(errno) + "\n").c_str());
+        ::close(dup_fd);
+        return 0;
+    }
+
+    ensure_backend_init();
+    g_model = llama_model_load_from_file_ptr(file, model_params_for(gpuLayers));
+    ::fclose(file);
+
+    if (!g_model) append_log("llama_model_load_from_file_ptr returned null.\n");
+    g_cancel_requested.store(false, std::memory_order_release);
+    return reinterpret_cast<jlong>(g_model);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_lumena_android_llama_LlamaNative_nativeLastError(JNIEnv * env, jobject) {
+    const std::string log = last_log_copy();
+    return env->NewStringUTF(log.c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL
