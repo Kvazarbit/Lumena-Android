@@ -202,6 +202,17 @@ object EmbeddedLlamaRuntime {
             val file = File(modelRef)
             require(file.isFile) { "GGUF model not found: $modelRef" }
             val bytes = file.length()
+            val probe = LlamaLoadDiagnostics.parseProbe(
+                LlamaNative.nativeProbeModel(modelRef)
+            )
+            if (!probe.ok) {
+                throwLoadFailure(
+                    probe = probe,
+                    profile = profile,
+                    fileBytes = bytes,
+                    nativeLog = probe.raw
+                )
+            }
             requireSafeMemory(bytes, profile)
             val result = loadWithGpuFallback(
                 modelBytes = bytes,
@@ -210,17 +221,21 @@ object EmbeddedLlamaRuntime {
             ) { gpuLayers ->
                 LlamaNative.nativeLoadModel(modelRef, gpuLayers)
             }
-            if (result != 0L) loadedModelBytes = bytes
+            if (result != 0L) {
+                loadedModelBytes = bytes
+            } else {
+                throwLoadFailure(
+                    probe = probe,
+                    profile = profile,
+                    fileBytes = bytes,
+                    nativeLog = LlamaNative.nativeLastError()
+                )
+            }
             result
         }
 
         check(loaded != 0L) {
-            val native = LlamaNative.nativeLastError().trim()
-            if (native.isBlank()) {
-                "llama.cpp could not load this GGUF model."
-            } else {
-                "llama.cpp could not load this GGUF model.\n$native"
-            }
+            "Embedded model load failed without a native diagnostic."
         }
         handle = loaded
         loadedModelRef = modelRef
@@ -238,6 +253,18 @@ object EmbeddedLlamaRuntime {
         return descriptor.use { pfd ->
             check(pfd.fd >= 0) { "Android returned an invalid file descriptor for the GGUF model" }
             val bytes = pfd.statSize.coerceAtLeast(0L)
+            val probe = LlamaLoadDiagnostics.parseProbe(
+                LlamaNative.nativeProbeModelFd(pfd.fd)
+            )
+            if (!probe.ok) {
+                throwLoadFailure(
+                    probe = probe,
+                    profile = profile,
+                    fileBytes = bytes,
+                    nativeLog = probe.raw
+                )
+            }
+
             requireSafeMemory(bytes, profile)
             val result = loadWithGpuFallback(
                 modelBytes = bytes,
@@ -246,9 +273,37 @@ object EmbeddedLlamaRuntime {
             ) { gpuLayers ->
                 LlamaNative.nativeLoadModelFd(pfd.fd, gpuLayers)
             }
-            if (result != 0L) loadedModelBytes = bytes
+            if (result != 0L) {
+                loadedModelBytes = bytes
+            } else {
+                throwLoadFailure(
+                    probe = probe,
+                    profile = profile,
+                    fileBytes = bytes,
+                    nativeLog = LlamaNative.nativeLastError()
+                )
+            }
             result
         }
+    }
+
+    private fun throwLoadFailure(
+        probe: LlamaModelProbeInfo,
+        profile: LlamaRuntimeProfile,
+        fileBytes: Long,
+        nativeLog: String
+    ): Nothing {
+        val failure = LlamaLoadDiagnostics.classify(
+            probe = probe,
+            nativeLog = nativeLog,
+            availableRamGb = profile.availableRamGb,
+            fileBytes = fileBytes
+        )
+        error(
+            failure.userMessage +
+                "\n" +
+                failure.technicalSummary
+        )
     }
 
     private fun requireSafeMemory(modelBytes: Long, profile: LlamaRuntimeProfile) {
