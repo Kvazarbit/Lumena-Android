@@ -17,6 +17,7 @@ import java.io.Closeable
 class EmbeddedLlamaClient(
     context: Context,
     private val modelRef: String,
+    private val computeMode: String = "auto",
     private val temperature: Float = 0.15f
 ) : Closeable, ChatModelClient {
     private val appContext = context.applicationContext
@@ -30,6 +31,7 @@ class EmbeddedLlamaClient(
                 modelRef = modelRef,
                 prompt = prompt,
                 profile = profile,
+                computeMode = computeMode,
                 temperature = temperature
             ).trim()
             check(text.isNotBlank()) { "llama.cpp returned no text" }
