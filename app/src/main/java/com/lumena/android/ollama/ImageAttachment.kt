@@ -39,10 +39,10 @@ object ImageSearchResultParser {
             .asSequence()
             .mapNotNull { item ->
                 val thumbnail = item.thumbnail_url.trim()
-                if (!isAllowedWikimediaHttps(thumbnail)) return@mapNotNull null
+                if (!isAllowedImagePreviewHttps(thumbnail)) return@mapNotNull null
 
                 val sourcePage = item.source_page.trim()
-                    .takeIf(::isAllowedWikimediaHttps)
+                    .takeIf(::isAllowedImageSourceHttps)
                     .orEmpty()
 
                 WorkflowImage(
@@ -57,13 +57,35 @@ object ImageSearchResultParser {
             .toList()
     }
 
-    private fun isAllowedWikimediaHttps(raw: String): Boolean {
+    private fun isAllowedImagePreviewHttps(raw: String): Boolean {
         if (!raw.startsWith("https://", ignoreCase = true)) return false
         val authority = raw
             .substringAfter("https://", "")
             .substringBefore('/')
             .substringBefore(':')
             .lowercase()
-        return authority == "wikimedia.org" || authority.endsWith(".wikimedia.org")
+
+        val wikimedia =
+            authority == "wikimedia.org" ||
+                authority.endsWith(".wikimedia.org")
+        val openverse =
+            authority == "api.openverse.org" ||
+                authority == "openverse.org" ||
+                authority.endsWith(".openverse.org")
+
+        return wikimedia || openverse
+    }
+
+    private fun isAllowedImageSourceHttps(raw: String): Boolean {
+        if (!raw.startsWith("https://", ignoreCase = true)) return false
+        val authority = raw
+            .substringAfter("https://", "")
+            .substringBefore('/')
+            .substringBefore(':')
+            .lowercase()
+
+        return authority == "commons.wikimedia.org" ||
+            authority == "openverse.org" ||
+            authority.endsWith(".openverse.org")
     }
 }
