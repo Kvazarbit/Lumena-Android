@@ -285,6 +285,9 @@ class AgentControllerTest {
 
         assertTrue(instruction is ControllerInstruction.Stop)
         assertFalse(instruction is ControllerInstruction.AskModelAgain)
+        val stopped = instruction as ControllerInstruction.Stop
+        assertTrue(stopped.reason.contains("Embedded model load failed"))
+        assertTrue(stopped.reason.contains("technical log omitted"))
     }
 
     @Test
