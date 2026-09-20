@@ -896,6 +896,71 @@ def ollama_status() -> dict[str, Any]:
         "error": None,
     }
 
+def ollama_generate(args: dict[str, Any]) -> dict[str, Any]:
+    model = str(args.get("model", "")).strip()
+    prompt = str(args.get("prompt", ""))
+    if not MODEL_RE.fullmatch(model):
+        raise ValueError("Invalid Ollama model name")
+    if not prompt.strip():
+        raise ValueError("ollama.generate requires a non-empty prompt")
+    if len(prompt) > 16000:
+        raise ValueError("ollama.generate prompt exceeds 16000 characters")
+
+    timeout = _bounded_int(args.get("timeout"), 60, 5, 180)
+    body = json.dumps({
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "keep_alive": str(args.get("keep_alive", "5m"))[:32],
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        f"{OLLAMA_API}/api/generate",
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read(MAX_HTTP_JSON + 1)
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read(4096).decode("utf-8", errors="replace")
+        raise ValueError(f"Ollama HTTP {exc.code}: {body_text[:1000]}") from exc
+    except urllib.error.URLError as exc:
+        raise ValueError(f"Ollama request failed: {exc.reason}") from exc
+
+    if len(raw) > MAX_HTTP_JSON:
+        raise ValueError("Ollama response exceeds 2 MiB limit")
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Ollama returned invalid JSON: {exc}") from exc
+
+    result = {
+        "model": payload.get("model") or model,
+        "response": payload.get("response", ""),
+        "done": payload.get("done"),
+        "done_reason": payload.get("done_reason"),
+        "total_duration": payload.get("total_duration"),
+        "load_duration": payload.get("load_duration"),
+        "prompt_eval_count": payload.get("prompt_eval_count"),
+        "eval_count": payload.get("eval_count"),
+        "eval_duration": payload.get("eval_duration"),
+    }
+    return {
+        "ok": True,
+        "exitCode": 0,
+        "stdout": clamp(json.dumps(result, ensure_ascii=False, indent=2)),
+        "stderr": "",
+        "error": None,
+    }
+
+
 def ollama_start() -> dict[str, Any]:
     binary = ollama_binary()
     current = ollama_status()
@@ -1276,6 +1341,9 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
     if tool == "ollama.status":
         return ollama_status()
+
+    if tool == "ollama.generate":
+        return ollama_generate(args)
 
     if tool == "ollama.start":
         return ollama_start()
