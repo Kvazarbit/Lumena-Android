@@ -37,7 +37,7 @@ object ToolRegistry {
         ToolSpec("git.status", ToolRisk.READ_ONLY, setOf("cwd"), "Inspect repository status without optional locks; cwd may be @Lumena-Android."),
         ToolSpec("git.diff", ToolRisk.READ_ONLY, setOf("cwd"), "Inspect repository diff with external diff/textconv disabled; cwd may be @Lumena-Android."),
         ToolSpec("git.log", ToolRisk.READ_ONLY, setOf("cwd"), "Inspect recent Git commits; cwd may be @Lumena-Android."),
-        ToolSpec("ollama.status", ToolRisk.READ_ONLY, description = "Inspect local Ollama status and models."),
+        ToolSpec("ollama.status", ToolRisk.READ_ONLY, description = "Inspect Ollama server state, installed models, and currently loaded models."),
 
         ToolSpec("project.create", ToolRisk.MUTATING, setOf("name"), "Create a workspace project."),
         ToolSpec("dir.create", ToolRisk.MUTATING, setOf("path"), "Create a directory inside the workspace."),
