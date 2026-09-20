@@ -96,7 +96,18 @@ class WorkflowRunner(
                 }
             )
             onModelText("")
-            val modelMessages = withDynamicContext(current, state)
+            val relevantMemory = relevantMemoryProvider(state.task)
+            if (relevantMemory.isNotEmpty()) {
+                onProgress(
+                    relevantMemory
+                        .take(8)
+                        .joinToString(
+                            prefix = "MEMORY CONTEXT · ${relevantMemory.size}\n",
+                            separator = "\n"
+                        ) { "- ${it.take(700)}" }
+                )
+            }
+            val modelMessages = withDynamicContext(current, state, relevantMemory)
             val replyResult = modelClient.chatStreaming(model, modelMessages) { partial ->
                 onModelText(partial)
             }
@@ -401,13 +412,14 @@ class WorkflowRunner(
 
     private fun withDynamicContext(
         history: List<OllamaMessage>,
-        state: AgentControlState
+        state: AgentControlState,
+        relevantMemory: List<String>
     ): List<OllamaMessage> {
         val staticSystem = history.firstOrNull { it.role == "system" }?.content
             ?: LocalWorkflowAgent.systemPrompt
         val dynamic = controller.dynamicContext(
             state,
-            relevantMemory = relevantMemoryProvider(state.task)
+            relevantMemory = relevantMemory
         )
         val compactGoal = state.task.goal
             .replace(Regex("[\\r\\n]+"), " ")
