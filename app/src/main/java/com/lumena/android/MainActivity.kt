@@ -71,9 +71,15 @@ class MainActivity : ComponentActivity() {
     private fun serviceComponent() = ComponentName(this, LumenaAccessibilityService::class.java)
     private fun isAccessibilityEnabled(): Boolean {
         if (Settings.Secure.getInt(contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 0) != 1) return false
-        val expected = serviceComponent().flattenToString()
+        val expected = serviceComponent()
         return Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
-            .orEmpty().split(':').any { it.equals(expected, ignoreCase = true) }
+            .orEmpty()
+            .split(':')
+            .mapNotNull(ComponentName::unflattenFromString)
+            .any { enabled ->
+                enabled.packageName.equals(expected.packageName, ignoreCase = true) &&
+                    enabled.className.equals(expected.className, ignoreCase = true)
+            }
     }
     private fun openAccessibilitySettings() = startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     private fun openAppDetails() = startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply { data = Uri.parse("package:$packageName") })
