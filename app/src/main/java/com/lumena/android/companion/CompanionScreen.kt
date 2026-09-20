@@ -290,24 +290,51 @@ fun CompanionScreen() {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth().padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Auto-return result", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "After your Run once approval, Lumena sends the real LUMENA_RESULT back to the same ChatGPT chat automatically. New tool calls still require your approval.",
-                        style = MaterialTheme.typography.bodySmall
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Safe Auto", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Automatically runs only read-only tools: health, workspace.list, file.read, git.status, git.diff, git.log, ollama.status.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Switch(
+                        checked = safeAuto,
+                        onCheckedChange = {
+                            safeAuto = it
+                            LumenaPreferences.saveCompanionSafeAuto(context, it)
+                        }
                     )
                 }
-                Switch(
-                    checked = autoReturn,
-                    onCheckedChange = {
-                        autoReturn = it
-                        LumenaPreferences.saveCompanionAutoReturn(context, it)
+
+                HorizontalDivider()
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Auto-return result", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "After an approved or Safe Auto tool finishes, Lumena sends the real LUMENA_RESULT back to ChatGPT automatically.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
-                )
+                    Switch(
+                        checked = autoReturn,
+                        onCheckedChange = {
+                            autoReturn = it
+                            LumenaPreferences.saveCompanionAutoReturn(context, it)
+                        }
+                    )
+                }
             }
         }
 
@@ -316,18 +343,33 @@ fun CompanionScreen() {
         Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
         detected?.let { command ->
-            val plan = ToolGate.plan(command.decision)
+            val plan = planFor(command)
+            val readOnly = plan.allowed &&
+                ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
+            val autoEligible = safeAuto && readOnly
+
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(command.decision.request.tool, style = MaterialTheme.typography.titleMedium)
-                    Text(command.decision.reason)
-                    Text("Args: ${command.decision.request.args}", style = MaterialTheme.typography.bodySmall)
+                    Text(plan.request.tool, style = MaterialTheme.typography.titleMedium)
+                    Text(plan.reason)
+                    Text("Args: ${plan.request.args}", style = MaterialTheme.typography.bodySmall)
                     Text(
-                        if (plan.allowed) "Allowed by tool registry · explicit approval required" else "BLOCKED: unknown tool",
+                        when {
+                            !plan.allowed -> "BLOCKED by tool registry"
+                            autoEligible -> "READ-ONLY · Safe Auto eligible"
+                            else -> "Approval required · this tool can change state or execute code"
+                        },
                         style = MaterialTheme.typography.bodySmall
                     )
-                    Button(enabled = !busy && plan.allowed, onClick = { runDetected() }) {
-                        Text(if (busy) "Working…" else "Run once")
+                    if (!autoEligible || command.fingerprint == handledFingerprint) {
+                        Button(
+                            enabled = !busy && plan.allowed,
+                            onClick = { runDetected() }
+                        ) {
+                            Text(if (busy) "Working…" else "Run once")
+                        }
+                    } else if (busy) {
+                        Text("Running automatically…", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -335,10 +377,7 @@ fun CompanionScreen() {
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { refreshCommand(force = false) }) { Text("Scan ChatGPT") }
-            TextButton(onClick = {
-                handledFingerprint = null
-                refreshCommand(force = true)
-            }) { Text("Rescan") }
+            TextButton(onClick = { refreshCommand(force = true) }) { Text("Rescan") }
         }
 
         if (lastResult.isNotBlank()) {
@@ -363,10 +402,13 @@ fun CompanionScreen() {
 
         Spacer(Modifier.height(12.dp))
         Text(
-            if (autoReturn) {
-                "Security: every external LUMENA_TOOL still requires your Run once tap. Auto-return only sends the real result after an approved tool finishes. No unrestricted shell tool is exposed."
-            } else {
-                "Security: commands read from ChatGPT are never auto-executed. Every external LUMENA_TOOL request requires your Run once tap. No unrestricted shell tool is exposed."
+            when {
+                safeAuto && autoReturn ->
+                    "Security: only READ_ONLY tools may auto-run. Mutating and executable tools still require Run once. Results return automatically. No unrestricted shell tool is exposed."
+                safeAuto ->
+                    "Security: only READ_ONLY tools may auto-run. Mutating and executable tools still require Run once. Results stay in Lumena until you send them."
+                else ->
+                    "Security: Safe Auto is off. Every external LUMENA_TOOL requires Run once. No unrestricted shell tool is exposed."
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
