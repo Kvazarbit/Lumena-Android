@@ -57,21 +57,36 @@ class AgentController(
     fun initial(task: TaskState): AgentControlState = AgentControlState(task = task)
 
     fun onModelFailure(state: AgentControlState, message: String): ControllerInstruction {
+        val compactMessage = message.takeLast(4_000)
         val failures = state.modelFailures + 1
         val next = state.copy(
             modelFailures = failures,
             task = state.task.copy(
                 status = TaskStatus.WAITING_MODEL,
-                errors = (state.task.errors + message).takeLast(8)
+                errors = (state.task.errors + compactMessage).takeLast(8)
             )
         )
-        return if (failures > budget.maxModelRetries) {
-            ControllerInstruction.Stop("Model retry limit reached: $message", fail(next, message))
-        } else {
-            ControllerInstruction.AskModelAgain(
-                feedback = "The previous model call failed: ${message.take(600)}. Retry the SAME task from the verified state. Do not invent results.",
-                state = next
-            )
+
+        val lower = compactMessage.lowercase()
+        val nonRetryable = listOf(
+            "could not load this gguf model",
+            "gguf model not found",
+            "invalid android file descriptor",
+            "unauthorized",
+            "http 401",
+            "bridge token is required"
+        ).any(lower::contains)
+
+        return when {
+            nonRetryable ->
+                ControllerInstruction.Stop(compactMessage, fail(next, compactMessage))
+            failures > budget.maxModelRetries ->
+                ControllerInstruction.Stop("Model retry limit reached: $compactMessage", fail(next, compactMessage))
+            else ->
+                ControllerInstruction.AskModelAgain(
+                    feedback = "The previous model call failed: ${compactMessage.take(600)}. Retry the SAME task from the verified state. Do not invent results.",
+                    state = next
+                )
         }
     }
 
@@ -124,6 +139,15 @@ class AgentController(
             )
         }
 
+        val adaptiveMaxSteps = when {
+            nextPlan.isNotEmpty() ->
+                (nextPlan.size + 2).coerceIn(3, budget.maxTotalSteps)
+            state.task.maxSteps < 3 ->
+                3
+            else ->
+                state.task.maxSteps.coerceAtMost(budget.maxTotalSteps)
+        }
+
         val next = state.copy(
             plan = nextPlan,
             protocolRetries = 0,
@@ -132,6 +156,7 @@ class AgentController(
             identicalToolCalls = identical,
             task = state.task.copy(
                 status = if (validation.requiresConfirmation) TaskStatus.WAITING_CONFIRMATION else TaskStatus.EXECUTING,
+                maxSteps = maxOf(state.task.step + 1, adaptiveMaxSteps),
                 lastTool = canonical.tool
             )
         )
