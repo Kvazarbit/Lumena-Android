@@ -17,6 +17,7 @@ object LocalWorkflowAgent {
         - For current public internet data, use http.json with a public HTTPS JSON API before claiming network access is unavailable.
         - If the needed public source is HTML or plain text instead of JSON, use http.get.
         - Never create or modify files merely to inspect what already exists.
+        - python.run and python.syntax_check accept ONLY a workspace-relative path to an existing .py file. NEVER put Python source code in the script argument. If new code is required, call file.write first, then python.run or python.syntax_check.
         - On the first tool call of a multi-step task include a short public plan of 2-6 steps.
         - After every TOOL_RESULT choose exactly one next tool.
         - Never claim a tool ran unless TOOL_RESULT proves it.
