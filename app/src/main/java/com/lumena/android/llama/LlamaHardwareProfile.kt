@@ -15,6 +15,7 @@ data class LlamaRuntimeProfile(
     val totalRamGb: Double,
     val availableRamGb: Double,
     val cpuCores: Int,
+    val gpuName: String?,
     val memoryPressure: Boolean,
     val powerSave: Boolean,
     val thermalThrottled: Boolean
@@ -28,6 +29,10 @@ data class LlamaRuntimeProfile(
             append(" · ")
             append(threads)
             append(" threads")
+            gpuName?.takeIf { it.isNotBlank() }?.let {
+                append(" · Vulkan ")
+                append(it)
+            }
             append(" · ctx ")
             append(contextSize)
             append(" · batch ")
@@ -40,6 +45,9 @@ data class LlamaRuntimeProfile(
 
 object LlamaHardwareProfile {
     private const val GIB = 1024.0 * 1024.0 * 1024.0
+    private val detectedGpuName: String by lazy {
+        runCatching { LlamaNative.nativeGpuInfo().trim() }.getOrDefault("")
+    }
 
     fun detect(context: Context): LlamaRuntimeProfile {
         val app = context.applicationContext
@@ -50,6 +58,7 @@ object LlamaHardwareProfile {
         val totalGb = memory.totalMem / GIB
         val availableGb = memory.availMem / GIB
         val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+        val gpuName = detectedGpuName.takeIf { it.isNotBlank() }
 
         val memoryPressure = memory.lowMemory ||
             availableGb < 2.0 ||
@@ -115,6 +124,7 @@ object LlamaHardwareProfile {
             totalRamGb = totalGb,
             availableRamGb = availableGb,
             cpuCores = cores,
+            gpuName = gpuName,
             memoryPressure = memoryPressure,
             powerSave = powerSave,
             thermalThrottled = thermalThrottled
