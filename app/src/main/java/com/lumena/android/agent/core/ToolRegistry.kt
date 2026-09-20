@@ -46,8 +46,8 @@ object ToolRegistry {
         ToolSpec("git.add", ToolRisk.MUTATING, setOf("cwd", "paths"), "Stage workspace files."),
         ToolSpec("git.commit", ToolRisk.MUTATING, setOf("cwd", "message"), "Commit staged changes."),
 
-        ToolSpec("python.run", ToolRisk.EXECUTABLE, setOf("script"), "Run an existing Python script inside the workspace."),
-        ToolSpec("python.syntax_check", ToolRisk.EXECUTABLE, setOf("script"), "Compile-check a Python script without running its logic."),
+        ToolSpec("python.run", ToolRisk.EXECUTABLE, setOf("script"), "Run an existing .py file inside the workspace. The script arg is a file path only, never Python source code."),
+        ToolSpec("python.syntax_check", ToolRisk.EXECUTABLE, setOf("script"), "Compile-check an existing .py file. The script arg is a file path only, never Python source code."),
         ToolSpec("python.tests", ToolRisk.EXECUTABLE, setOf("cwd"), "Run project tests through the controlled Python runner."),
         ToolSpec("ollama.start", ToolRisk.EXECUTABLE, description = "Start the same-phone Ollama sidecar."),
         ToolSpec("ollama.pull", ToolRisk.EXECUTABLE, setOf("model"), "Download an Ollama model after approval.")
@@ -101,6 +101,23 @@ object ToolRegistry {
                 else -> 16_000
             }
             value.length > limit
+        }
+
+        if (canonical in setOf("python.run", "python.syntax_check")) {
+            val script = call.args["script"].orEmpty().trim()
+            val pathLike = script.length in 1..512 &&
+                script.endsWith(".py", ignoreCase = true) &&
+                '\n' !in script &&
+                '\r' !in script &&
+                '\u0000' !in script
+            if (!pathLike) {
+                return ToolValidation(
+                    allowed = false,
+                    canonicalTool = canonical,
+                    requiresConfirmation = true,
+                    error = "python script arg must be a path to an existing .py file, not inline Python source. Use file.write first if code must be created."
+                )
+            }
         }
         if (oversized != null) {
             return ToolValidation(
