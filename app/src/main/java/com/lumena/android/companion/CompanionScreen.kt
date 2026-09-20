@@ -300,7 +300,7 @@ fun CompanionScreen() {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Safe Auto", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "Automatically runs only read-only tools: health, workspace.list, file.read, git.status, git.diff, git.log, ollama.status.",
+                            "Automatically runs only read-only tools: health, system.time, workspace.list, file.read, git.status, git.diff, git.log, ollama.status.",
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
