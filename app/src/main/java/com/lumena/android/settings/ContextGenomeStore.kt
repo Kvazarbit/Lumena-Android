@@ -49,6 +49,15 @@ data class ContextGenomeStats(
     val links: Int,
     val capsules: Int
 )
+data class GenomeUnpackedUnit(
+    val id: String,
+    val layer: GenomeLayer,
+    val summary: String,
+    val anchors: List<ExperienceAnchor>,
+    val events: List<GenomeEvent>,
+    val links: List<GenomeLink>
+)
+
 
 /**
  * SQLite evidence ledger for Lumena Context Genome.
@@ -386,6 +395,89 @@ object ContextGenomeStore {
         out
     }
 
+    fun unpack(
+        context: Context,
+        unitId: String,
+        maxEvents: Int = 50
+    ): GenomeUnpackedUnit? = synchronized(lock) {
+        val db = helper(context).readableDatabase
+        val projection = loadProjection(context) ?: ExperienceMemoryState()
+        val allCapsules = capsules(context, limit = 128)
+        val capsuleById = allCapsules.associateBy { it.id }
+
+        val directAnchor = projection.anchors.firstOrNull { it.id == unitId }
+        val capsule = capsuleById[unitId]
+
+        val anchorIds = when {
+            directAnchor != null -> listOf(directAnchor.id)
+            capsule == null -> emptyList()
+            capsule.level <= 1 -> capsule.childIds
+            else -> capsule.childIds
+                .flatMap { childId -> capsuleById[childId]?.childIds.orEmpty() }
+                .distinct()
+        }
+
+        if (directAnchor == null && capsule == null) {
+            return@synchronized null
+        }
+
+        val anchors = projection.anchors
+            .filter { it.id in anchorIds }
+            .sortedByDescending { it.lastSeenAt }
+
+        val relatedLinks = mutableListOf<GenomeLink>()
+        db.query(
+            "genome_links",
+            arrayOf("from_id", "to_id", "relation", "created_at"),
+            null, null, null, null,
+            "created_at DESC"
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val link = GenomeLink(
+                    fromId = cursor.getString(0),
+                    toId = cursor.getString(1),
+                    relation = cursor.getString(2),
+                    createdAt = cursor.getLong(3)
+                )
+                if (
+                    link.fromId == unitId ||
+                    link.toId == unitId ||
+                    link.fromId in anchorIds ||
+                    link.toId in anchorIds
+                ) {
+                    relatedLinks += link
+                }
+            }
+        }
+
+        val eventIds = (
+            capsule?.evidenceIds.orEmpty() +
+                relatedLinks
+                    .filter { it.relation == "SUPPORTS" && it.toId in anchorIds }
+                    .map { it.fromId }
+            )
+            .distinct()
+            .takeLast(maxEvents.coerceIn(1, 200))
+
+        val events = loadEventsByIds(db, eventIds)
+            .sortedByDescending { it.createdAt }
+
+        val layer = when {
+            directAnchor != null -> GenomeLayer.ANCHOR
+            capsule!!.level >= 2 -> GenomeLayer.TOPIC_CAPSULE
+            else -> GenomeLayer.SIGNATURE_CAPSULE
+        }
+
+        GenomeUnpackedUnit(
+            id = unitId,
+            layer = layer,
+            summary = capsule?.summary ?: anchors.firstOrNull()?.summary.orEmpty(),
+            anchors = anchors,
+            events = events,
+            links = relatedLinks.take(200)
+        )
+    }
+
     fun stats(context: Context): ContextGenomeStats = synchronized(lock) {
         val db = helper(context).readableDatabase
         ContextGenomeStats(
@@ -612,6 +704,41 @@ object ContextGenomeStore {
             values,
             SQLiteDatabase.CONFLICT_REPLACE
         )
+    }
+
+    private fun loadEventsByIds(
+        db: SQLiteDatabase,
+        ids: List<String>
+    ): List<GenomeEvent> {
+        if (ids.isEmpty()) return emptyList()
+        val placeholders = ids.joinToString(",") { "?" }
+        val out = mutableListOf<GenomeEvent>()
+        db.query(
+            "genome_events",
+            arrayOf(
+                "id", "created_at", "tool", "target", "args_hash",
+                "ok", "exit_code", "result_hash", "evidence_excerpt"
+            ),
+            "id IN ($placeholders)",
+            ids.toTypedArray(),
+            null, null,
+            "created_at DESC"
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                out += GenomeEvent(
+                    id = cursor.getString(0),
+                    createdAt = cursor.getLong(1),
+                    tool = cursor.getString(2),
+                    target = cursor.getString(3),
+                    argsHash = cursor.getString(4),
+                    ok = cursor.getInt(5) != 0,
+                    exitCode = if (cursor.isNull(6)) null else cursor.getInt(6),
+                    resultHash = cursor.getString(7),
+                    evidenceExcerpt = cursor.getString(8)
+                )
+            }
+        }
+        return out
     }
 
     private fun mergeEvidenceIds(
