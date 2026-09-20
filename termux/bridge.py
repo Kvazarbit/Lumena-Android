@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.8
+Lumena Termux Bridge v0.9
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains file access
@@ -99,7 +99,10 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-PUBLIC_HTTPS_OPENER = urllib.request.build_opener(NoRedirectHandler())
+PUBLIC_HTTPS_OPENER = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}),
+    NoRedirectHandler(),
+)
 
 
 def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -602,7 +605,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         return {
             "ok": True,
             "exitCode": 0,
-            "stdout": f"Lumena bridge OK\nworkspace={WORKSPACE}\nversion=0.8\n",
+            "stdout": f"Lumena bridge OK\nworkspace={WORKSPACE}\nversion=0.9\n",
             "stderr": "",
             "error": None,
         }
@@ -798,7 +801,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.8"
+    server_version = "LumenaBridge/0.9"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[bridge] {self.address_string()} - {fmt % args}")
@@ -880,7 +883,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Lumena Termux Bridge v0.8")
+    print("Lumena Termux Bridge v0.9")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")
