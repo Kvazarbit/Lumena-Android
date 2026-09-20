@@ -63,6 +63,27 @@ class ToolRegistryTest {
     }
 
     @Test
+    fun pythonRunRejectsInlineSourceAndAcceptsPath() {
+        val inline = ToolRegistry.validate(
+            AgentDecision.ToolCall(
+                "python.run",
+                mapOf("script" to "import requests\nprint('x')")
+            )
+        )
+        assertFalse(inline.allowed)
+        assertTrue(inline.error!!.contains("path"))
+
+        val path = ToolRegistry.validate(
+            AgentDecision.ToolCall(
+                "python.run",
+                mapOf("script" to "demo_project/api_test.py")
+            )
+        )
+        assertTrue(path.allowed)
+        assertTrue(path.requiresConfirmation)
+    }
+
+    @Test
     fun explicitAliasCanonicalizesWithoutFuzzyMatching() {
         assertEquals("git.status", ToolRegistry.canonicalize("git_status"))
         assertEquals("mystery-status", ToolRegistry.canonicalize("mystery-status"))
