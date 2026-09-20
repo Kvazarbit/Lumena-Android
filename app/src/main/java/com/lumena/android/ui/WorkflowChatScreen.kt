@@ -54,6 +54,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
@@ -102,6 +103,8 @@ import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -977,13 +980,142 @@ private fun MessageBubble(message: ChatBubble) {
                 Text(message.text, modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp))
             }
         } else {
-            Text(
-                message.text,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
-                style = MaterialTheme.typography.bodyLarge
-            )
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (message.text.isNotBlank()) {
+                    Text(
+                        message.text,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+                message.images.take(4).forEach { image ->
+                    RemoteImageCard(image)
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun RemoteImageCard(image: WorkflowImage) {
+    val uriHandler = LocalUriHandler.current
+    val bitmap by produceState<ImageBitmap?>(
+        initialValue = null,
+        key1 = image.thumbnailUrl
+    ) {
+        value = withContext(Dispatchers.IO) {
+            loadRemoteWikimediaBitmap(image.thumbnailUrl)
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier.padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            bitmap?.let { preview ->
+                Image(
+                    bitmap = preview,
+                    contentDescription = image.title.ifBlank { "Image result" },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(220.dp)
+                        .clip(RoundedCornerShape(16.dp)),
+                    contentScale = ContentScale.Crop
+                )
+            } ?: Text(
+                "Preview unavailable",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (image.title.isNotBlank()) {
+                Text(
+                    image.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            val sourceLabel = image.source.ifBlank { "Wikimedia Commons" }
+            Text(
+                sourceLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (isAllowedWikimediaUrl(image.sourcePage)) {
+                TextButton(
+                    onClick = {
+                        runCatching { uriHandler.openUri(image.sourcePage) }
+                    }
+                ) {
+                    Text("Open source")
+                }
+            }
+        }
+    }
+}
+
+private fun loadRemoteWikimediaBitmap(rawUrl: String): ImageBitmap? {
+    if (!isAllowedWikimediaUrl(rawUrl)) return null
+    val url = rawUrl.toHttpUrlOrNull() ?: return null
+
+    val request = Request.Builder()
+        .url(url)
+        .header("Accept", "image/*")
+        .header("User-Agent", "Lumena-Android/0.12")
+        .get()
+        .build()
+
+    return runCatching {
+        remoteImageClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return@use null
+            val body = response.body ?: return@use null
+            val contentType = body.contentType()?.toString().orEmpty()
+            if (!contentType.startsWith("image/", ignoreCase = true)) return@use null
+
+            val maxBytes = 8 * 1024 * 1024
+            val declared = body.contentLength()
+            if (declared > maxBytes) return@use null
+
+            val bytes = body.byteStream().use { readBoundedBytes(it, maxBytes) }
+                ?: return@use null
+
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+        }
+    }.getOrNull()
+}
+
+private fun readBoundedBytes(
+    input: InputStream,
+    maxBytes: Int
+): ByteArray? {
+    val out = ByteArrayOutputStream()
+    val buffer = ByteArray(8192)
+    var total = 0
+
+    while (true) {
+        val read = input.read(buffer)
+        if (read < 0) break
+        total += read
+        if (total > maxBytes) return null
+        out.write(buffer, 0, read)
+    }
+    return out.toByteArray()
+}
+
+private fun isAllowedWikimediaUrl(raw: String): Boolean {
+    val url = raw.toHttpUrlOrNull() ?: return false
+    if (url.scheme != "https") return false
+    val host = url.host.lowercase()
+    return host == "wikimedia.org" || host.endsWith(".wikimedia.org")
 }
 
 @Composable
