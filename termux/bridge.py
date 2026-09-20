@@ -673,6 +673,9 @@ def image_search(args: dict[str, Any]) -> dict[str, Any]:
         if len(images) >= limit:
             break
 
+    if not images:
+        raise ValueError("No Wikimedia Commons images found for this query")
+
     result = {
         "provider": "Wikimedia Commons",
         "query": query,
