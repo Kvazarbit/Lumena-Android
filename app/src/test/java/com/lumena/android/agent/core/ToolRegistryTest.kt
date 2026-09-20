@@ -45,6 +45,24 @@ class ToolRegistryTest {
     }
 
     @Test
+    fun imageSearchIsReadOnlyAndRequiresQuery() {
+        val missing = ToolRegistry.validate(
+            AgentDecision.ToolCall("image.search", emptyMap())
+        )
+        assertFalse(missing.allowed)
+        assertTrue(missing.error!!.contains("query"))
+
+        val valid = ToolRegistry.validate(
+            AgentDecision.ToolCall(
+                "image.search",
+                mapOf("query" to "woman portrait")
+            )
+        )
+        assertTrue(valid.allowed)
+        assertFalse(valid.requiresConfirmation)
+    }
+
+    @Test
     fun inspectBatchIsReadOnlyButRequiresRequests() {
         val missing = ToolRegistry.validate(
             AgentDecision.ToolCall("inspect.batch", emptyMap())
