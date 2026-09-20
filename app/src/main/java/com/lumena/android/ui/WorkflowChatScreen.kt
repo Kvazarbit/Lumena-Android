@@ -281,7 +281,7 @@ fun WorkflowChatScreen(
 
     fun bridgeOrNull(): TermuxBridgeClient? = bridgeToken
         .takeIf { it.isNotBlank() }
-        ?.let { TermuxBridgeClient(bridgeUrl, it) }
+        ?.let { TermuxBridgeClient(bridgeUrl, it, context) }
 
     fun modelClient(): ChatModelClient =
         if (inferenceBackend == "embedded") EmbeddedLlamaClient(context, ggufPath)
