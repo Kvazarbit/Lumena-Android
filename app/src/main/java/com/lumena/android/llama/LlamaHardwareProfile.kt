@@ -43,31 +43,25 @@ data class LlamaRuntimeProfile(
         }
 }
 
-object LlamaHardwareProfile {
-    private const val GIB = 1024.0 * 1024.0 * 1024.0
-    private val detectedGpuName: String by lazy {
-        runCatching { LlamaNative.nativeGpuInfo().trim() }.getOrDefault("")
-    }
+data class LlamaHardwareInputs(
+    val totalRamGb: Double,
+    val availableRamGb: Double,
+    val cpuCores: Int,
+    val gpuName: String?,
+    val lowMemory: Boolean,
+    val powerSave: Boolean,
+    val thermalThrottled: Boolean
+)
 
-    fun detect(context: Context): LlamaRuntimeProfile {
-        val app = context.applicationContext
-        val activity = app.getSystemService(ActivityManager::class.java)
-        val memory = ActivityManager.MemoryInfo().also(activity::getMemoryInfo)
-        val power = app.getSystemService(PowerManager::class.java)
+object LlamaHardwarePolicy {
+    fun resolve(inputs: LlamaHardwareInputs): LlamaRuntimeProfile {
+        val totalGb = inputs.totalRamGb.coerceAtLeast(0.0)
+        val availableGb = inputs.availableRamGb.coerceAtLeast(0.0)
+        val cores = inputs.cpuCores.coerceAtLeast(1)
 
-        val totalGb = memory.totalMem / GIB
-        val availableGb = memory.availMem / GIB
-        val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
-        val gpuName = detectedGpuName.takeIf { it.isNotBlank() }
-
-        val memoryPressure = memory.lowMemory ||
+        val memoryPressure = inputs.lowMemory ||
             availableGb < 2.0 ||
-            memory.availMem.toDouble() / memory.totalMem.toDouble() < 0.12
-
-        val powerSave = power.isPowerSaveMode
-        val thermalThrottled =
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-                power.currentThermalStatus >= PowerManager.THERMAL_STATUS_MODERATE
+            (totalGb > 0.0 && availableGb / totalGb < 0.12)
 
         var contextSize = when {
             totalGb >= 12.0 -> 4096
@@ -103,13 +97,13 @@ object LlamaHardwareProfile {
             maxTokens = min(maxTokens, 384)
         }
 
-        if (powerSave) {
+        if (inputs.powerSave) {
             threads = min(threads, 4)
             batchSize = min(batchSize, 256)
         }
 
-        if (thermalThrottled) {
-            threads = max(2, threads / 2)
+        if (inputs.thermalThrottled) {
+            threads = max(1, threads / 2)
             batchSize = min(batchSize, 192)
             maxTokens = min(maxTokens, 512)
         }
@@ -124,10 +118,43 @@ object LlamaHardwareProfile {
             totalRamGb = totalGb,
             availableRamGb = availableGb,
             cpuCores = cores,
-            gpuName = gpuName,
+            gpuName = inputs.gpuName?.takeIf { it.isNotBlank() },
             memoryPressure = memoryPressure,
-            powerSave = powerSave,
-            thermalThrottled = thermalThrottled
+            powerSave = inputs.powerSave,
+            thermalThrottled = inputs.thermalThrottled
+        )
+    }
+}
+
+object LlamaHardwareProfile {
+    private const val GIB = 1024.0 * 1024.0 * 1024.0
+    private val detectedGpuName: String by lazy {
+        runCatching { LlamaNative.nativeGpuInfo().trim() }.getOrDefault("")
+    }
+
+    fun detect(context: Context): LlamaRuntimeProfile {
+        val app = context.applicationContext
+        val activity = app.getSystemService(ActivityManager::class.java)
+        val memory = ActivityManager.MemoryInfo().also(activity::getMemoryInfo)
+        val power = app.getSystemService(PowerManager::class.java)
+
+        val totalGb = memory.totalMem / GIB
+        val availableGb = memory.availMem / GIB
+        val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+        val thermalThrottled =
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                power.currentThermalStatus >= PowerManager.THERMAL_STATUS_MODERATE
+
+        return LlamaHardwarePolicy.resolve(
+            LlamaHardwareInputs(
+                totalRamGb = totalGb,
+                availableRamGb = availableGb,
+                cpuCores = cores,
+                gpuName = detectedGpuName.takeIf { it.isNotBlank() },
+                lowMemory = memory.lowMemory,
+                powerSave = power.isPowerSaveMode,
+                thermalThrottled = thermalThrottled
+            )
         )
     }
 }
