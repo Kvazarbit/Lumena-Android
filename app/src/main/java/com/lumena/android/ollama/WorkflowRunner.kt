@@ -357,7 +357,17 @@ class WorkflowRunner(
     ): ToolResult = coroutineScope {
         val risk = ToolRegistry.get(request.tool)?.risk
         val requestId = request.requestId
-        if (risk != ToolRisk.EXECUTABLE || requestId.isNullOrBlank()) {
+        val processBacked = request.tool in setOf(
+            "python.run",
+            "python.syntax_check",
+            "python.tests",
+            "ollama.pull"
+        )
+        if (
+            risk != ToolRisk.EXECUTABLE ||
+            !processBacked ||
+            requestId.isNullOrBlank()
+        ) {
             return@coroutineScope localBridge.execute(request)
         }
 
