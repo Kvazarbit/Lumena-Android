@@ -258,6 +258,7 @@ fun WorkflowChatScreen(
         coordinator.cancel(reason)
         pending = null
         busy = false
+        taskApprovals.remove(task.id)
         currentTask = task.copy(status = TaskStatus.CANCELLED)
         persistSession()
     }
@@ -268,6 +269,7 @@ fun WorkflowChatScreen(
         coordinator.clearFinished()
         input = ""
         pending = null
+        taskApprovals.clear()
         currentTask = null
         history = listOf(systemMessage)
         bubbles.clear()
@@ -571,6 +573,55 @@ fun WorkflowChatScreen(
     }
 
     pending?.let { requested ->
+        fun approvePending(cacheForTask: Boolean) {
+            val taskId = requested.control.task.id
+            if (cacheForTask) {
+                grantApprovalForTask(taskId, requested.plan.request)
+            }
+            pending = null
+            currentTask = requested.control.task.copy(status = TaskStatus.EXECUTING)
+            busy = true
+            persistSession()
+
+            coordinator.launch(workScope, taskId, resetProgress = false) { runToken ->
+                if (cacheForTask) {
+                    reportProgress(
+                        taskId,
+                        runToken,
+                        "APPROVAL CACHE · exact action approved for this task"
+                    )
+                }
+
+                val outcome = try {
+                    WorkflowRunner(modelClient(), bridgeOrNull(), modelNameForRun()).approve(
+                        pending = requested,
+                        onProgress = { reportProgress(taskId, runToken, it) },
+                        onModelText = { text ->
+                            if (text.isEmpty()) coordinator.beginModelTurn(runToken)
+                            else coordinator.updateModelText(runToken, text)
+                        },
+                        isApprovedForTask = ::isApprovedForTask,
+                        onState = { acceptControl(taskId, runToken, it) }
+                    )
+                } catch (_: CancellationException) {
+                    return@launch
+                } catch (t: Throwable) {
+                    val failedControl = requested.control.copy(
+                        task = requested.control.task.copy(
+                            status = TaskStatus.FAILED,
+                            errors = (requested.control.task.errors + (t.message ?: t.toString())).takeLast(8)
+                        )
+                    )
+                    WorkflowOutcome.Failed(
+                        t.message ?: t.toString(),
+                        requested.history,
+                        failedControl
+                    )
+                }
+                applyOutcome(taskId, runToken, outcome)
+            }
+        }
+
         AlertDialog(
             onDismissRequest = { },
             title = { Text("Allow local action?") },
@@ -584,44 +635,25 @@ fun WorkflowChatScreen(
                 Text(
                     taskPlan +
                         "${requested.plan.reason}\n\nTool: ${requested.plan.request.tool}\nArgs: ${requested.plan.request.args}" +
-                        verify
+                        verify +
+                        "\n\nYou can allow this exact action once, or remember this exact tool + args until this task finishes."
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
-                    val taskId = requested.control.task.id
-                    pending = null
-                    currentTask = requested.control.task.copy(status = TaskStatus.EXECUTING)
-                    busy = true
-                    persistSession()
-                    coordinator.launch(workScope, taskId, resetProgress = false) { runToken ->
-                        val outcome = try {
-                            WorkflowRunner(modelClient(), bridgeOrNull(), modelNameForRun()).approve(
-                                pending = requested,
-                                onProgress = { reportProgress(taskId, runToken, it) },
-                                onModelText = { text ->
-                                    if (text.isEmpty()) coordinator.beginModelTurn(runToken)
-                                    else coordinator.updateModelText(runToken, text)
-                                },
-                                onState = { acceptControl(taskId, runToken, it) }
-                            )
-                        } catch (_: CancellationException) {
-                            return@launch
-                        } catch (t: Throwable) {
-                            val failedControl = requested.control.copy(
-                                task = requested.control.task.copy(
-                                    status = TaskStatus.FAILED,
-                                    errors = (requested.control.task.errors + (t.message ?: t.toString())).takeLast(8)
-                                )
-                            )
-                            WorkflowOutcome.Failed(t.message ?: t.toString(), requested.history, failedControl)
-                        }
-                        applyOutcome(taskId, runToken, outcome)
+                Column(horizontalAlignment = Alignment.End) {
+                    TextButton(onClick = { approvePending(cacheForTask = false) }) {
+                        Text("Allow once")
                     }
-                }) { Text("Allow once") }
+                    TextButton(onClick = { approvePending(cacheForTask = true) }) {
+                        Text("Allow same action for task")
+                    }
+                }
             },
             dismissButton = {
-                TextButton(onClick = { stopCurrentTask("Approval cancelled by user") }) {
+                TextButton(onClick = {
+                    taskApprovals.remove(requested.control.task.id)
+                    stopCurrentTask("Approval cancelled by user")
+                }) {
                     Text("Cancel")
                 }
             }
