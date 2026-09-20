@@ -219,17 +219,18 @@ class WorkflowRunner(
                     )
 
                     onProgress("TOOL RUNNING · ${planned.request.tool}")
-                    val result = executeWithTelemetry(
+                    val rawResult = executeWithTelemetry(
                         localBridge,
                         planned.request,
                         onToolTelemetry
                     )
-                    if (planned.request.tool == "image.search" && result.ok) {
-                        val found = ImageSearchResultParser.parse(result.stdout)
-                        found.forEach { image ->
-                            if (collectedImages.none { it.thumbnailUrl == image.thumbnailUrl }) {
-                                collectedImages += image
-                            }
+                    val (result, displayImages) = normalizeDisplayResult(
+                        planned.request,
+                        rawResult
+                    )
+                    displayImages.forEach { image ->
+                        if (collectedImages.none { it.thumbnailUrl == image.thumbnailUrl }) {
+                            collectedImages += image
                         }
                     }
                     runCatching { onToolExperience(planned.request, result) }
@@ -326,10 +327,14 @@ class WorkflowRunner(
 
         onProgress(toolCallTrace(pending.plan))
         onProgress("TOOL RUNNING · ${pending.plan.request.tool}")
-        val result = executeWithTelemetry(
+        val rawResult = executeWithTelemetry(
             localBridge,
             pending.plan.request,
             onToolTelemetry
+        )
+        val (result, approvedImages) = normalizeDisplayResult(
+            pending.plan.request,
+            rawResult
         )
         runCatching { onToolExperience(pending.plan.request, result) }
 
@@ -375,13 +380,37 @@ class WorkflowRunner(
             history = next,
             task = transition.state.task,
             control = transition.state,
-            initialImages = pending.images,
+            initialImages = (pending.images + approvedImages)
+                .distinctBy { it.thumbnailUrl }
+                .take(8),
             onProgress = onProgress,
             onModelText = onModelText,
             onToolTelemetry = onToolTelemetry,
             isApprovedForTask = isApprovedForTask,
             onState = onState
         )
+    }
+
+    private fun normalizeDisplayResult(
+        request: ToolRequest,
+        result: ToolResult
+    ): Pair<ToolResult, List<WorkflowImage>> {
+        if (
+            ToolRegistry.canonicalize(request.tool) != "image.search" ||
+            !result.ok
+        ) {
+            return result to emptyList()
+        }
+
+        val images = ImageSearchResultParser.parse(result.stdout)
+        if (images.isEmpty()) {
+            return result.copy(
+                ok = false,
+                error = "image.search returned no displayable safe image previews"
+            ) to emptyList()
+        }
+
+        return result to images
     }
 
     private suspend fun executeWithTelemetry(
