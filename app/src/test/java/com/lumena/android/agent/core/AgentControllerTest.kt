@@ -105,6 +105,20 @@ class AgentControllerTest {
     }
 
     @Test
+    fun taskAllowsFinalModelTurnAtToolLimit() {
+        val atLimit = task().copy(
+            status = TaskStatus.WAITING_MODEL,
+            step = 4,
+            maxSteps = 4
+        )
+        assertTrue(atLimit.canContinue)
+
+        val state = controller.initial(atLimit)
+        val done = controller.interpret("""{"done":true,"summary":"verified"}""", state)
+        assertTrue(done is ControllerInstruction.Finish)
+    }
+
+    @Test
     fun repeatedIdenticalCallsAreStopped() {
         var state = controller.initial(task())
         val raw = """{"tool":"workspace.list","args":{},"reason":"inspect"}"""
