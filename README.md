@@ -46,3 +46,17 @@ The bridge binds only to loopback and requires a bearer token.
 ## Build
 
 Pull requests run agent-core unit tests before `assembleDebug`. A debug APK artifact is uploaded only after tests and Android build succeed.
+
+
+## v0.12 embedded llama.cpp
+
+Lumena can run the local agent through either Ollama or an in-process llama.cpp backend.
+
+Before building the embedded backend:
+
+```bash
+bash scripts/sync_llama_cpp.sh
+./gradlew assembleDebug
+```
+
+The native runtime is packaged for arm64-v8a. GGUF model files are intentionally external to the APK; select a local GGUF path from the Model panel. Ollama remains an optional fallback.
