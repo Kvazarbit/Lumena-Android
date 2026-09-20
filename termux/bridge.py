@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.10
+Lumena Termux Bridge v0.11
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -467,7 +467,7 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.10",
+            "User-Agent": "LumenaBridge/0.11",
             "Cache-Control": "no-cache",
         },
     )
@@ -1015,7 +1015,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"Lumena bridge OK\n"
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + root.name for root in READONLY_ROOTS if root.exists()) or '(none)'}\n"
-                f"version=0.10\n"
+                f"version=0.11\n"
             ),
             "stderr": "",
             "error": None,
@@ -1042,6 +1042,18 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
     if tool == "http.json":
         return http_json(args)
+
+    if tool == "http.get":
+        return http_get(args)
+
+    if tool == "context.snapshot":
+        return context_snapshot(args)
+
+    if tool == "process.status":
+        return process_status(args)
+
+    if tool == "inspect.batch":
+        return inspect_batch(args, request_id=request_id)
 
     if tool == "file.list":
         return file_list(args)
@@ -1256,7 +1268,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.10"
+    server_version = "LumenaBridge/0.11"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[bridge] {self.address_string()} - {fmt % args}")
@@ -1286,7 +1298,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.10"})
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.11"})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
