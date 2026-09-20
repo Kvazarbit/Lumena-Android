@@ -24,6 +24,10 @@ object ToolRegistry {
     private val specs = listOf(
         ToolSpec("health", ToolRisk.READ_ONLY, description = "Check the local Termux bridge."),
         ToolSpec("system.time", ToolRisk.READ_ONLY, description = "Read the phone's current local date, time and timezone."),
+        ToolSpec("system.info", ToolRisk.READ_ONLY, description = "Inspect CPU, memory, storage and Termux/Android environment."),
+        ToolSpec("http.json", ToolRisk.READ_ONLY, setOf("url"), "Fetch a public HTTPS JSON API with SSRF, redirect, timeout and size guards."),
+        ToolSpec("file.list", ToolRisk.READ_ONLY, description = "List a directory inside the workspace. Optional arg: path."),
+        ToolSpec("file.search", ToolRisk.READ_ONLY, setOf("query"), "Search file names and text inside the workspace. Optional arg: path."),
         ToolSpec("workspace.list", ToolRisk.READ_ONLY, description = "List projects and files in the workspace root."),
         ToolSpec("file.read", ToolRisk.READ_ONLY, setOf("path"), "Read a text file inside the workspace."),
         ToolSpec("git.status", ToolRisk.READ_ONLY, setOf("cwd"), "Inspect repository status."),
@@ -50,6 +54,10 @@ object ToolRegistry {
         "git_diff" to "git.diff",
         "git_log" to "git.log",
         "file_read" to "file.read",
+        "file_list" to "file.list",
+        "file_search" to "file.search",
+        "http_json" to "http.json",
+        "system_info" to "system.info",
         "file_write" to "file.write",
         "python_run" to "python.run"
     )
