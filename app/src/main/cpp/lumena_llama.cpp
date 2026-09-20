@@ -4,7 +4,8 @@
 #include <mutex>
 #include <string>
 #include <vector>
-#include "llama.h"\n#include "ggml-backend.h"
+#include "llama.h"
+#include "ggml-backend.h"
 
 namespace {
 std::mutex g_mutex;
