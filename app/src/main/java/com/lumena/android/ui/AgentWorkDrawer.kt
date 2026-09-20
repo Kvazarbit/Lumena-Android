@@ -129,6 +129,32 @@ fun AgentWorkDrawer(
             )
         }
 
+        if (coordinator.liveToolTelemetry.isNotBlank()) {
+            HorizontalDivider()
+            Text(
+                "▼ Live process health",
+                style = MaterialTheme.typography.titleSmall
+            )
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                SelectionContainer {
+                    Text(
+                        coordinator.liveToolTelemetry,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+            Text(
+                "Live telemetry for bridge-started executable tools: PID, elapsed time and RSS when available.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
         task?.let { current ->
             HorizontalDivider()
             Text(
