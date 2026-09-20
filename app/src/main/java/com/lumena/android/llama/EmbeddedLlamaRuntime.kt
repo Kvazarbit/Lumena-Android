@@ -23,6 +23,7 @@ object EmbeddedLlamaRuntime {
     @Volatile private var loadedModelRef: String = ""
     @Volatile private var loadedComputeMode: String = "auto"
     @Volatile private var loadedGpuLayers: Int = 0
+    @Volatile private var loadedModelBytes: Long = 0L
 
     suspend fun generate(
         context: Context,
@@ -34,14 +35,21 @@ object EmbeddedLlamaRuntime {
     ): String = gate.withLock {
         withContext(Dispatchers.IO) {
             ensureLoaded(context.applicationContext, modelRef, profile, computeMode)
+
+            val largeModel = loadedModelBytes >= (3.5 * GIB).toLong()
+            val safeContext = if (largeModel) min(profile.contextSize, 2048) else profile.contextSize
+            val safeBatch = if (largeModel) min(profile.batchSize, 128) else profile.batchSize
+            val safeMaxTokens = if (largeModel) min(profile.maxTokens, 384) else profile.maxTokens
+            val safeThreads = if (largeModel) min(profile.threads, 4) else profile.threads
+
             LlamaNative.nativeGenerate(
                 handle = handle,
                 prompt = prompt,
-                contextSize = profile.contextSize,
-                maxTokens = profile.maxTokens,
+                contextSize = safeContext,
+                maxTokens = safeMaxTokens,
                 temperature = temperature,
-                threads = profile.threads,
-                batchSize = profile.batchSize
+                threads = safeThreads,
+                batchSize = safeBatch
             )
         }
     }
@@ -70,6 +78,7 @@ object EmbeddedLlamaRuntime {
             loadedModelRef = ""
             loadedComputeMode = "auto"
             loadedGpuLayers = 0
+            loadedModelBytes = 0L
             if (current != 0L) LlamaNative.nativeFreeModel(current)
         }
     }
@@ -89,6 +98,7 @@ object EmbeddedLlamaRuntime {
         loadedModelRef = ""
         loadedComputeMode = "auto"
         loadedGpuLayers = 0
+        loadedModelBytes = 0L
         if (old != 0L) LlamaNative.nativeFreeModel(old)
 
         val loaded = if (modelRef.startsWith("content://")) {
@@ -96,13 +106,17 @@ object EmbeddedLlamaRuntime {
         } else {
             val file = File(modelRef)
             require(file.isFile) { "GGUF model not found: $modelRef" }
-            loadWithGpuFallback(
-                modelBytes = file.length(),
+            val bytes = file.length()
+            requireSafeMemory(bytes, profile)
+            val result = loadWithGpuFallback(
+                modelBytes = bytes,
                 profile = profile,
                 computeMode = normalizedMode
             ) { gpuLayers ->
                 LlamaNative.nativeLoadModel(modelRef, gpuLayers)
             }
+            if (result != 0L) loadedModelBytes = bytes
+            result
         }
 
         check(loaded != 0L) {
@@ -128,13 +142,28 @@ object EmbeddedLlamaRuntime {
             ?: error("Android could not open the selected GGUF file")
         return descriptor.use { pfd ->
             check(pfd.fd >= 0) { "Android returned an invalid file descriptor for the GGUF model" }
-            loadWithGpuFallback(
-                modelBytes = pfd.statSize.coerceAtLeast(0L),
+            val bytes = pfd.statSize.coerceAtLeast(0L)
+            requireSafeMemory(bytes, profile)
+            val result = loadWithGpuFallback(
+                modelBytes = bytes,
                 profile = profile,
                 computeMode = computeMode
             ) { gpuLayers ->
                 LlamaNative.nativeLoadModelFd(pfd.fd, gpuLayers)
             }
+            if (result != 0L) loadedModelBytes = bytes
+            result
+        }
+    }
+
+    private fun requireSafeMemory(modelBytes: Long, profile: LlamaRuntimeProfile) {
+        if (modelBytes <= 0L) return
+        val modelGb = modelBytes / GIB
+        val requiredGb = modelGb + if (modelGb >= 3.5) 1.8 else 1.2
+        check(profile.availableRamGb >= requiredGb) {
+            "Not enough free RAM to load this GGUF safely. " +
+                "Model %.1f GB, available %.1f GB, recommended at least %.1f GB."
+                    .format(modelGb, profile.availableRamGb, requiredGb)
         }
     }
 
