@@ -953,6 +953,8 @@ private fun ModelAndConnectionSheet(
     onUnpackGenome: (String) -> GenomeUnpackedUnit?,
     onClearExperience: () -> Unit
 ) {
+    var unpackedGenome by remember(genomeCapsules) { mutableStateOf<String?>(null) }
+
     Column(
         modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -1054,15 +1056,141 @@ private fun ModelAndConnectionSheet(
             "Total $experienceTotal · positive $experiencePositive · negative $experienceNegative · unresolved $experienceUnresolved",
             style = MaterialTheme.typography.bodySmall
         )
+
+        HorizontalDivider()
+        Text("Context Genome", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "events ${genomeStats.events} · anchors ${genomeStats.anchors} · links ${genomeStats.links} · capsules ${genomeStats.capsules}",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Text(
+            "A = atomic experience · L1 = tool/target capsule · L2 = topic capsule. Capsules can be unpacked back to verified evidence.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        genomeCapsules.take(6).forEach { capsule ->
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(
+                    modifier = Modifier.padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        "L${capsule.level} · ${capsule.topicKey}",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        capsule.summary.take(700),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    TextButton(
+                        onClick = {
+                            unpackedGenome = formatGenomeUnpacked(
+                                onUnpackGenome(capsule.id)
+                            )
+                        }
+                    ) {
+                        Text("Unpack")
+                    }
+                }
+            }
+        }
+
+        unpackedGenome?.let { details ->
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(Modifier.padding(10.dp)) {
+                    Text("Genome evidence", fontWeight = FontWeight.SemiBold)
+                    Text(details, style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { unpackedGenome = null }) {
+                        Text("Hide")
+                    }
+                }
+            }
+        }
+
         TextButton(
             enabled = !busy && experienceTotal > 0,
-            onClick = onClearExperience
+            onClick = {
+                unpackedGenome = null
+                onClearExperience()
+            }
         ) {
             Text("Clear verified experience")
         }
 
         Spacer(Modifier.height(18.dp))
     }
+}
+
+private fun formatGenomeUnpacked(unit: GenomeUnpackedUnit?): String {
+    if (unit == null) return "No evidence found for this genome unit."
+
+    return buildString {
+        appendLine("${unit.layer} · ${unit.id}")
+        if (unit.summary.isNotBlank()) {
+            appendLine(unit.summary.take(1_200))
+        }
+
+        if (unit.anchors.isNotEmpty()) {
+            appendLine()
+            appendLine("Anchors")
+            unit.anchors.take(8).forEach { anchor ->
+                append("- ")
+                append(anchor.valence)
+                if (anchor.resolvedAt != null) append(" resolved")
+                append(" · ")
+                append(anchor.tool)
+                if (anchor.target.isNotBlank()) {
+                    append(" · ")
+                    append(anchor.target)
+                }
+                append(" · ")
+                append(anchor.summary.take(500))
+                append(" · seen=")
+                append(anchor.occurrences)
+                appendLine()
+            }
+        }
+
+        if (unit.events.isNotEmpty()) {
+            appendLine()
+            appendLine("Verified events")
+            unit.events.take(12).forEach { event ->
+                append("- ")
+                append(if (event.ok) "OK" else "FAIL")
+                append(" · ")
+                append(event.tool)
+                if (event.target.isNotBlank()) {
+                    append(" · ")
+                    append(event.target)
+                }
+                append(" · ")
+                append(event.evidenceExcerpt.take(600))
+                appendLine()
+            }
+        }
+
+        if (unit.links.isNotEmpty()) {
+            appendLine()
+            appendLine("Causal links")
+            unit.links.take(12).forEach { link ->
+                append("- ")
+                append(link.relation)
+                append(" · ")
+                append(link.fromId.take(12))
+                append(" → ")
+                append(link.toId.take(12))
+                appendLine()
+            }
+        }
+    }.trim()
 }
 
 private fun formatElapsed(milliseconds: Long): String {
