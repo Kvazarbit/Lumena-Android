@@ -1007,7 +1007,7 @@ private fun RemoteImageCard(image: WorkflowImage) {
         key1 = image.thumbnailUrl
     ) {
         value = withContext(Dispatchers.IO) {
-            loadRemoteWikimediaBitmap(image.thumbnailUrl)
+            loadRemoteImageBitmap(image.thumbnailUrl)
         }
     }
 
@@ -1050,7 +1050,7 @@ private fun RemoteImageCard(image: WorkflowImage) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            if (isAllowedWikimediaUrl(image.sourcePage)) {
+            if (isAllowedImageSourceUrl(image.sourcePage)) {
                 TextButton(
                     onClick = {
                         runCatching { uriHandler.openUri(image.sourcePage) }
@@ -1063,8 +1063,8 @@ private fun RemoteImageCard(image: WorkflowImage) {
     }
 }
 
-private fun loadRemoteWikimediaBitmap(rawUrl: String): ImageBitmap? {
-    if (!isAllowedWikimediaUrl(rawUrl)) return null
+private fun loadRemoteImageBitmap(rawUrl: String): ImageBitmap? {
+    if (!isAllowedImagePreviewUrl(rawUrl)) return null
     val url = rawUrl.toHttpUrlOrNull() ?: return null
 
     val request = Request.Builder()
@@ -1113,11 +1113,27 @@ private fun readBoundedBytes(
     return out.toByteArray()
 }
 
-private fun isAllowedWikimediaUrl(raw: String): Boolean {
+private fun isAllowedImagePreviewUrl(raw: String): Boolean {
     val url = raw.toHttpUrlOrNull() ?: return false
     if (url.scheme != "https") return false
     val host = url.host.lowercase()
-    return host == "wikimedia.org" || host.endsWith(".wikimedia.org")
+    val wikimedia =
+        host == "wikimedia.org" ||
+            host.endsWith(".wikimedia.org")
+    val openverse =
+        host == "api.openverse.org" ||
+            host == "openverse.org" ||
+            host.endsWith(".openverse.org")
+    return wikimedia || openverse
+}
+
+private fun isAllowedImageSourceUrl(raw: String): Boolean {
+    val url = raw.toHttpUrlOrNull() ?: return false
+    if (url.scheme != "https") return false
+    val host = url.host.lowercase()
+    return host == "commons.wikimedia.org" ||
+        host == "openverse.org" ||
+        host.endsWith(".openverse.org")
 }
 
 @Composable
