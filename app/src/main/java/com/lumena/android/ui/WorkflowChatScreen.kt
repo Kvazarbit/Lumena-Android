@@ -266,8 +266,16 @@ fun WorkflowChatScreen(
         persistSession()
     }
 
-    fun bridgeOrNull(): TermuxBridgeClient? = bridgeToken.takeIf { it.isNotBlank() }
-        ?.let { TermuxBridgeClient(bridgeUrl, it, context) }
+    fun bridgeOrNull(): TermuxBridgeClient? {
+        val saved = LumenaPreferences.load(context)
+        val effectiveToken = LumenaPreferences.normalizeBridgeToken(
+            bridgeToken.ifBlank { saved.bridgeToken }
+        )
+        if (effectiveToken.isBlank()) return null
+
+        val effectiveUrl = bridgeUrl.ifBlank { saved.bridgeUrl }
+        return TermuxBridgeClient(effectiveUrl, effectiveToken, context)
+    }
 
     fun modelClient(): ChatModelClient =
         if (inferenceBackend == "embedded") {
