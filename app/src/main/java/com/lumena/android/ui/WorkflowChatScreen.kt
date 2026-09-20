@@ -6,6 +6,7 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,11 +15,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -26,8 +31,10 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -43,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.core.AgentControlState
@@ -75,15 +83,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-private data class ChatBubble(
-    val role: String,
-    val text: String
-)
+private data class ChatBubble(val role: String, val text: String)
 
 @Composable
 fun WorkflowChatScreen(
     agentWorkScope: CoroutineScope? = null,
-    runCoordinator: AgentRunCoordinator? = null
+    runCoordinator: AgentRunCoordinator? = null,
+    onOpenHistory: (() -> Unit)? = null,
+    onOpenAgent: (() -> Unit)? = null
 ) {
     val uiScope = rememberCoroutineScope()
     val workScope = agentWorkScope ?: uiScope
@@ -99,12 +106,7 @@ fun WorkflowChatScreen(
         mutableStateListOf<ChatBubble>().apply {
             val restoredChat = restored.chat.map { ChatBubble(it.role, it.text) }
             if (restoredChat.isNotEmpty()) addAll(restoredChat)
-            else add(
-                ChatBubble(
-                    "assistant",
-                    "Lumena v0.8 local agent is ready. Plan, task state and verification are controlled by the app."
-                )
-            )
+            else add(ChatBubble("assistant", "Привіт. Я Lumena. Чим можу допомогти?"))
         }
     }
 
@@ -119,11 +121,10 @@ fun WorkflowChatScreen(
     var models by remember { mutableStateOf<List<String>>(emptyList()) }
     var status by remember { mutableStateOf("Checking Ollama…") }
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var progressExpanded by rememberSaveable { mutableStateOf(false) }
     var currentTask by remember { mutableStateOf(restored.task) }
     var history by remember {
-        mutableStateOf(
-            listOf(systemMessage) + restored.history.map { OllamaMessage(it.role, it.content) }
-        )
+        mutableStateOf(listOf(systemMessage) + restored.history.map { OllamaMessage(it.role, it.content) })
     }
     var busy by remember {
         mutableStateOf(
@@ -136,12 +137,20 @@ fun WorkflowChatScreen(
         )
     }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    val ggufDisplayName = remember(ggufPath) {
-        resolveGgufDisplayName(context, ggufPath)
+
+    val ggufDisplayName = remember(ggufPath) { resolveGgufDisplayName(context, ggufPath) }
+    val hardwareProfile = remember(showSettings, busy) { LlamaHardwareProfile.detect(context) }
+    val modelLabel = when {
+        inferenceBackend == "embedded" && ggufDisplayName.isNotBlank() -> ggufDisplayName
+        inferenceBackend == "embedded" -> "Choose GGUF"
+        selectedModel.isNotBlank() -> selectedModel
+        else -> "No model"
     }
-    val hardwareProfile = remember(showSettings, busy) {
-        LlamaHardwareProfile.detect(context)
-    }
+    val backendLabel = if (inferenceBackend == "embedded") {
+        val runtime = EmbeddedLlamaRuntime.backendLabel()
+        if (runtime == "not loaded yet") "Local" else runtime
+    } else "Ollama"
+
     val ggufPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             val selectedName = resolveGgufDisplayName(context, uri.toString())
@@ -149,10 +158,7 @@ fun WorkflowChatScreen(
                 ggufPickerStatus = "Choose a .gguf model file."
             } else {
                 val permissionSaved = runCatching {
-                    context.contentResolver.takePersistableUriPermission(
-                        uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION
-                    )
+                    context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }.isSuccess
                 EmbeddedLlamaClient.cancelActiveGeneration()
                 uiScope.launch { EmbeddedLlamaRuntime.unload() }
@@ -160,31 +166,18 @@ fun WorkflowChatScreen(
                 inferenceBackend = "embedded"
                 LumenaPreferences.saveGgufPath(context, ggufPath)
                 LumenaPreferences.saveInferenceBackend(context, "embedded")
-                ggufPickerStatus = if (permissionSaved) {
-                    "✓ $selectedName · access saved"
-                } else {
-                    "✓ $selectedName · selected for this app session"
-                }
+                ggufPickerStatus = if (permissionSaved) "✓ $selectedName · access saved" else "✓ $selectedName · selected"
             }
         }
     }
 
     fun restoredPendingFrom(saved: PersistedPendingTool?): PendingWorkflowTool? = saved?.let {
-        val planned = ToolGate.plan(
-            PlannerDecision(
-                request = ToolRequest(it.tool, it.args),
-                reason = it.reason
-            )
-        )
-        val control = it.control
-            ?: currentTask?.let { task -> AgentControlState(task = task) }
-            ?: return@let null
+        val planned = ToolGate.plan(PlannerDecision(request = ToolRequest(it.tool, it.args), reason = it.reason))
+        val control = it.control ?: currentTask?.let { task -> AgentControlState(task = task) } ?: return@let null
         if (planned.allowed) {
             PendingWorkflowTool(
                 plan = planned,
-                history = listOf(systemMessage) + it.history.map { h ->
-                    OllamaMessage(h.role, h.content)
-                },
+                history = listOf(systemMessage) + it.history.map { h -> OllamaMessage(h.role, h.content) },
                 control = control
             )
         } else null
@@ -197,8 +190,7 @@ fun WorkflowChatScreen(
             context,
             LocalSessionSnapshot(
                 chat = bubbles.map { PersistedChatMessage(it.role, it.text) },
-                history = history
-                    .filterNot { it.role == "system" }
+                history = history.filterNot { it.role == "system" }
                     .map { PersistedHistoryMessage(it.role, it.content) },
                 task = currentTask,
                 pending = pending?.let { active ->
@@ -207,8 +199,7 @@ fun WorkflowChatScreen(
                         args = active.plan.request.args,
                         reason = active.plan.reason,
                         control = active.control,
-                        history = active.history
-                            .filterNot { it.role == "system" }
+                        history = active.history.filterNot { it.role == "system" }
                             .map { PersistedHistoryMessage(it.role, it.content) }
                     )
                 },
@@ -217,8 +208,7 @@ fun WorkflowChatScreen(
         )
     }
 
-    fun isCurrentTask(taskId: String): Boolean =
-        LocalSessionStore.load(context).task?.id == taskId
+    fun isCurrentTask(taskId: String): Boolean = LocalSessionStore.load(context).task?.id == taskId
 
     fun acceptControl(taskId: String, runToken: Long, control: AgentControlState) {
         if (!coordinator.isCurrent(runToken, taskId) || !isCurrentTask(taskId)) return
@@ -237,19 +227,14 @@ fun WorkflowChatScreen(
             bubbles.addAll(storedChat)
         }
 
-        val storedHistory = listOf(systemMessage) + stored.history.map {
-            OllamaMessage(it.role, it.content)
-        }
+        val storedHistory = listOf(systemMessage) + stored.history.map { OllamaMessage(it.role, it.content) }
         if (storedHistory != history) history = storedHistory
 
         val storedPending = restoredPendingFrom(stored.pending)
         if (storedPending?.plan?.request != pending?.plan?.request) pending = storedPending
 
         busy = stored.task?.status in setOf(
-            TaskStatus.PLANNING,
-            TaskStatus.WAITING_MODEL,
-            TaskStatus.EXECUTING,
-            TaskStatus.VERIFYING
+            TaskStatus.PLANNING, TaskStatus.WAITING_MODEL, TaskStatus.EXECUTING, TaskStatus.VERIFYING
         )
     }
 
@@ -260,7 +245,6 @@ fun WorkflowChatScreen(
         pending = null
         busy = false
         currentTask = task.copy(status = TaskStatus.CANCELLED)
-        bubbles += ChatBubble("status", "STOP · $reason")
         persistSession()
     }
 
@@ -273,66 +257,47 @@ fun WorkflowChatScreen(
         currentTask = null
         history = listOf(systemMessage)
         bubbles.clear()
-        bubbles += ChatBubble("assistant", "New local conversation started.")
+        bubbles += ChatBubble("assistant", "Новий чат. Що хочеш зробити?")
         busy = false
         LocalSessionStore.clear(context)
         persistSession()
     }
 
-    fun bridgeOrNull(): TermuxBridgeClient? = bridgeToken
-        .takeIf { it.isNotBlank() }
+    fun bridgeOrNull(): TermuxBridgeClient? = bridgeToken.takeIf { it.isNotBlank() }
         ?.let { TermuxBridgeClient(bridgeUrl, it, context) }
 
     fun modelClient(): ChatModelClient =
-        if (inferenceBackend == "embedded") EmbeddedLlamaClient(context, ggufPath)
-        else OllamaClient(ollamaUrl)
+        if (inferenceBackend == "embedded") EmbeddedLlamaClient(context, ggufPath) else OllamaClient(ollamaUrl)
 
-    fun modelNameForRun(): String =
-        if (inferenceBackend == "embedded") "embedded-gguf" else selectedModel
+    fun modelNameForRun(): String = if (inferenceBackend == "embedded") "embedded-gguf" else selectedModel
 
     fun refreshModels() {
         status = "Checking Ollama…"
         uiScope.launch {
-            val result = try {
-                OllamaClient(ollamaUrl).listModels()
-            } catch (t: Throwable) {
-                Result.failure(t)
-            }
+            val result = try { OllamaClient(ollamaUrl).listModels() } catch (t: Throwable) { Result.failure(t) }
             result.onSuccess { found ->
                 models = found
-                val resolvedModel = when {
+                val resolved = when {
                     selectedModel.isNotBlank() && selectedModel in found -> selectedModel
                     found.isNotEmpty() -> found.first()
                     else -> selectedModel
                 }
-                if (resolvedModel != selectedModel) {
-                    selectedModel = resolvedModel
-                    LumenaPreferences.saveSelectedModel(context, resolvedModel)
+                if (resolved != selectedModel) {
+                    selectedModel = resolved
+                    LumenaPreferences.saveSelectedModel(context, resolved)
                 }
-                status = if (found.isEmpty()) {
-                    "Ollama online · no local models"
-                } else {
-                    "Ollama online · ${found.size} model(s)"
-                }
+                status = if (found.isEmpty()) "Ollama online · no local models" else "Ollama online"
             }.onFailure {
                 models = emptyList()
-                status = "Ollama offline · ${it.message ?: it::class.simpleName}"
+                status = "Ollama offline"
             }
         }
     }
 
     fun reportProgress(taskId: String, runToken: Long, message: String) {
-        if (message.isBlank() ||
-            !coordinator.isCurrent(runToken, taskId) ||
-            !isCurrentTask(taskId)
-        ) return
-
+        if (message.isBlank() || !coordinator.isCurrent(runToken, taskId) || !isCurrentTask(taskId)) return
         coordinator.addProgress(runToken, message)
-        val previous = bubbles.lastOrNull()
-        if (previous?.role != "status" || previous.text != message) {
-            bubbles += ChatBubble("status", message)
-            persistSession()
-        }
+        // Progress belongs to the compact agent status, not the conversation itself.
     }
 
     fun applyOutcome(taskId: String, runToken: Long, outcome: WorkflowOutcome) {
@@ -345,27 +310,12 @@ fun WorkflowChatScreen(
                 bubbles += ChatBubble("assistant", outcome.text)
                 coordinator.finish(runToken, "Done")
             }
-
             is WorkflowOutcome.NeedsConfirmation -> {
                 pending = outcome.pending
                 history = outcome.pending.history
                 currentTask = outcome.pending.control.task
-                if (outcome.pending.taskPlan.isNotEmpty() &&
-                    bubbles.none { it.role == "status" && it.text.startsWith("Plan\n") }
-                ) {
-                    bubbles += ChatBubble(
-                        "status",
-                        outcome.pending.taskPlan.mapIndexed { i, step -> "${i + 1}. $step" }
-                            .joinToString(prefix = "Plan\n", separator = "\n")
-                    )
-                }
-                bubbles += ChatBubble(
-                    "status",
-                    "Approval required: ${outcome.pending.plan.request.tool} · ${outcome.pending.plan.reason}"
-                )
                 coordinator.pauseForApproval(runToken)
             }
-
             is WorkflowOutcome.Failed -> {
                 history = outcome.history
                 pending = null
@@ -375,10 +325,7 @@ fun WorkflowChatScreen(
             }
         }
         busy = currentTask?.status in setOf(
-            TaskStatus.PLANNING,
-            TaskStatus.WAITING_MODEL,
-            TaskStatus.EXECUTING,
-            TaskStatus.VERIFYING
+            TaskStatus.PLANNING, TaskStatus.WAITING_MODEL, TaskStatus.EXECUTING, TaskStatus.VERIFYING
         )
         persistSession()
     }
@@ -387,13 +334,12 @@ fun WorkflowChatScreen(
         val text = input.trim()
         if (text.isBlank() || busy) return
         if (inferenceBackend == "embedded" && ggufPath.isBlank()) {
-            bubbles += ChatBubble("error", "Choose a GGUF model path in Model settings.")
-            persistSession()
+            showSettings = true
+            ggufPickerStatus = "Choose a GGUF model first."
             return
         }
         if (inferenceBackend == "ollama" && selectedModel.isBlank()) {
-            bubbles += ChatBubble("error", "No Ollama model selected. Start Ollama and refresh models.")
-            persistSession()
+            showSettings = true
             return
         }
 
@@ -413,8 +359,7 @@ fun WorkflowChatScreen(
 
         coordinator.launch(workScope, task.id, resetProgress = true) { runToken ->
             val outcome = try {
-                val backend = modelClient()
-                WorkflowRunner(backend, bridgeOrNull(), modelNameForRun()).run(
+                WorkflowRunner(modelClient(), bridgeOrNull(), modelNameForRun()).run(
                     history = turnHistory,
                     task = task,
                     onProgress = { reportProgress(task.id, runToken, it) },
@@ -423,10 +368,7 @@ fun WorkflowChatScreen(
             } catch (_: CancellationException) {
                 return@launch
             } catch (t: Throwable) {
-                val failedTask = task.copy(
-                    status = TaskStatus.FAILED,
-                    errors = listOf(t.message ?: t.toString())
-                )
+                val failedTask = task.copy(status = TaskStatus.FAILED, errors = listOf(t.message ?: t.toString()))
                 WorkflowOutcome.Failed(
                     t.message ?: t.toString(),
                     turnHistory,
@@ -440,19 +382,13 @@ fun WorkflowChatScreen(
     LaunchedEffect(Unit) {
         val task = currentTask
         if (task != null &&
-            task.status in setOf(
-                TaskStatus.PLANNING,
-                TaskStatus.WAITING_MODEL,
-                TaskStatus.EXECUTING,
-                TaskStatus.VERIFYING
-            ) &&
+            task.status in setOf(TaskStatus.PLANNING, TaskStatus.WAITING_MODEL, TaskStatus.EXECUTING, TaskStatus.VERIFYING) &&
             !coordinator.active
         ) {
             currentTask = task.copy(
                 status = TaskStatus.CANCELLED,
                 errors = (task.errors + "Previous agent run was interrupted before this app session resumed.").takeLast(8)
             )
-            bubbles += ChatBubble("status", "Previous unfinished run was marked cancelled after app restart.")
             busy = false
             persistSession()
         }
@@ -466,10 +402,7 @@ fun WorkflowChatScreen(
 
     LaunchedEffect(currentTask?.id) {
         while (currentTask?.status in setOf(
-                TaskStatus.PLANNING,
-                TaskStatus.WAITING_MODEL,
-                TaskStatus.EXECUTING,
-                TaskStatus.VERIFYING
+                TaskStatus.PLANNING, TaskStatus.WAITING_MODEL, TaskStatus.EXECUTING, TaskStatus.VERIFYING
             )) {
             delay(750)
             syncFromStoredSession()
@@ -491,216 +424,105 @@ fun WorkflowChatScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
+            .imePadding()
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Lumena", style = MaterialTheme.typography.headlineSmall)
-                Text(
-                    if (inferenceBackend == "embedded") "Embedded llama.cpp · ${ggufDisplayName.ifBlank { "no GGUF selected" }}" else if (selectedModel.isBlank()) status else "$status · $selectedModel",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                currentTask?.let { task ->
-                    Text(
-                        "Task: ${task.status.name.lowercase().replace('_', ' ')} · ${task.step}/${task.maxSteps}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            Row {
-                TextButton(onClick = { clearConversation() }) {
-                    Text("New")
-                }
-                TextButton(onClick = { showSettings = !showSettings }) {
-                    Text(if (showSettings) "Hide" else "Model")
-                }
-            }
-        }
-
-        AgentProgressPanel(
-            task = currentTask,
-            coordinator = coordinator,
-            pendingApproval = pending != null,
-            nowMs = nowMs,
-            onStop = { stopCurrentTask() }
+        ModernChatHeader(
+            modelLabel = modelLabel,
+            backendLabel = backendLabel,
+            busy = busy,
+            onHistory = { onOpenHistory?.invoke() },
+            onNew = { clearConversation() },
+            onMore = {
+                if (onOpenAgent != null) onOpenAgent() else showSettings = true
+            },
+            onModel = { showSettings = true }
         )
-
-        if (showSettings) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text("Local model", style = MaterialTheme.typography.titleMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { inferenceBackend = "embedded"; LumenaPreferences.saveInferenceBackend(context, "embedded") }) { Text(if (inferenceBackend == "embedded") "✓ Embedded" else "Embedded") }
-                        OutlinedButton(onClick = { inferenceBackend = "ollama"; LumenaPreferences.saveInferenceBackend(context, "ollama") }) { Text(if (inferenceBackend == "ollama") "✓ Ollama" else "Ollama") }
-                    }
-                    if (inferenceBackend == "embedded") {
-                        Text(
-                            if (ggufPath.isBlank()) "No GGUF selected" else "Selected: $ggufDisplayName",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Text(
-                            "The model can stay in Downloads, Documents or another folder. Lumena remembers Android document access instead of copying the GGUF.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            "Auto profile: ${hardwareProfile.summary}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            "Inference: ${EmbeddedLlamaRuntime.backendLabel()}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                enabled = !busy,
-                                onClick = { ggufPicker.launch(arrayOf("*/*")) }
-                            ) {
-                                Text(if (ggufPath.isBlank()) "Choose GGUF" else "Change GGUF")
-                            }
-                            if (ggufPath.isNotBlank()) {
-                                TextButton(
-                                    enabled = !busy,
-                                    onClick = {
-                                        EmbeddedLlamaClient.cancelActiveGeneration()
-                                        uiScope.launch { EmbeddedLlamaRuntime.unload() }
-                                        ggufPath = ""
-                                        ggufPickerStatus = "GGUF selection cleared and model memory released."
-                                        LumenaPreferences.saveGgufPath(context, "")
-                                    }
-                                ) {
-                                    Text("Forget")
-                                }
-                            }
-                        }
-                        if (ggufPickerStatus.isNotBlank()) {
-                            Text(
-                                ggufPickerStatus,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    Text(
-                        "Lumena restores the model automatically and keeps AgentController state outside the model.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    OutlinedTextField(
-                        value = ollamaUrl,
-                        onValueChange = {
-                            ollamaUrl = it
-                            LumenaPreferences.saveOllamaUrl(context, it)
-                        },
-                        label = { Text("Ollama URL") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(enabled = !busy, onClick = { refreshModels() }) {
-                            Text("Refresh models")
-                        }
-                        if (models.isNotEmpty()) {
-                            TextButton(onClick = {
-                                val current = models.indexOf(selectedModel).coerceAtLeast(0)
-                                val next = models[(current + 1) % models.size]
-                                selectedModel = next
-                                LumenaPreferences.saveSelectedModel(context, next)
-                            }) {
-                                Text("Next model")
-                            }
-                        }
-                    }
-                    OutlinedTextField(
-                        value = selectedModel,
-                        onValueChange = {
-                            selectedModel = it
-                            LumenaPreferences.saveSelectedModel(context, it)
-                        },
-                        label = { Text("Model") },
-                        supportingText = {
-                            if (models.isNotEmpty()) Text(models.joinToString(" · "))
-                        },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    HorizontalDivider()
-                    Text("Termux tools", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "Bridge settings are shared with Companion and Tools.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    OutlinedTextField(
-                        value = bridgeUrl,
-                        onValueChange = {
-                            bridgeUrl = it
-                            LumenaPreferences.saveBridgeUrl(context, it)
-                        },
-                        label = { Text("Bridge URL") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = bridgeToken,
-                        onValueChange = {
-                            bridgeToken = it
-                            LumenaPreferences.saveBridgeToken(context, it)
-                        },
-                        label = { Text("Bridge token") },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-        }
 
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .fillMaxWidth(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                start = 16.dp, end = 16.dp, top = 12.dp, bottom = 10.dp
+            ),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            items(bubbles) { bubble -> MessageBubble(bubble) }
+            items(
+                items = bubbles.filter { it.role != "status" },
+                key = { it.hashCode() }
+            ) { bubble ->
+                MessageBubble(bubble)
+            }
         }
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
-                label = { Text("Message Lumena") },
-                minLines = 1,
-                maxLines = 4,
-                modifier = Modifier.weight(1f)
+        CompactAgentStatus(
+            task = currentTask,
+            coordinator = coordinator,
+            pendingApproval = pending != null,
+            nowMs = nowMs,
+            expanded = progressExpanded,
+            onToggle = { progressExpanded = !progressExpanded },
+            onStop = { stopCurrentTask() }
+        )
+
+        ModernComposer(
+            value = input,
+            onValueChange = { input = it },
+            busy = busy,
+            canSend = pending == null && input.isNotBlank(),
+            onPlus = { showSettings = true },
+            onSend = { send() },
+            onStop = { stopCurrentTask() }
+        )
+    }
+
+    if (showSettings) {
+        ModalBottomSheet(onDismissRequest = { showSettings = false }) {
+            ModelAndConnectionSheet(
+                inferenceBackend = inferenceBackend,
+                onBackend = {
+                    inferenceBackend = it
+                    LumenaPreferences.saveInferenceBackend(context, it)
+                },
+                ggufPath = ggufPath,
+                ggufDisplayName = ggufDisplayName,
+                ggufPickerStatus = ggufPickerStatus,
+                hardwareSummary = hardwareProfile.summary,
+                runtimeSummary = EmbeddedLlamaRuntime.backendLabel(),
+                busy = busy,
+                onChooseGguf = { ggufPicker.launch(arrayOf("*/*")) },
+                onForgetGguf = {
+                    EmbeddedLlamaClient.cancelActiveGeneration()
+                    uiScope.launch { EmbeddedLlamaRuntime.unload() }
+                    ggufPath = ""
+                    ggufPickerStatus = "GGUF selection cleared."
+                    LumenaPreferences.saveGgufPath(context, "")
+                },
+                ollamaUrl = ollamaUrl,
+                onOllamaUrl = {
+                    ollamaUrl = it
+                    LumenaPreferences.saveOllamaUrl(context, it)
+                },
+                selectedModel = selectedModel,
+                onSelectedModel = {
+                    selectedModel = it
+                    LumenaPreferences.saveSelectedModel(context, it)
+                },
+                models = models,
+                status = status,
+                onRefreshModels = { refreshModels() },
+                bridgeUrl = bridgeUrl,
+                onBridgeUrl = {
+                    bridgeUrl = it
+                    LumenaPreferences.saveBridgeUrl(context, it)
+                },
+                bridgeToken = bridgeToken,
+                onBridgeToken = {
+                    bridgeToken = it
+                    LumenaPreferences.saveBridgeToken(context, it)
+                }
             )
-            Button(enabled = !busy && pending == null && input.isNotBlank(), onClick = { send() }) {
-                Text("Send")
-            }
         }
     }
 
@@ -718,8 +540,7 @@ fun WorkflowChatScreen(
                 Text(
                     taskPlan +
                         "${requested.plan.reason}\n\nTool: ${requested.plan.request.tool}\nArgs: ${requested.plan.request.args}" +
-                        verify +
-                        "\n\nThis request survives tab switching."
+                        verify
                 )
             },
             confirmButton = {
@@ -729,11 +550,9 @@ fun WorkflowChatScreen(
                     currentTask = requested.control.task.copy(status = TaskStatus.EXECUTING)
                     busy = true
                     persistSession()
-
                     coordinator.launch(workScope, taskId, resetProgress = false) { runToken ->
                         val outcome = try {
-                            val backend = modelClient()
-                            WorkflowRunner(backend, bridgeOrNull(), modelNameForRun()).approve(
+                            WorkflowRunner(modelClient(), bridgeOrNull(), modelNameForRun()).approve(
                                 pending = requested,
                                 onProgress = { reportProgress(taskId, runToken, it) },
                                 onState = { acceptControl(taskId, runToken, it) }
@@ -747,144 +566,329 @@ fun WorkflowChatScreen(
                                     errors = (requested.control.task.errors + (t.message ?: t.toString())).takeLast(8)
                                 )
                             )
-                            WorkflowOutcome.Failed(
-                                t.message ?: t.toString(),
-                                requested.history,
-                                failedControl
-                            )
+                            WorkflowOutcome.Failed(t.message ?: t.toString(), requested.history, failedControl)
                         }
                         applyOutcome(taskId, runToken, outcome)
                     }
                 }) { Text("Allow once") }
             },
             dismissButton = {
-                TextButton(onClick = {
-                    stopCurrentTask("Approval cancelled by user")
-                }) { Text("Cancel task") }
+                TextButton(onClick = { stopCurrentTask("Approval cancelled by user") }) {
+                    Text("Cancel")
+                }
             }
         )
     }
 }
 
 @Composable
-private fun AgentProgressPanel(
+private fun ModernChatHeader(
+    modelLabel: String,
+    backendLabel: String,
+    busy: Boolean,
+    onHistory: () -> Unit,
+    onNew: () -> Unit,
+    onMore: () -> Unit,
+    onModel: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(
+            modifier = Modifier.clickable(onClick = onHistory),
+            shape = RoundedCornerShape(22.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant
+        ) {
+            Text("☰", modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp), style = MaterialTheme.typography.titleLarge)
+        }
+        Column(
+            modifier = Modifier.weight(1f).clickable(onClick = onModel).padding(horizontal = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("Lumena", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                if (busy) "Thinking…" else "$backendLabel · $modelLabel",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
+        Surface(
+            modifier = Modifier.clickable(onClick = onNew),
+            shape = RoundedCornerShape(22.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant
+        ) {
+            Text("✎", modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), style = MaterialTheme.typography.titleLarge)
+        }
+        Spacer(Modifier.height(1.dp).padding(horizontal = 2.dp))
+        TextButton(onClick = onMore) { Text("⋮", style = MaterialTheme.typography.headlineSmall) }
+    }
+}
+
+@Composable
+private fun CompactAgentStatus(
     task: TaskState?,
     coordinator: AgentRunCoordinator,
     pendingApproval: Boolean,
     nowMs: Long,
+    expanded: Boolean,
+    onToggle: () -> Unit,
     onStop: () -> Unit
 ) {
-    val activeStatus = task?.status in setOf(
-        TaskStatus.PLANNING,
-        TaskStatus.WAITING_MODEL,
-        TaskStatus.EXECUTING,
-        TaskStatus.VERIFYING,
-        TaskStatus.WAITING_CONFIRMATION
+    val active = coordinator.active || pendingApproval || task?.status in setOf(
+        TaskStatus.PLANNING, TaskStatus.WAITING_MODEL, TaskStatus.EXECUTING,
+        TaskStatus.VERIFYING, TaskStatus.WAITING_CONFIRMATION
     )
-    if (task == null || (!activeStatus && coordinator.progress.isEmpty())) return
+    if (!active) return
 
-    val canStop = coordinator.active || pendingApproval || activeStatus
     val elapsed = if (coordinator.startedAtMs > 0L) {
-        ((if (coordinator.active) nowMs else System.currentTimeMillis()) - coordinator.startedAtMs)
-            .coerceAtLeast(0L)
+        ((if (coordinator.active) nowMs else System.currentTimeMillis()) - coordinator.startedAtMs).coerceAtLeast(0L)
     } else 0L
 
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant
     ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Agent progress", style = MaterialTheme.typography.titleSmall)
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f).clickable(onClick = onToggle)) {
                     Text(
-                        "${task.status.name.lowercase().replace('_', ' ')} · step ${task.step}/${task.maxSteps} · ${formatElapsed(elapsed)}",
-                        style = MaterialTheme.typography.bodySmall
+                        when {
+                            pendingApproval -> "Waiting for approval"
+                            coordinator.stage.isNotBlank() -> coordinator.stage
+                            else -> "Thinking…"
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
                     )
                     Text(
-                        coordinator.stage,
-                        style = MaterialTheme.typography.bodyMedium
+                        buildString {
+                            task?.let { append("step ${it.step}/${it.maxSteps}") }
+                            if (elapsed > 0) {
+                                if (isNotEmpty()) append(" · ")
+                                append(formatElapsed(elapsed))
+                            }
+                            append(if (expanded) " · hide details" else " · details")
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                if (canStop) {
-                    OutlinedButton(onClick = onStop) {
-                        Text("STOP")
-                    }
-                }
+                TextButton(onClick = onStop) { Text("Stop") }
             }
-
             if (coordinator.active) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
             }
-
-            coordinator.progress.takeLast(5).forEach { line ->
-                Text(
-                    line,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            if (expanded) {
+                coordinator.progress.takeLast(8).forEach {
+                    Text(
+                        it,
+                        modifier = Modifier.padding(top = 6.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
 }
 
-private fun formatElapsed(milliseconds: Long): String {
-    val totalSeconds = milliseconds / 1_000
-    val minutes = totalSeconds / 60
-    val seconds = totalSeconds % 60
-    return "%02d:%02d".format(minutes, seconds)
+@Composable
+private fun ModernComposer(
+    value: String,
+    onValueChange: (String) -> Unit,
+    busy: Boolean,
+    canSend: Boolean,
+    onPlus: () -> Unit,
+    onSend: () -> Unit,
+    onStop: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+        shape = RoundedCornerShape(30.dp),
+        tonalElevation = 2.dp,
+        color = MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.Bottom
+        ) {
+            TextButton(onClick = onPlus) { Text("＋", style = MaterialTheme.typography.headlineSmall) }
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
+                placeholder = { Text("Message Lumena") },
+                minLines = 1,
+                maxLines = 5,
+                modifier = Modifier.weight(1f),
+                shape = RoundedCornerShape(24.dp)
+            )
+            if (busy) {
+                Button(onClick = onStop, shape = RoundedCornerShape(22.dp)) { Text("■") }
+            } else {
+                Button(
+                    enabled = canSend,
+                    onClick = onSend,
+                    shape = RoundedCornerShape(22.dp)
+                ) { Text("↑") }
+            }
+        }
+    }
 }
 
 @Composable
 private fun MessageBubble(message: ChatBubble) {
     val isUser = message.role == "user"
-    val color = when (message.role) {
-        "user" -> MaterialTheme.colorScheme.primaryContainer
-        "error" -> MaterialTheme.colorScheme.error.copy(alpha = 0.18f)
-        "status" -> MaterialTheme.colorScheme.surfaceVariant
-        else -> MaterialTheme.colorScheme.surface
+    if (message.role == "error") {
+        FriendlyErrorBubble(message.text)
+        return
     }
-    val horizontal = if (isUser) Alignment.End else Alignment.Start
-
     Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = horizontal
+        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(if (isUser) 0.86f else 0.94f)
-                .background(color, RoundedCornerShape(18.dp))
-                .padding(horizontal = 14.dp, vertical = 10.dp)
-        ) {
-            Text(message.text, style = MaterialTheme.typography.bodyMedium)
+        if (isUser) {
+            Surface(
+                modifier = Modifier.widthIn(max = 330.dp),
+                shape = RoundedCornerShape(22.dp),
+                color = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Text(message.text, modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp))
+            }
+        } else {
+            Text(
+                message.text,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                style = MaterialTheme.typography.bodyLarge
+            )
         }
     }
 }
 
+@Composable
+private fun FriendlyErrorBubble(raw: String) {
+    var details by remember(raw) { mutableStateOf(false) }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text("Не вдалося завершити запит.", fontWeight = FontWeight.SemiBold)
+            Text(
+                if (raw.contains("Unknown tool", ignoreCase = true)) "Модель запросила невідомий інструмент." else "Відкрий деталі, щоб побачити технічну причину.",
+                style = MaterialTheme.typography.bodySmall
+            )
+            TextButton(onClick = { details = !details }) { Text(if (details) "Hide details" else "Details") }
+            if (details) Text(raw, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+private fun ModelAndConnectionSheet(
+    inferenceBackend: String,
+    onBackend: (String) -> Unit,
+    ggufPath: String,
+    ggufDisplayName: String,
+    ggufPickerStatus: String,
+    hardwareSummary: String,
+    runtimeSummary: String,
+    busy: Boolean,
+    onChooseGguf: () -> Unit,
+    onForgetGguf: () -> Unit,
+    ollamaUrl: String,
+    onOllamaUrl: (String) -> Unit,
+    selectedModel: String,
+    onSelectedModel: (String) -> Unit,
+    models: List<String>,
+    status: String,
+    onRefreshModels: () -> Unit,
+    bridgeUrl: String,
+    onBridgeUrl: (String) -> Unit,
+    bridgeToken: String,
+    onBridgeToken: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text("Model", style = MaterialTheme.typography.headlineSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { onBackend("embedded") }) {
+                Text(if (inferenceBackend == "embedded") "✓ Embedded" else "Embedded")
+            }
+            OutlinedButton(onClick = { onBackend("ollama") }) {
+                Text(if (inferenceBackend == "ollama") "✓ Ollama" else "Ollama")
+            }
+        }
+
+        if (inferenceBackend == "embedded") {
+            Text(if (ggufPath.isBlank()) "No GGUF selected" else ggufDisplayName, fontWeight = FontWeight.Medium)
+            Text("Auto: $hardwareSummary", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Inference: $runtimeSummary", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(enabled = !busy, onClick = onChooseGguf) { Text(if (ggufPath.isBlank()) "Choose GGUF" else "Change GGUF") }
+                if (ggufPath.isNotBlank()) TextButton(enabled = !busy, onClick = onForgetGguf) { Text("Forget") }
+            }
+            if (ggufPickerStatus.isNotBlank()) Text(ggufPickerStatus, style = MaterialTheme.typography.labelSmall)
+        } else {
+            Text(status, style = MaterialTheme.typography.bodySmall)
+            OutlinedTextField(
+                value = selectedModel,
+                onValueChange = onSelectedModel,
+                label = { Text("Model") },
+                modifier = Modifier.fillMaxWidth(),
+                supportingText = { if (models.isNotEmpty()) Text(models.joinToString(" · ")) }
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onRefreshModels) { Text("Refresh") }
+                if (models.isNotEmpty()) {
+                    TextButton(onClick = {
+                        val current = models.indexOf(selectedModel).coerceAtLeast(0)
+                        onSelectedModel(models[(current + 1) % models.size])
+                    }) { Text("Next") }
+                }
+            }
+            OutlinedTextField(
+                value = ollamaUrl,
+                onValueChange = onOllamaUrl,
+                label = { Text("Ollama URL") },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        HorizontalDivider()
+        Text("Local tools", style = MaterialTheme.typography.titleMedium)
+        OutlinedTextField(
+            value = bridgeUrl,
+            onValueChange = onBridgeUrl,
+            label = { Text("Bridge URL") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = bridgeToken,
+            onValueChange = onBridgeToken,
+            label = { Text("Bridge token") },
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(18.dp))
+    }
+}
+
+private fun formatElapsed(milliseconds: Long): String {
+    val totalSeconds = milliseconds / 1_000
+    return "%02d:%02d".format(totalSeconds / 60, totalSeconds % 60)
+}
 
 private fun resolveGgufDisplayName(context: android.content.Context, modelRef: String): String {
     if (modelRef.isBlank()) return ""
-    if (!modelRef.startsWith("content://")) {
-        return modelRef.substringAfterLast('/').ifBlank { modelRef }
-    }
+    if (!modelRef.startsWith("content://")) return modelRef.substringAfterLast('/').ifBlank { modelRef }
     val uri = runCatching { Uri.parse(modelRef) }.getOrNull() ?: return "Selected GGUF"
     return runCatching {
-        context.contentResolver.query(
-            uri,
-            arrayOf(OpenableColumns.DISPLAY_NAME),
-            null,
-            null,
-            null
-        )?.use { cursor ->
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
             val column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
             if (column >= 0 && cursor.moveToFirst()) cursor.getString(column) else null
         }
