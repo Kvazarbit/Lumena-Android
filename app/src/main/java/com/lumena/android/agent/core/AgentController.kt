@@ -119,7 +119,15 @@ class AgentController(
 
         val canonical = decision.copy(tool = validation.canonicalTool)
         val nextPlan = if (state.plan.isEmpty() && canonical.plan.isNotEmpty()) {
-            canonical.plan.take(6).map { it.take(180) }
+            canonical.plan
+                .take(6)
+                .map { step ->
+                    step
+                        .replace(Regex("^\\s*\\d+[.)]\\s*"), "")
+                        .trim()
+                        .take(180)
+                }
+                .filter { it.isNotBlank() }
         } else state.plan
 
         val signature = signature(canonical)
@@ -302,8 +310,7 @@ class AgentController(
         val next = state.copy(
             protocolRetries = retries,
             task = state.task.copy(
-                status = TaskStatus.WAITING_MODEL,
-                errors = (state.task.errors + problem).takeLast(8)
+                status = TaskStatus.WAITING_MODEL
             )
         )
         return if (retries > 2) {
