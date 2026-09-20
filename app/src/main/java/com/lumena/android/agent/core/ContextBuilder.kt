@@ -83,6 +83,18 @@ class ContextBuilder(
                 }
             }
 
+        val memory = relevantMemory
+            .map(::sanitize)
+            .filter { it.isNotBlank() }
+            .distinct()
+            .take(maxMemoryItems)
+        if (memory.isNotEmpty()) {
+            sections += buildString {
+                appendLine("RELEVANT VERIFIED MEMORY")
+                memory.forEach { appendLine("- ${it.take(360)}") }
+            }
+        }
+
         sections += buildString {
             appendLine("AVAILABLE TOOLS")
             appendLine(ToolRegistry.renderForPrompt(allowedTools, compact = true))
@@ -94,18 +106,6 @@ class ContextBuilder(
                 plan.take(6).forEachIndexed { index, step ->
                     appendLine("${index + 1}. ${sanitize(step).take(180)}")
                 }
-            }
-        }
-
-        val memory = relevantMemory
-            .map(::sanitize)
-            .filter { it.isNotBlank() }
-            .distinct()
-            .take(maxMemoryItems)
-        if (memory.isNotEmpty()) {
-            sections += buildString {
-                appendLine("RELEVANT VERIFIED MEMORY")
-                memory.forEach { appendLine("- ${it.take(360)}") }
             }
         }
 
