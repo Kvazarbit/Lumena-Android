@@ -1,8 +1,11 @@
 package com.lumena.android
 
+import android.app.ActivityManager
+import android.app.ApplicationExitInfo
 import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -87,6 +90,44 @@ class MainActivity : ComponentActivity() {
     }
     private fun openAccessibilitySettings() = startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     private fun openAppDetails() = startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply { data = Uri.parse("package:$packageName") })
+
+    private fun recentExitDiagnostics(): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return "Process exit diagnostics require Android 11+."
+        }
+        val am = getSystemService(ActivityManager::class.java)
+        val exits = am.getHistoricalProcessExitReasons(packageName, 0, 5)
+        if (exits.isEmpty()) return "No recent process-exit records."
+
+        return exits.joinToString("\n\n") { info ->
+            val reason = when (info.reason) {
+                ApplicationExitInfo.REASON_EXIT_SELF -> "exit-self"
+                ApplicationExitInfo.REASON_SIGNALED -> "signal"
+                ApplicationExitInfo.REASON_LOW_MEMORY -> "low-memory"
+                ApplicationExitInfo.REASON_CRASH -> "java-crash"
+                ApplicationExitInfo.REASON_CRASH_NATIVE -> "native-crash"
+                ApplicationExitInfo.REASON_ANR -> "ANR"
+                ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "initialization-failure"
+                ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "permission-change"
+                ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "excessive-resource-usage"
+                ApplicationExitInfo.REASON_USER_REQUESTED -> "user-requested"
+                ApplicationExitInfo.REASON_USER_STOPPED -> "user-stopped"
+                ApplicationExitInfo.REASON_DEPENDENCY_DIED -> "dependency-died"
+                ApplicationExitInfo.REASON_OTHER -> "other"
+                else -> "unknown(${info.reason})"
+            }
+            buildString {
+                append("reason=").append(reason)
+                append(" status=").append(info.status)
+                append(" timestamp=").append(java.text.DateFormat.getDateTimeInstance().format(java.util.Date(info.timestamp)))
+                info.description?.takeIf { it.isNotBlank() }?.let {
+                    append("\ndescription=").append(it)
+                }
+                append("\npss=").append(info.pss).append(" KB")
+                append(" rss=").append(info.rss).append(" KB")
+            }
+        }
+    }
 
     private fun cancelPersistedTask(reason: String) {
         val snapshot = LocalSessionStore.load(this)
@@ -231,6 +272,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun ToolsScreen(refreshToken: Int, modifier: Modifier = Modifier) {
         var snapshotText by remember { mutableStateOf("No snapshot yet") }
+        var exitDiagnostics by remember { mutableStateOf(recentExitDiagnostics()) }
         var enabled by remember { mutableStateOf(false) }
         var rawServices by remember { mutableStateOf("") }
         LaunchedEffect(refreshToken) {
@@ -251,6 +293,10 @@ class MainActivity : ComponentActivity() {
             }) { Text("Read current screen") }
             HorizontalDivider()
             Text("Diagnostics", style = MaterialTheme.typography.titleMedium)
+            OutlinedButton(onClick = { exitDiagnostics = recentExitDiagnostics() }) {
+                Text("Refresh last app exits")
+            }
+            Text(exitDiagnostics, style = MaterialTheme.typography.bodySmall)
             Text("Expected service: ${serviceComponent().flattenToString()}")
             Text("System says enabled: $enabled")
             Text(if (rawServices.isBlank()) "Enabled services list: empty" else "Enabled services: $rawServices", style = MaterialTheme.typography.bodySmall)
