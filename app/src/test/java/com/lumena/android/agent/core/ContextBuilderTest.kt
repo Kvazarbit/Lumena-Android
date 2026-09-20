@@ -31,11 +31,37 @@ class ContextBuilderTest {
         )
 
         assertTrue(context.length <= 2_400)
-        assertTrue(context.contains("SYSTEM"))
-        assertTrue(context.contains("OUTPUT RULE"))
+        // Static system rules now belong to LocalWorkflowAgent. Assert the
+        // dynamic context's actual guarantees, not removed presentation headings.
+        assertTrue(context.contains("DYNAMIC VERIFIED CONTEXT"))
+        assertTrue(context.contains("tool/done/reply outputs are JSON only"))
+        assertTrue(context.contains("TOOL_RESULT is the only execution proof"))
         assertTrue(context.contains("TASK STATE"))
         assertTrue(context.contains("goal=Run the exact requested verification"))
-        assertTrue(context.contains("return ONLY JSON"))
+        assertTrue(context.contains("step=1/4"))
+        assertFalse(context.contains("ollama.pull"))
+    }
+
+    @Test
+    fun verificationRequirementSurvivesOversizedOptionalContext() {
+        val requirement = "Verify exactly scripts/demo.py before marking this task done."
+        val context = ContextBuilder(maxChars = 1_600).build(
+            task = TaskState(
+                id = "verification-budget",
+                projectId = null,
+                goal = "Inspect and verify without installing packages",
+                status = TaskStatus.VERIFYING
+            ),
+            project = null,
+            relevantMemory = List(20) { "Optional observation " + "m".repeat(1_000) },
+            allowedTools = setOf("file.read", "python.syntax_check"),
+            verificationRequirement = requirement
+        )
+        assertTrue(context.length <= 1_600)
+        assertTrue(context.contains("goal=Inspect and verify without installing packages"))
+        assertTrue(context.contains("VERIFICATION REQUIRED BEFORE DONE"))
+        assertTrue(context.contains(requirement))
+        assertTrue(context.contains("TOOL_RESULT is the only execution proof"))
     }
 
     @Test
