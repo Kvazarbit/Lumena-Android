@@ -16,6 +16,12 @@ object LlamaNative {
     external fun nativeProbeModel(modelPath: String): String
     external fun nativeProbeModelFd(fd: Int): String
     external fun nativeLastError(): String
+    external fun nativeApplyChatTemplate(
+        handle: Long,
+        roles: Array<String>,
+        contents: Array<String>,
+        addAssistant: Boolean = true
+    ): String
     external fun nativeFreeModel(handle: Long)
     external fun nativeCancel()
     external fun nativeGenerate(
