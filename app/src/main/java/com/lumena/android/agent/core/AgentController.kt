@@ -238,6 +238,16 @@ class AgentController(
             )
         }
 
+        if (requiresVisualEvidence(state.task.goal) && state.visualEvidenceReady) {
+            val finished = state.copy(
+                task = state.task.copy(
+                    status = TaskStatus.DONE,
+                    lastResult = decision.text.take(4_000)
+                )
+            )
+            return ControllerInstruction.Finish(decision.text, finished)
+        }
+
         // A plain reply is acceptable for ordinary conversation before any tool work.
         if (!state.toolUsed && state.plan.isEmpty()) {
             val finished = state.copy(
@@ -386,18 +396,8 @@ class AgentController(
         }
     }
 
-    private fun requiresVisualEvidence(goal: String): Boolean {
-        val lower = goal.lowercase()
-        val imageTerms = listOf(
-            "фото", "зображ", "картин", "image", "photo", "picture",
-            "zdję", "obraz"
-        )
-        val actionTerms = listOf(
-            "знайд", "покаж", "пошук", "find", "show", "search",
-            "znajd", "pokaż", "wyszuk"
-        )
-        return imageTerms.any(lower::contains) && actionTerms.any(lower::contains)
-    }
+    private fun requiresVisualEvidence(goal: String): Boolean =
+        VisualGoalRouter.route(goal) != null
 
     private fun fail(state: AgentControlState, reason: String): AgentControlState = state.copy(
         task = state.task.copy(
