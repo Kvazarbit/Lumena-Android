@@ -257,6 +257,96 @@ Java_com_lumena_android_llama_LlamaNative_nativeLastError(JNIEnv * env, jobject)
     const std::string log = last_log_copy();
     return env->NewStringUTF(log.c_str());
 }
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_lumena_android_llama_LlamaNative_nativeApplyChatTemplate(
+        JNIEnv * env,
+        jobject,
+        jlong handle,
+        jobjectArray rolesArray,
+        jobjectArray contentsArray,
+        jboolean addAssistant) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    auto * model = reinterpret_cast<llama_model *>(handle);
+    if (!model || model != g_model) {
+        append_log("nativeApplyChatTemplate called without an active model.\n");
+        return env->NewStringUTF("");
+    }
+
+    const jsize n_roles = rolesArray ? env->GetArrayLength(rolesArray) : 0;
+    const jsize n_contents = contentsArray ? env->GetArrayLength(contentsArray) : 0;
+    if (n_roles <= 0 || n_roles != n_contents) {
+        append_log("Chat template roles/contents length mismatch.\n");
+        return env->NewStringUTF("");
+    }
+
+    std::vector<std::string> roles;
+    std::vector<std::string> contents;
+    roles.reserve((size_t) n_roles);
+    contents.reserve((size_t) n_roles);
+
+    for (jsize i = 0; i < n_roles; ++i) {
+        auto roleObj = (jstring) env->GetObjectArrayElement(rolesArray, i);
+        auto contentObj = (jstring) env->GetObjectArrayElement(contentsArray, i);
+        roles.push_back(jstr(env, roleObj));
+        contents.push_back(jstr(env, contentObj));
+        if (roleObj) env->DeleteLocalRef(roleObj);
+        if (contentObj) env->DeleteLocalRef(contentObj);
+    }
+
+    std::vector<llama_chat_message> chat;
+    chat.reserve((size_t) n_roles);
+    for (jsize i = 0; i < n_roles; ++i) {
+        llama_chat_message msg {
+            roles[(size_t) i].c_str(),
+            contents[(size_t) i].c_str()
+        };
+        chat.push_back(msg);
+    }
+
+    const char * tmpl = llama_model_chat_template(model, nullptr);
+    if (!tmpl || !tmpl[0]) {
+        append_log("GGUF model has no default chat template.\n");
+        return env->NewStringUTF("");
+    }
+
+    size_t initial = 1024;
+    for (const auto & role : roles) initial += role.size();
+    for (const auto & content : contents) initial += content.size() * 2;
+    std::vector<char> buffer(std::max<size_t>(initial, 4096));
+
+    int32_t needed = llama_chat_apply_template(
+        tmpl,
+        chat.data(),
+        chat.size(),
+        addAssistant == JNI_TRUE,
+        buffer.data(),
+        (int32_t) buffer.size()
+    );
+
+    if (needed < 0) {
+        append_log("llama_chat_apply_template failed for this GGUF template.\n");
+        return env->NewStringUTF("");
+    }
+
+    if ((size_t) needed >= buffer.size()) {
+        buffer.resize((size_t) needed + 1);
+        needed = llama_chat_apply_template(
+            tmpl,
+            chat.data(),
+            chat.size(),
+            addAssistant == JNI_TRUE,
+            buffer.data(),
+            (int32_t) buffer.size()
+        );
+        if (needed < 0) {
+            append_log("llama_chat_apply_template failed after resize.\n");
+            return env->NewStringUTF("");
+        }
+    }
+
+    return env->NewStringUTF(std::string(buffer.data(), (size_t) needed).c_str());
+}
+
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_lumena_android_llama_LlamaNative_nativeFreeModel(
