@@ -18,7 +18,12 @@ class ContextBuilder(
         relevantMemory: List<String>,
         allowedTools: Set<String>? = null,
         plan: List<String> = emptyList(),
-        verificationRequirement: String? = null
+        verificationRequirement: String? = null,
+        intent: TaskIntent = TaskIntent.GENERAL,
+        intentConfidence: Int = 0,
+        recommendedTools: List<String> = emptyList(),
+        intentGuidance: String? = null,
+        recoveryGuidance: String? = null
     ): String {
         val sections = mutableListOf<String>()
 
@@ -48,6 +53,35 @@ class ContextBuilder(
                 appendLine(sanitize(verificationRequirement).take(1_000))
             }
         }
+
+        if (intent != TaskIntent.GENERAL || recommendedTools.isNotEmpty()) {
+            sections += buildString {
+                appendLine("TASK RECIPE")
+                appendLine("intent=$intent")
+                appendLine("confidence=${intentConfidence.coerceIn(0, 100)}")
+                if (recommendedTools.isNotEmpty()) {
+                    appendLine(
+                        "recommended_tools=" +
+                            recommendedTools
+                                .distinct()
+                                .take(12)
+                                .joinToString(",")
+                    )
+                }
+                intentGuidance
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { appendLine("guidance=${sanitize(it).take(700)}") }
+            }
+        }
+
+        recoveryGuidance
+            ?.takeIf { it.isNotBlank() }
+            ?.let {
+                sections += buildString {
+                    appendLine("RECOVERY GUIDANCE")
+                    appendLine(sanitize(it).take(900))
+                }
+            }
 
         sections += buildString {
             appendLine("AVAILABLE TOOLS")
