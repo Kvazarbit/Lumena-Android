@@ -920,6 +920,7 @@ READ_ONLY_BATCH_TOOLS = {
     "system.info",
     "http.json",
     "http.get",
+    "image.search",
     "context.snapshot",
     "process.status",
     "workspace.list",
