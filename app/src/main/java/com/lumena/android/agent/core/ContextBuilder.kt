@@ -113,8 +113,10 @@ class ContextBuilder(
             break
         }
 
-        if (truncated && out.length + 31 <= maxChars) {
-            out.append("\n[lower-priority context omitted]")
+        // The marker is part of the same hard character budget, not extra output.
+        val omissionMarker = "\n[lower-priority context omitted]"
+        if (truncated && out.length + omissionMarker.length <= maxChars) {
+            out.append(omissionMarker)
         }
 
         return out.toString()
