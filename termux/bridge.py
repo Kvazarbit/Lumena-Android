@@ -839,9 +839,13 @@ def ollama_binary() -> str:
 
 
 def ollama_status() -> dict[str, Any]:
-    installed = shutil.which("ollama") is not None
+    binary = shutil.which("ollama")
+    installed = binary is not None
     tags: list[str] = []
-    running: list[dict[str, Any]] = []
+    api_ps_models: list[dict[str, Any]] = []
+    cli_ps_models: list[str] = []
+    cli_ps_raw = ""
+    api_version = None
     server_ok = False
 
     try:
@@ -854,13 +858,20 @@ def ollama_status() -> dict[str, Any]:
 
     if server_ok:
         try:
+            with urllib.request.urlopen(f"{OLLAMA_API}/api/version", timeout=2) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            api_version = payload.get("version")
+        except Exception:
+            pass
+
+        try:
             with urllib.request.urlopen(f"{OLLAMA_API}/api/ps", timeout=2) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             for model in payload.get("models", []):
                 if not isinstance(model, dict):
                     continue
                 details = model.get("details") if isinstance(model.get("details"), dict) else {}
-                running.append({
+                api_ps_models.append({
                     "name": model.get("name") or model.get("model"),
                     "size": model.get("size"),
                     "size_vram": model.get("size_vram"),
@@ -873,20 +884,70 @@ def ollama_status() -> dict[str, Any]:
         except Exception:
             pass
 
-    if not server_ok:
-        return {
-            "ok": True,
-            "exitCode": 0,
-            "stdout": f"installed={str(installed).lower()}\nrunning=false\n",
-            "stderr": "",
-            "error": None,
-        }
+    if binary:
+        try:
+            cli_env = os.environ.copy()
+            cli_ps_raw = subprocess.check_output(
+                [binary, "ps"],
+                text=True,
+                timeout=3,
+                stderr=subprocess.STDOUT,
+                env=cli_env,
+            ).strip()
+            lines = [line for line in cli_ps_raw.splitlines() if line.strip()]
+            for line in lines[1:]:
+                name = line.split()[0] if line.split() else ""
+                if name:
+                    cli_ps_models.append(name)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    process_lines: list[str] = []
+    try:
+        ps_text = subprocess.check_output(
+            ["ps", "-A"],
+            text=True,
+            timeout=2,
+            stderr=subprocess.DEVNULL,
+        )
+        process_lines = [
+            line.strip()
+            for line in ps_text.splitlines()
+            if "ollama" in line.lower()
+        ][:20]
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    api_names = {
+        str(item.get("name") or "").strip()
+        for item in api_ps_models
+        if str(item.get("name") or "").strip()
+    }
+    cli_names = {name.strip() for name in cli_ps_models if name.strip()}
+    if api_names == cli_names:
+        consistency = "match"
+    elif api_names or cli_names:
+        consistency = "mismatch"
+    else:
+        consistency = "both-empty"
 
     summary = {
         "installed": installed,
-        "running": True,
-        "models": tags,
-        "loaded_models": running,
+        "binary": binary,
+        "bridge_endpoint": OLLAMA_API,
+        "env_OLLAMA_HOST": os.environ.get("OLLAMA_HOST"),
+        "api_running": server_ok,
+        "api_version": api_version,
+        "installed_models": tags,
+        "api_ps_models": api_ps_models,
+        "cli_ps_models": cli_ps_models,
+        "cli_ps_raw": cli_ps_raw,
+        "ollama_processes": process_lines,
+        "runtime_visibility": consistency,
+        "note": (
+            "A mismatch means the CLI and bridge/API do not see the same loaded-model state; "
+            "do not conclude that a model is unloaded from only one source."
+        ),
     }
     return {
         "ok": True,
