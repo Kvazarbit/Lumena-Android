@@ -95,7 +95,11 @@ object ToolRegistry {
         }
 
         val oversized = call.args.entries.firstOrNull { (key, value) ->
-            val limit = if (key == "content") 256_000 else 16_000
+            val limit = when (key) {
+                "content" -> 256_000
+                "requests" -> 64_000
+                else -> 16_000
+            }
             value.length > limit
         }
         if (oversized != null) {
