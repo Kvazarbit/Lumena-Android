@@ -31,6 +31,13 @@ data class ExperienceMemoryState(
     val anchors: List<ExperienceAnchor> = emptyList()
 )
 
+data class ExperienceMemoryStats(
+    val positive: Int,
+    val negative: Int,
+    val unresolvedNegative: Int,
+    val total: Int
+)
+
 object ExperienceMemoryIndex {
     private const val MAX_ANCHORS = 128
 
@@ -212,6 +219,23 @@ object ExperienceMemoryStore {
         limit: Int = 8
     ): List<String> = synchronized(lock) {
         ExperienceMemoryIndex.relevant(load(context.applicationContext), query, limit)
+    }
+
+    fun stats(context: Context): ExperienceMemoryStats = synchronized(lock) {
+        val anchors = load(context.applicationContext).anchors
+        ExperienceMemoryStats(
+            positive = anchors.count { it.valence == ExperienceValence.POSITIVE },
+            negative = anchors.count { it.valence == ExperienceValence.NEGATIVE },
+            unresolvedNegative = anchors.count {
+                it.valence == ExperienceValence.NEGATIVE && it.resolvedAt == null
+            },
+            total = anchors.size
+        )
+    }
+
+    fun clear(context: Context) = synchronized(lock) {
+        val file = file(context.applicationContext)
+        if (file.exists()) file.delete()
     }
 
     private fun save(context: Context, state: ExperienceMemoryState) {
