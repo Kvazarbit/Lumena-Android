@@ -155,6 +155,45 @@ class ExperienceMemoryStoreTest {
     }
 
     @Test
+    fun imageSearchAnchorsAreKeyedByQuery() {
+        var state = ExperienceMemoryState()
+        state = ExperienceMemoryIndex.record(
+            state,
+            ToolRequest(
+                "image.search",
+                mapOf("query" to "woman portrait")
+            ),
+            ToolResult(
+                ok = true,
+                tool = "image.search",
+                stdout = "display ready"
+            ),
+            now = 1000L
+        )
+        state = ExperienceMemoryIndex.record(
+            state,
+            ToolRequest(
+                "image.search",
+                mapOf("query" to "mountain landscape")
+            ),
+            ToolResult(
+                ok = true,
+                tool = "image.search",
+                stdout = "display ready"
+            ),
+            now = 2000L
+        )
+
+        val positives = state.anchors.filter {
+            it.valence == ExperienceValence.POSITIVE &&
+                it.tool == "image.search"
+        }
+        assertEquals(2, positives.size)
+        assertTrue(positives.any { it.target.contains("woman portrait") })
+        assertTrue(positives.any { it.target.contains("mountain landscape") })
+    }
+
+    @Test
     fun repeatedVerifiedSuccessCompactsIntoOccurrences() {
         val request = ToolRequest(
             tool = "git.status",
