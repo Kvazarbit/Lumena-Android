@@ -151,7 +151,7 @@ object ExperienceMemoryIndex {
     }
 
     private fun targetOf(request: ToolRequest): String {
-        val preferred = listOf("path", "script", "cwd", "model", "url", "name")
+        val preferred = listOf("path", "script", "cwd", "model", "url", "name", "query")
         val pair = preferred.firstNotNullOfOrNull { key ->
             request.args[key]?.trim()?.takeIf { it.isNotBlank() }?.let { key to it }
         }
