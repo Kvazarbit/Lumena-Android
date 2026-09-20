@@ -56,9 +56,15 @@ object LumenaPreferences {
         if (ollamaUrl != storedOllamaUrl) {
             prefs.edit().putString(KEY_OLLAMA_URL, ollamaUrl).apply()
         }
+        val storedBridgeToken = prefs.getString(KEY_BRIDGE_TOKEN, "") ?: ""
+        val bridgeToken = normalizeBridgeToken(storedBridgeToken)
+        if (bridgeToken != storedBridgeToken) {
+            prefs.edit().putString(KEY_BRIDGE_TOKEN, bridgeToken).apply()
+        }
+
         return LumenaConnectionSettings(
             bridgeUrl = bridgeUrl,
-            bridgeToken = prefs.getString(KEY_BRIDGE_TOKEN, "") ?: "",
+            bridgeToken = bridgeToken,
             ollamaUrl = ollamaUrl,
             selectedModel = prefs.getString(KEY_SELECTED_MODEL, "") ?: "",
             companionAutoReturn = prefs.getBoolean(KEY_COMPANION_AUTO_RETURN, true),
@@ -74,8 +80,11 @@ object LumenaPreferences {
     }
 
     fun saveBridgeToken(context: Context, value: String) {
-        prefs(context).edit().putString(KEY_BRIDGE_TOKEN, value.trim()).apply()
+        prefs(context).edit().putString(KEY_BRIDGE_TOKEN, normalizeBridgeToken(value)).apply()
     }
+
+    fun normalizeBridgeToken(value: String): String =
+        value.replace("\r", "").replace("\n", "").trim()
 
     fun saveOllamaUrl(context: Context, value: String) {
         prefs(context).edit().putString(KEY_OLLAMA_URL, value.trim()).apply()
