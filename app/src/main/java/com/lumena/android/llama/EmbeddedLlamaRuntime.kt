@@ -173,7 +173,20 @@ object EmbeddedLlamaRuntime {
     ) {
         require(modelRef.isNotBlank()) { "Choose a GGUF model first" }
         val normalizedMode = computeMode.takeIf { it in setOf("auto", "cpu", "gpu") } ?: "auto"
-        if (handle != 0L && loadedModelRef == modelRef && loadedComputeMode == normalizedMode) return
+        val sameLoadedModel =
+            handle != 0L &&
+                loadedModelRef == modelRef &&
+                loadedComputeMode == normalizedMode
+
+        val mustDowngradeAutoGpu =
+            sameLoadedModel &&
+                LlamaRuntimePolicy.shouldDowngradeAutoGpu(
+                    loadedGpuLayers = loadedGpuLayers,
+                    computeMode = normalizedMode,
+                    profile = profile
+                )
+
+        if (sameLoadedModel && !mustDowngradeAutoGpu) return
 
         val old = handle
         handle = 0
