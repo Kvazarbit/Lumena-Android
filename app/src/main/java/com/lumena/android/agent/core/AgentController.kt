@@ -202,6 +202,24 @@ class AgentController(
         decision: AgentDecision.Reply,
         state: AgentControlState
     ): ControllerInstruction {
+        val trimmed = decision.text.trim()
+        val looksLikeBrokenProtocol =
+            trimmed.startsWith("{") &&
+                (
+                    trimmed.contains("\"tool\"") ||
+                    trimmed.contains("\"plan\"") ||
+                    trimmed.contains("\"args\"") ||
+                    trimmed.contains("\"done\"")
+                ) ||
+            trimmed.contains("<tool_call>", ignoreCase = true)
+
+        if (looksLikeBrokenProtocol) {
+            return protocolRetry(
+                state,
+                "The previous output looked like a tool/protocol message but could not be parsed safely. Return one valid Lumena JSON tool call, or ordinary prose with no protocol fields."
+            )
+        }
+
         // A plain reply is acceptable for ordinary conversation before any tool work.
         if (!state.toolUsed && state.plan.isEmpty()) {
             val finished = state.copy(
