@@ -6,6 +6,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
+import java.nio.file.Files
 
 class ExperienceMemoryStoreTest {
     @Test
@@ -99,6 +101,38 @@ class ExperienceMemoryStoreTest {
         assertEquals(1, relevant.size)
         assertTrue(relevant.single().contains("python.run"))
         assertTrue(relevant.single().contains("NEGATIVE"))
+    }
+
+    @Test
+    fun anchorsSurviveJsonDiskRoundTrip() {
+        val dir = Files.createTempDirectory("lumena-memory-test").toFile()
+        val file = File(dir, "memory.json")
+        try {
+            val original = ExperienceMemoryState(
+                anchors = listOf(
+                    ExperienceAnchor(
+                        id = "a1",
+                        signature = "sig",
+                        tool = "python.run",
+                        target = "script=demo.py",
+                        valence = ExperienceValence.NEGATIVE,
+                        summary = "failure: missing dependency",
+                        occurrences = 2,
+                        firstSeenAt = 1000L,
+                        lastSeenAt = 2000L,
+                        resolvedAt = 3000L
+                    )
+                )
+            )
+
+            ExperienceMemoryFileCodec.save(file, original)
+            val loaded = ExperienceMemoryFileCodec.load(file)
+
+            assertEquals(original, loaded)
+            assertTrue(file.exists())
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     @Test
