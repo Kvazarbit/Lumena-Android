@@ -9,7 +9,8 @@ data class LumenaConnectionSettings(
     val selectedModel: String = "",
     val companionAutoReturn: Boolean = true,
     val inferenceBackend: String = "ollama",
-    val ggufPath: String = ""
+    val ggufPath: String = "",
+    val computeMode: String = "auto"
 ) {
     companion object {
         const val DEFAULT_BRIDGE_URL = "http://127.0.0.1:8765"
@@ -35,6 +36,7 @@ object LumenaPreferences {
     private const val KEY_LEGACY_MIGRATED = "legacy_companion_migrated"
     private const val KEY_INFERENCE_BACKEND = "inference_backend"
     private const val KEY_GGUF_PATH = "gguf_path"
+    private const val KEY_COMPUTE_MODE = "compute_mode"
 
     fun load(context: Context): LumenaConnectionSettings {
         val app = context.applicationContext
@@ -61,7 +63,9 @@ object LumenaPreferences {
             selectedModel = prefs.getString(KEY_SELECTED_MODEL, "") ?: "",
             companionAutoReturn = prefs.getBoolean(KEY_COMPANION_AUTO_RETURN, true),
             inferenceBackend = prefs.getString(KEY_INFERENCE_BACKEND, "ollama") ?: "ollama",
-            ggufPath = prefs.getString(KEY_GGUF_PATH, "") ?: ""
+            ggufPath = prefs.getString(KEY_GGUF_PATH, "") ?: "",
+            computeMode = (prefs.getString(KEY_COMPUTE_MODE, "auto") ?: "auto")
+                .takeIf { it in setOf("auto", "cpu", "gpu") } ?: "auto"
         )
     }
 
@@ -87,6 +91,11 @@ object LumenaPreferences {
 
     fun saveGgufPath(context: Context, value: String) {
         prefs(context).edit().putString(KEY_GGUF_PATH, value.trim()).apply()
+    }
+
+    fun saveComputeMode(context: Context, value: String) {
+        val normalized = value.takeIf { it in setOf("auto", "cpu", "gpu") } ?: "auto"
+        prefs(context).edit().putString(KEY_COMPUTE_MODE, normalized).apply()
     }
 
     fun saveCompanionAutoReturn(context: Context, value: Boolean) {
