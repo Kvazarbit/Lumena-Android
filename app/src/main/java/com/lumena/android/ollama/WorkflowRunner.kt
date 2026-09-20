@@ -76,7 +76,13 @@ class WorkflowRunner(
                 )
             }
 
-            onProgress("MODEL REQUEST · step ${state.task.step + 1}/${state.task.maxSteps}")
+            onProgress(
+                if (state.plan.isEmpty() && state.task.step == 0) {
+                    "MODEL REQUEST · planning"
+                } else {
+                    "MODEL REQUEST · step ${state.task.step + 1}/${state.task.maxSteps}"
+                }
+            )
             onModelText("")
             val modelMessages = withDynamicContext(current, state)
             val replyResult = modelClient.chatStreaming(model, modelMessages) { partial ->
