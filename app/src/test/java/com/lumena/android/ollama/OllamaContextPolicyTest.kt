@@ -84,7 +84,7 @@ class OllamaContextPolicyTest {
     fun oldConversationDropsBeforeLatestTurn() {
         val budget = OllamaRequestBudget(
             options = OllamaOptions(num_ctx = 2048, num_predict = 384),
-            maxChars = 6000,
+            maxChars = 4000,
             maxPerMessage = 2000
         )
         val messages = listOf(
