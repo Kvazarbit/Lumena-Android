@@ -104,6 +104,13 @@ jobs:
               pass
           else:
               raise AssertionError("file.search must reject an empty query")
+
+          try:
+              bridge.image_search({"query": ""})
+          except ValueError:
+              pass
+          else:
+              raise AssertionError("image.search must reject an empty query")
           PY
           bash -n termux/install_bridge.sh
           bash -n termux/ollama_sidecar.sh
