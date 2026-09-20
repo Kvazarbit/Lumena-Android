@@ -8,7 +8,7 @@ import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.core.ToolRegistry
 import com.lumena.android.agent.core.ToolRisk
-import com.lumena.android.agent.core.VisualGoalRouter
+import com.lumena.android.agent.core.TaskIntentRouter
 import com.lumena.android.agent.local.PlannedTool
 import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.TermuxBridgeClient
@@ -76,96 +76,128 @@ class WorkflowRunner(
         var protocolTurns = 0
         onState(state)
 
-        val visualRoute = if (
-            state.task.step == 0 &&
-            !state.visualEvidenceReady
-        ) {
-            VisualGoalRouter.route(state.task.goal)
-        } else {
-            null
-        }
-
-        if (visualRoute != null) {
-            val localBridge = bridge
-            if (localBridge == null) {
-                val stopped = state.copy(
-                    task = state.task.copy(
-                        status = TaskStatus.FAILED,
-                        errors = (state.task.errors +
-                            "Bridge token is required for mandatory image.search").takeLast(8)
-                    )
-                )
-                onState(stopped)
-                return WorkflowOutcome.Failed(
-                    "Bridge token is required to find and show images.",
-                    current,
-                    stopped
-                )
-            }
-
-            val request = ToolRequest(
-                tool = "image.search",
-                args = mapOf(
-                    "query" to visualRoute.query,
-                    "limit" to "4"
-                ),
-                requestId = buildRequestId(state)
-            )
+        val intentProfile = TaskIntentRouter.route(state.task.goal)
+        if (!state.preflightCompleted && state.task.step == 0) {
             onProgress(
-                "VISUAL ROUTE · required image.search\nquery=${visualRoute.query.take(300)}"
+                "INTENT · ${intentProfile.intent} · confidence=${intentProfile.confidence}"
             )
 
-            val rawResult = executeWithTelemetry(
-                localBridge,
-                request,
-                onToolTelemetry
-            )
-            val (result, displayImages) = normalizeDisplayResult(
-                request,
-                rawResult
-            )
-            displayImages.forEach { image ->
-                if (collectedImages.none { it.thumbnailUrl == image.thumbnailUrl }) {
-                    collectedImages += image
+            val preflight = intentProfile.preflight
+            if (preflight == null) {
+                state = state.copy(preflightCompleted = true)
+                onState(state)
+            } else {
+                val canonical = ToolRegistry.canonicalize(preflight.tool)
+                val spec = ToolRegistry.get(canonical)
+                if (spec?.risk != ToolRisk.READ_ONLY) {
+                    val stopped = state.copy(
+                        preflightCompleted = true,
+                        task = state.task.copy(
+                            status = TaskStatus.FAILED,
+                            errors = (state.task.errors +
+                                "Unsafe preflight rejected: $canonical").takeLast(8)
+                        )
+                    )
+                    onState(stopped)
+                    return WorkflowOutcome.Failed(
+                        "Agent policy rejected a non-read-only preflight: $canonical",
+                        current,
+                        stopped
+                    )
+                }
+
+                val localBridge = bridge
+                if (localBridge == null) {
+                    if (preflight.mandatory) {
+                        val stopped = state.copy(
+                            preflightCompleted = true,
+                            task = state.task.copy(
+                                status = TaskStatus.FAILED,
+                                errors = (state.task.errors +
+                                    "Bridge token is required for mandatory $canonical preflight").takeLast(8)
+                            )
+                        )
+                        onState(stopped)
+                        return WorkflowOutcome.Failed(
+                            "Bridge token is required for this local task.",
+                            current,
+                            stopped
+                        )
+                    }
+
+                    state = state.copy(
+                        preflightCompleted = true,
+                        recoveryHint = "Optional $canonical preflight was skipped because the local bridge is unavailable. Do not invent local state."
+                    )
+                    onState(state)
+                } else {
+                    val request = ToolRequest(
+                        tool = canonical,
+                        args = preflight.args,
+                        requestId = buildRequestId(state)
+                    )
+                    onProgress(
+                        "PREFLIGHT · $canonical\n${preflight.reason.take(500)}"
+                    )
+
+                    val rawResult = executeWithTelemetry(
+                        localBridge,
+                        request,
+                        onToolTelemetry
+                    )
+                    val (result, displayImages) = normalizeDisplayResult(
+                        request,
+                        rawResult
+                    )
+                    displayImages.forEach { image ->
+                        if (collectedImages.none { it.thumbnailUrl == image.thumbnailUrl }) {
+                            collectedImages += image
+                        }
+                    }
+                    runCatching { onToolExperience(request, result) }
+
+                    val transition = controller.afterTool(
+                        state = state,
+                        call = AgentDecision.ToolCall(
+                            tool = canonical,
+                            args = request.args,
+                            reason = preflight.reason
+                        ),
+                        ok = result.ok,
+                        stdout = result.stdout,
+                        stderr = result.stderr,
+                        error = result.error
+                    )
+                    state = transition.state.copy(preflightCompleted = true)
+                    onState(state)
+                    onProgress(
+                        toolResultTrace(
+                            request.tool,
+                            result.stdout,
+                            result.stderr,
+                            result.error,
+                            result.ok
+                        )
+                    )
+
+                    current = current + LocalWorkflowAgent.toolResultMessage(
+                        tool = request.tool,
+                        ok = result.ok,
+                        stdout = result.stdout,
+                        stderr = result.stderr,
+                        error = result.error
+                    )
+
+                    transition.stopReason?.let { reason ->
+                        return WorkflowOutcome.Failed(reason, current, state)
+                    }
                 }
             }
-            runCatching { onToolExperience(request, result) }
-
-            val transition = controller.afterTool(
-                state = state,
-                call = AgentDecision.ToolCall(
-                    tool = "image.search",
-                    args = request.args,
-                    reason = "Application-required visual evidence"
-                ),
-                ok = result.ok,
-                stdout = result.stdout,
-                stderr = result.stderr,
-                error = result.error
-            )
-            state = transition.state
+        } else if (!state.preflightCompleted) {
+            // A restored/in-progress task must not replay a new preflight over
+            // already executed work.
+            state = state.copy(preflightCompleted = true)
             onState(state)
-            onProgress(
-                toolResultTrace(
-                    request.tool,
-                    result.stdout,
-                    result.stderr,
-                    result.error,
-                    result.ok
-                )
-            )
-
-            current = current + LocalWorkflowAgent.toolResultMessage(
-                tool = request.tool,
-                ok = result.ok,
-                stdout = result.stdout,
-                stderr = result.stderr,
-                error = result.error
-            )
-
-            transition.stopReason?.let { reason ->
-                return WorkflowOutcome.Failed(reason, current, state)
-            }
         }
 
         while (state.task.canContinue) {
