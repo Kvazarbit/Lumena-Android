@@ -36,12 +36,24 @@ object LumenaPreferences {
         val app = context.applicationContext
         migrateLegacyCompanionIfNeeded(app)
         val prefs = app.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+        val bridgeUrl = prefs.getString(KEY_BRIDGE_URL, LumenaConnectionSettings.DEFAULT_BRIDGE_URL)
+            ?: LumenaConnectionSettings.DEFAULT_BRIDGE_URL
+        val storedOllamaUrl = prefs.getString(KEY_OLLAMA_URL, LumenaConnectionSettings.DEFAULT_OLLAMA_URL)
+            ?: LumenaConnectionSettings.DEFAULT_OLLAMA_URL
+        // Older builds could leave the Termux bridge URL in the Ollama field.
+        // Sending Ollama /api/chat to port 8765 produces the misleading bridge 404 seen in logs.
+        val ollamaUrl = if (storedOllamaUrl.trimEnd('/') == bridgeUrl.trimEnd('/')) {
+            LumenaConnectionSettings.DEFAULT_OLLAMA_URL
+        } else {
+            storedOllamaUrl
+        }
+        if (ollamaUrl != storedOllamaUrl) {
+            prefs.edit().putString(KEY_OLLAMA_URL, ollamaUrl).apply()
+        }
         return LumenaConnectionSettings(
-            bridgeUrl = prefs.getString(KEY_BRIDGE_URL, LumenaConnectionSettings.DEFAULT_BRIDGE_URL)
-                ?: LumenaConnectionSettings.DEFAULT_BRIDGE_URL,
+            bridgeUrl = bridgeUrl,
             bridgeToken = prefs.getString(KEY_BRIDGE_TOKEN, "") ?: "",
-            ollamaUrl = prefs.getString(KEY_OLLAMA_URL, LumenaConnectionSettings.DEFAULT_OLLAMA_URL)
-                ?: LumenaConnectionSettings.DEFAULT_OLLAMA_URL,
+            ollamaUrl = ollamaUrl,
             selectedModel = prefs.getString(KEY_SELECTED_MODEL, "") ?: "",
             companionAutoReturn = prefs.getBoolean(KEY_COMPANION_AUTO_RETURN, true)
         )
