@@ -169,11 +169,15 @@ Java_com_lumena_android_llama_LlamaNative_nativeProbeModelFd(
         return env->NewStringUTF("ERROR\nInvalid Android file descriptor.");
     }
 
+    const off_t original_offset = ::lseek(fd, 0, SEEK_CUR);
     const int dup_fd = ::dup(fd);
     if (dup_fd < 0) {
         const std::string error = std::string("ERROR\ndup(fd) failed: ") + std::strerror(errno);
         return env->NewStringUTF(error.c_str());
     }
+    // SAF descriptors can retain a shared file offset across dup(). Always
+    // probe from the beginning, then restore the caller's offset when seekable.
+    (void) ::lseek(dup_fd, 0, SEEK_SET);
 
     FILE * file = ::fdopen(dup_fd, "rb");
     if (!file) {
@@ -187,6 +191,9 @@ Java_com_lumena_android_llama_LlamaNative_nativeProbeModelFd(
     const std::string summary = model_probe_summary(probe);
     if (probe) llama_model_free(probe);
     ::fclose(file);
+    if (original_offset >= 0) {
+        (void) ::lseek(fd, original_offset, SEEK_SET);
+    }
     return env->NewStringUTF(summary.c_str());
 }
 
@@ -235,6 +242,8 @@ Java_com_lumena_android_llama_LlamaNative_nativeLoadModelFd(
         append_log((std::string("dup(fd) failed: ") + std::strerror(errno) + "\n").c_str());
         return 0;
     }
+    // Be independent of any previous metadata probe/read on the same SAF FD.
+    (void) ::lseek(dup_fd, 0, SEEK_SET);
 
     FILE * file = ::fdopen(dup_fd, "rb");
     if (!file) {
