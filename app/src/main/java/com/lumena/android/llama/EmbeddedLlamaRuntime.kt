@@ -96,11 +96,22 @@ object EmbeddedLlamaRuntime {
         } else {
             val file = File(modelRef)
             require(file.isFile) { "GGUF model not found: $modelRef" }
-            loadWithGpuFallback(modelRef, file.length(), profile, normalizedMode)
+            loadWithGpuFallback(
+                modelBytes = file.length(),
+                profile = profile,
+                computeMode = normalizedMode
+            ) { gpuLayers ->
+                LlamaNative.nativeLoadModel(modelRef, gpuLayers)
+            }
         }
 
         check(loaded != 0L) {
-            "llama.cpp could not load this GGUF model. Re-select the file or choose a smaller compatible GGUF."
+            val native = LlamaNative.nativeLastError().trim()
+            if (native.isBlank()) {
+                "llama.cpp could not load this GGUF model."
+            } else {
+                "llama.cpp could not load this GGUF model.\n$native"
+            }
         }
         handle = loaded
         loadedModelRef = modelRef
@@ -118,23 +129,24 @@ object EmbeddedLlamaRuntime {
         return descriptor.use { pfd ->
             check(pfd.fd >= 0) { "Android returned an invalid file descriptor for the GGUF model" }
             loadWithGpuFallback(
-                path = "/proc/self/fd/${pfd.fd}",
                 modelBytes = pfd.statSize.coerceAtLeast(0L),
                 profile = profile,
                 computeMode = computeMode
-            )
+            ) { gpuLayers ->
+                LlamaNative.nativeLoadModelFd(pfd.fd, gpuLayers)
+            }
         }
     }
 
     private fun loadWithGpuFallback(
-        path: String,
         modelBytes: Long,
         profile: LlamaRuntimeProfile,
-        computeMode: String
+        computeMode: String,
+        loader: (Int) -> Long
     ): Long {
         val gpuLayers = chooseGpuLayers(profile, modelBytes, computeMode)
         if (gpuLayers != 0) {
-            val gpuHandle = LlamaNative.nativeLoadModel(path, gpuLayers)
+            val gpuHandle = loader(gpuLayers)
             if (gpuHandle != 0L) {
                 loadedGpuLayers = gpuLayers
                 return gpuHandle
@@ -142,7 +154,7 @@ object EmbeddedLlamaRuntime {
         }
 
         loadedGpuLayers = 0
-        return LlamaNative.nativeLoadModel(path, 0)
+        return loader(0)
     }
 
     private fun chooseGpuLayers(
