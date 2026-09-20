@@ -219,15 +219,17 @@ def _is_workspace_path(path: Path) -> bool:
 
 
 def _is_hidden_backup(path: Path) -> bool:
+    if not _inside(path, WORKSPACE):
+        return False
     try:
         rel = path.resolve().relative_to(WORKSPACE)
     except (ValueError, OSError):
-        return True
+        return False
     return bool(rel.parts and rel.parts[0] == BACKUP_ROOT.name)
 
 
 def file_list(args: dict[str, Any]) -> dict[str, Any]:
-    root = safe_path(str(args.get("path", "")).strip(), must_exist=True)
+    root = safe_read_path(str(args.get("path", "")).strip(), must_exist=True)
     if not root.is_dir():
         raise ValueError("file.list path must be a directory")
 
@@ -236,11 +238,11 @@ def file_list(args: dict[str, Any]) -> dict[str, Any]:
     rows: list[str] = []
 
     for path in sorted(root.rglob("*"), key=lambda p: str(p).lower()):
-        if not _is_workspace_path(path) or _is_hidden_backup(path):
+        if not _is_allowed_read_path(path) or _is_hidden_backup(path):
             continue
         try:
-            rel_root = path.relative_to(root)
-            rel_workspace = path.resolve().relative_to(WORKSPACE)
+            rel_root = path.resolve().relative_to(root.resolve())
+            shown = display_read_path(path)
         except (ValueError, OSError):
             continue
         if len(rel_root.parts) > depth:
@@ -248,13 +250,13 @@ def file_list(args: dict[str, Any]) -> dict[str, Any]:
 
         try:
             if path.is_dir():
-                rows.append(f"{rel_workspace}/")
+                rows.append(f"{shown}/")
             elif path.is_file():
-                rows.append(f"{rel_workspace}\t{path.stat().st_size} bytes")
+                rows.append(f"{shown}\t{path.stat().st_size} bytes")
             else:
-                rows.append(f"{rel_workspace}\tother")
+                rows.append(f"{shown}\tother")
         except OSError:
-            rows.append(f"{rel_workspace}\tunreadable")
+            rows.append(f"{shown}\tunreadable")
 
         if len(rows) >= limit:
             rows.append("...[listing truncated]...")
@@ -276,7 +278,7 @@ def file_search(args: dict[str, Any]) -> dict[str, Any]:
     if len(query) > 200:
         raise ValueError("file.search query exceeds 200 characters")
 
-    root = safe_path(str(args.get("path", "")).strip(), must_exist=True)
+    root = safe_read_path(str(args.get("path", "")).strip(), must_exist=True)
     if not root.is_dir():
         raise ValueError("file.search path must be a directory")
 
@@ -288,7 +290,7 @@ def file_search(args: dict[str, Any]) -> dict[str, Any]:
     for path in sorted(root.rglob("*"), key=lambda p: str(p).lower()):
         if len(matches) >= limit:
             break
-        if not _is_workspace_path(path) or _is_hidden_backup(path) or not path.is_file():
+        if not _is_allowed_read_path(path) or _is_hidden_backup(path) or not path.is_file():
             continue
 
         scanned += 1
@@ -296,12 +298,10 @@ def file_search(args: dict[str, Any]) -> dict[str, Any]:
             break
 
         try:
-            rel = path.resolve().relative_to(WORKSPACE)
+            rel_text = display_read_path(path)
             size = path.stat().st_size
         except (OSError, ValueError):
             continue
-
-        rel_text = str(rel)
         if needle in rel_text.casefold():
             matches.append(f"PATH\t{rel_text}")
             if len(matches) >= limit:
