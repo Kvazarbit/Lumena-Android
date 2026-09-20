@@ -4,6 +4,9 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Call
@@ -54,6 +57,16 @@ data class OllamaTagsResponse(
 
 interface ChatModelClient {
     suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String>
+
+    suspend fun chatStreaming(
+        model: String,
+        messages: List<OllamaMessage>,
+        onPartial: (String) -> Unit
+    ): Result<String> {
+        val result = chat(model, messages)
+        result.getOrNull()?.let(onPartial)
+        return result
+    }
 }
 
 class OllamaClient(baseUrl: String) : ChatModelClient {
@@ -93,20 +106,30 @@ class OllamaClient(baseUrl: String) : ChatModelClient {
      * Agent chat is bounded and cancellable. Cancelling the owning coroutine immediately
      * cancels the active OkHttp/Ollama request, which is what the Local STOP button uses.
      */
-    override suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String> = withContext(Dispatchers.IO) {
+    override suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String> =
+        chatStreaming(model, messages) { }
+
+    override suspend fun chatStreaming(
+        model: String,
+        messages: List<OllamaMessage>,
+        onPartial: (String) -> Unit
+    ): Result<String> = withContext(Dispatchers.IO) {
         try {
             require(model.isNotBlank()) { "Choose an Ollama model first" }
             val text = try {
-                executeChat(
+                executeStreamingChat(
                     model = model,
                     messages = compactMessages(messages, maxChars = 14_000, maxPerMessage = 5_000),
-                    options = OllamaOptions(num_ctx = 4096, num_predict = 768, temperature = 0.15)
+                    options = OllamaOptions(num_ctx = 4096, num_predict = 768, temperature = 0.15),
+                    onPartial = onPartial
                 )
             } catch (timeout: SocketTimeoutException) {
-                executeChat(
+                onPartial("")
+                executeStreamingChat(
                     model = model,
                     messages = compactMessages(messages, maxChars = 8_000, maxPerMessage = 3_000),
-                    options = OllamaOptions(num_ctx = 3072, num_predict = 512, temperature = 0.1)
+                    options = OllamaOptions(num_ctx = 3072, num_predict = 512, temperature = 0.1),
+                    onPartial = onPartial
                 )
             }
             Result.success(text)
@@ -114,6 +137,60 @@ class OllamaClient(baseUrl: String) : ChatModelClient {
             throw cancelled
         } catch (t: Throwable) {
             Result.failure(t)
+        }
+    }
+
+    private suspend fun executeStreamingChat(
+        model: String,
+        messages: List<OllamaMessage>,
+        options: OllamaOptions,
+        onPartial: (String) -> Unit
+    ): String {
+        val payload = requestAdapter.toJson(
+            OllamaChatRequest(
+                model = model,
+                messages = messages,
+                stream = true,
+                options = options
+            )
+        )
+        val request = Request.Builder()
+            .url(base.newBuilder().addPathSegments("api/chat").build())
+            .post(payload.toRequestBody(jsonType))
+            .build()
+        val call = client.newCall(request)
+        val context = currentCoroutineContext()
+        val cancelHandle = context[Job]?.invokeOnCompletion { cause ->
+            if (cause is CancellationException) call.cancel()
+        }
+
+        try {
+            call.execute().use { response ->
+                if (!response.isSuccessful) {
+                    val body = response.body?.string().orEmpty()
+                    error("Ollama HTTP ${response.code}: $body")
+                }
+                val source = response.body?.source() ?: error("Ollama returned no response body")
+                val accumulated = StringBuilder()
+                while (true) {
+                    context.ensureActive()
+                    val line = source.readUtf8Line() ?: break
+                    if (line.isBlank()) continue
+                    val chunk = responseAdapter.fromJson(line) ?: continue
+                    chunk.message?.content?.let { piece ->
+                        if (piece.isNotEmpty()) {
+                            accumulated.append(piece)
+                            onPartial(accumulated.toString())
+                        }
+                    }
+                    if (chunk.done == true) break
+                }
+                val text = accumulated.toString()
+                check(text.isNotBlank()) { "Ollama returned no message" }
+                return text
+            }
+        } finally {
+            cancelHandle?.dispose()
         }
     }
 
