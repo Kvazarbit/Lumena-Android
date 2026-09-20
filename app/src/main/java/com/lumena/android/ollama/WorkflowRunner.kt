@@ -41,7 +41,7 @@ sealed interface WorkflowOutcome {
 }
 
 class WorkflowRunner(
-    private val ollama: OllamaClient,
+    private val modelClient: ChatModelClient,
     private val bridge: TermuxBridgeClient?,
     private val model: String,
     private val controller: AgentController = AgentController()
@@ -77,7 +77,7 @@ class WorkflowRunner(
 
             onProgress("Thinking · step ${state.task.step + 1}/${state.task.maxSteps}")
             val modelMessages = withDynamicContext(current, state)
-            val replyResult = ollama.chat(model, modelMessages)
+            val replyResult = modelClient.chat(model, modelMessages)
             if (replyResult.isFailure) {
                 val error = replyResult.exceptionOrNull()
                 when (val recovery = controller.onModelFailure(
