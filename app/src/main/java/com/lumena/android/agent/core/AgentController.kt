@@ -342,7 +342,8 @@ class AgentController(
                 repeatedToolFailures = repeatedFailures,
                 verificationRequired = verificationRequired,
                 verificationReason = verificationReason,
-                visualEvidenceReady = state.visualEvidenceReady || (ok && call.tool == "image.search")
+                visualEvidenceReady = state.visualEvidenceReady ||
+                    (ok && ToolRegistry.canonicalize(call.tool) == "image.search")
             )
         )
     }
