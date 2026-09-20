@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.14
+Lumena Termux Bridge v0.15
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -467,7 +467,7 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.14",
+            "User-Agent": "LumenaBridge/0.15",
             "Cache-Control": "no-cache",
         },
     )
@@ -521,7 +521,7 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "text/html,text/plain,application/json,application/xml,text/xml,application/xhtml+xml;q=0.9,*/*;q=0.1",
-            "User-Agent": "LumenaBridge/0.14",
+            "User-Agent": "LumenaBridge/0.15",
             "Cache-Control": "no-cache",
         },
     )
@@ -575,6 +575,117 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
             "stderr": "",
             "error": None,
         }
+
+
+def image_search(args: dict[str, Any]) -> dict[str, Any]:
+    query = str(args.get("query", "")).strip()
+    if not query:
+        raise ValueError("image.search requires a non-empty query")
+    if len(query) > 200:
+        raise ValueError("image.search query exceeds 200 characters")
+
+    limit = _bounded_int(args.get("limit"), 4, 1, 8)
+    timeout = _bounded_int(args.get("timeout"), 12, 2, 20)
+
+    params = urllib.parse.urlencode({
+        "action": "query",
+        "generator": "search",
+        "gsrsearch": query,
+        "gsrnamespace": "6",
+        "gsrlimit": str(limit),
+        "prop": "imageinfo",
+        "iiprop": "url|mime|size",
+        "iiurlwidth": "720",
+        "format": "json",
+        "formatversion": "2",
+        "origin": "*",
+    })
+    url = "https://commons.wikimedia.org/w/api.php?" + params
+    request = urllib.request.Request(
+        url,
+        method="GET",
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "LumenaBridge/0.15 (local Android assistant)",
+            "Cache-Control": "no-cache",
+        },
+    )
+
+    try:
+        response = PUBLIC_HTTPS_OPENER.open(request, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        body = exc.read(4096).decode("utf-8", errors="replace")
+        raise ValueError(f"Wikimedia HTTP {exc.code}: {body[:1000]}") from exc
+    except urllib.error.URLError as exc:
+        raise ValueError(f"Wikimedia image search failed: {exc.reason}") from exc
+
+    with response:
+        raw = response.read(MAX_HTTP_JSON + 1)
+        if len(raw) > MAX_HTTP_JSON:
+            raise ValueError("Wikimedia response exceeds 2 MiB limit")
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Wikimedia returned invalid JSON: {exc}") from exc
+
+    pages = payload.get("query", {}).get("pages", [])
+    if isinstance(pages, dict):
+        pages = list(pages.values())
+
+    images: list[dict[str, Any]] = []
+    for page in pages if isinstance(pages, list) else []:
+        if not isinstance(page, dict):
+            continue
+        info_list = page.get("imageinfo") or []
+        info = info_list[0] if isinstance(info_list, list) and info_list else {}
+        if not isinstance(info, dict):
+            continue
+
+        thumbnail = str(info.get("thumburl") or "").strip()
+        original = str(info.get("url") or "").strip()
+        source_page = str(info.get("descriptionurl") or "").strip()
+        mime = str(info.get("mime") or "").strip().lower()
+
+        if not thumbnail.startswith("https://"):
+            continue
+        parsed_thumb = urllib.parse.urlsplit(thumbnail)
+        if not (parsed_thumb.hostname or "").lower().endswith("wikimedia.org"):
+            continue
+        if mime and not mime.startswith("image/"):
+            continue
+
+        if source_page:
+            parsed_source = urllib.parse.urlsplit(source_page)
+            if parsed_source.scheme != "https" or not (parsed_source.hostname or "").lower().endswith("wikimedia.org"):
+                source_page = ""
+
+        images.append({
+            "title": str(page.get("title") or "").removeprefix("File:")[:300],
+            "thumbnail_url": thumbnail,
+            "original_url": original if original.startswith("https://") else "",
+            "source_page": source_page,
+            "mime": mime,
+            "width": info.get("width"),
+            "height": info.get("height"),
+            "source": "Wikimedia Commons",
+        })
+        if len(images) >= limit:
+            break
+
+    result = {
+        "provider": "Wikimedia Commons",
+        "query": query,
+        "display_ready": True,
+        "images": images,
+    }
+    return {
+        "ok": True,
+        "exitCode": 0,
+        "stdout": clamp(json.dumps(result, ensure_ascii=False, indent=2)),
+        "stderr": "",
+        "error": None,
+    }
 
 
 def process_status(args: dict[str, Any]) -> dict[str, Any]:
@@ -1180,7 +1291,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"Lumena bridge OK\n"
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + root.name for root in READONLY_ROOTS if root.exists()) or '(none)'}\n"
-                f"version=0.14\n"
+                f"version=0.15\n"
             ),
             "stderr": "",
             "error": None,
@@ -1210,6 +1321,9 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
     if tool == "http.get":
         return http_get(args)
+
+    if tool == "image.search":
+        return image_search(args)
 
     if tool == "context.snapshot":
         return context_snapshot(args)
@@ -1436,7 +1550,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.14"
+    server_version = "LumenaBridge/0.15"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[bridge] {self.address_string()} - {fmt % args}")
@@ -1466,7 +1580,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.14"})
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.15"})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
@@ -1518,7 +1632,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Lumena Termux Bridge v0.14")
+    print("Lumena Termux Bridge v0.15")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")
