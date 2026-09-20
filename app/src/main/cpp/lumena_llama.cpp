@@ -57,6 +57,44 @@ llama_model_params model_params_for(jint gpuLayers) {
     return params;
 }
 
+
+llama_model_params probe_model_params() {
+    auto params = llama_model_default_params();
+    params.n_gpu_layers = 0;
+    params.no_alloc = true;
+    params.vocab_only = false;
+    params.check_tensors = false;
+    return params;
+}
+
+std::string model_probe_summary(llama_model * model) {
+    if (!model) {
+        return std::string("ERROR\n") + last_log_copy();
+    }
+
+    char desc[1024] = {0};
+    llama_model_desc(model, desc, sizeof(desc));
+
+    char arch[256] = {0};
+    const int arch_n = llama_model_meta_val_str(
+        model,
+        "general.architecture",
+        arch,
+        sizeof(arch)
+    );
+
+    std::string out = "OK\n";
+    out += "architecture=";
+    out += arch_n >= 0 ? arch : "(unknown)";
+    out += "\n";
+    out += "description=";
+    out += desc[0] ? desc : "(unknown)";
+    out += "\n";
+    out += "model_size_bytes=" + std::to_string(llama_model_size(model)) + "\n";
+    out += "parameters=" + std::to_string(llama_model_n_params(model)) + "\n";
+    return out;
+}
+
 std::string jstr(JNIEnv * env, jstring value) {
     if (!value) return {};
     const char * raw = env->GetStringUTFChars(value, nullptr);
@@ -101,6 +139,55 @@ Java_com_lumena_android_llama_LlamaNative_nativeGpuInfo(JNIEnv * env, jobject) {
         }
     }
     return env->NewStringUTF("");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_lumena_android_llama_LlamaNative_nativeProbeModel(
+        JNIEnv * env, jobject, jstring modelPath) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    clear_last_log();
+    ensure_backend_init();
+
+    const std::string path = jstr(env, modelPath);
+    if (path.empty()) {
+        return env->NewStringUTF("ERROR\nModel path is empty.");
+    }
+
+    llama_model * probe = llama_model_load_from_file(path.c_str(), probe_model_params());
+    const std::string summary = model_probe_summary(probe);
+    if (probe) llama_model_free(probe);
+    return env->NewStringUTF(summary.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_lumena_android_llama_LlamaNative_nativeProbeModelFd(
+        JNIEnv * env, jobject, jint fd) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    clear_last_log();
+
+    if (fd < 0) {
+        return env->NewStringUTF("ERROR\nInvalid Android file descriptor.");
+    }
+
+    const int dup_fd = ::dup(fd);
+    if (dup_fd < 0) {
+        const std::string error = std::string("ERROR\ndup(fd) failed: ") + std::strerror(errno);
+        return env->NewStringUTF(error.c_str());
+    }
+
+    FILE * file = ::fdopen(dup_fd, "rb");
+    if (!file) {
+        const std::string error = std::string("ERROR\nfdopen failed: ") + std::strerror(errno);
+        ::close(dup_fd);
+        return env->NewStringUTF(error.c_str());
+    }
+
+    ensure_backend_init();
+    llama_model * probe = llama_model_load_from_file_ptr(file, probe_model_params());
+    const std::string summary = model_probe_summary(probe);
+    if (probe) llama_model_free(probe);
+    ::fclose(file);
+    return env->NewStringUTF(summary.c_str());
 }
 
 extern "C" JNIEXPORT jlong JNICALL
