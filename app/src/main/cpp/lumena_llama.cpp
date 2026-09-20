@@ -40,7 +40,11 @@ std::string token_piece(const llama_vocab * vocab, llama_token token) {
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_lumena_android_llama_LlamaNative_nativeVersion(JNIEnv * env, jobject) {
-    return env->NewStringUTF("llama.cpp embedded adaptive");
+#ifdef GGML_USE_VULKAN
+    return env->NewStringUTF("llama.cpp embedded adaptive + vulkan");
+#else
+    return env->NewStringUTF("llama.cpp embedded adaptive + cpu");
+#endif
 }
 
 extern "C" JNIEXPORT jstring JNICALL
