@@ -94,6 +94,317 @@ def clamp(text: str) -> str:
     return text[:MAX_OUTPUT] + "\n...[output truncated]..."
 
 
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+PUBLIC_HTTPS_OPENER = urllib.request.build_opener(NoRedirectHandler())
+
+
+def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(parsed, maximum))
+
+
+def _is_workspace_path(path: Path) -> bool:
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    return resolved == WORKSPACE or WORKSPACE in resolved.parents
+
+
+def _is_hidden_backup(path: Path) -> bool:
+    try:
+        rel = path.resolve().relative_to(WORKSPACE)
+    except (ValueError, OSError):
+        return True
+    return bool(rel.parts and rel.parts[0] == BACKUP_ROOT.name)
+
+
+def file_list(args: dict[str, Any]) -> dict[str, Any]:
+    root = safe_path(str(args.get("path", "")).strip(), must_exist=True)
+    if not root.is_dir():
+        raise ValueError("file.list path must be a directory")
+
+    depth = _bounded_int(args.get("depth"), 1, 1, 4)
+    limit = _bounded_int(args.get("limit"), 300, 1, 500)
+    rows: list[str] = []
+
+    for path in sorted(root.rglob("*"), key=lambda p: str(p).lower()):
+        if not _is_workspace_path(path) or _is_hidden_backup(path):
+            continue
+        try:
+            rel_root = path.relative_to(root)
+            rel_workspace = path.resolve().relative_to(WORKSPACE)
+        except (ValueError, OSError):
+            continue
+        if len(rel_root.parts) > depth:
+            continue
+
+        try:
+            if path.is_dir():
+                rows.append(f"{rel_workspace}/")
+            elif path.is_file():
+                rows.append(f"{rel_workspace}\t{path.stat().st_size} bytes")
+            else:
+                rows.append(f"{rel_workspace}\tother")
+        except OSError:
+            rows.append(f"{rel_workspace}\tunreadable")
+
+        if len(rows) >= limit:
+            rows.append("...[listing truncated]...")
+            break
+
+    return {
+        "ok": True,
+        "exitCode": 0,
+        "stdout": "\n".join(rows) if rows else "(directory empty)",
+        "stderr": "",
+        "error": None,
+    }
+
+
+def file_search(args: dict[str, Any]) -> dict[str, Any]:
+    query = str(args.get("query", "")).strip()
+    if not query:
+        raise ValueError("file.search requires query")
+    if len(query) > 200:
+        raise ValueError("file.search query exceeds 200 characters")
+
+    root = safe_path(str(args.get("path", "")).strip(), must_exist=True)
+    if not root.is_dir():
+        raise ValueError("file.search path must be a directory")
+
+    limit = _bounded_int(args.get("limit"), 60, 1, MAX_SEARCH_RESULTS)
+    needle = query.casefold()
+    matches: list[str] = []
+    scanned = 0
+
+    for path in sorted(root.rglob("*"), key=lambda p: str(p).lower()):
+        if len(matches) >= limit:
+            break
+        if not _is_workspace_path(path) or _is_hidden_backup(path) or not path.is_file():
+            continue
+
+        scanned += 1
+        if scanned > 3000:
+            break
+
+        try:
+            rel = path.resolve().relative_to(WORKSPACE)
+            size = path.stat().st_size
+        except (OSError, ValueError):
+            continue
+
+        rel_text = str(rel)
+        if needle in rel_text.casefold():
+            matches.append(f"PATH\t{rel_text}")
+            if len(matches) >= limit:
+                break
+
+        if size > MAX_SEARCH_FILE_BYTES:
+            continue
+
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            continue
+        if b"\x00" in raw[:8192]:
+            continue
+
+        text = raw.decode("utf-8", errors="replace")
+        for line_no, line in enumerate(text.splitlines(), 1):
+            if needle in line.casefold():
+                compact = " ".join(line.strip().split())
+                matches.append(f"{rel_text}:{line_no}\t{compact[:500]}")
+                if len(matches) >= limit:
+                    break
+
+    suffix = ""
+    if scanned > 3000:
+        suffix = "\n...[search file limit reached]..."
+    elif len(matches) >= limit:
+        suffix = "\n...[result limit reached]..."
+
+    return {
+        "ok": True,
+        "exitCode": 0,
+        "stdout": ("\n".join(matches) if matches else "(no matches)") + suffix,
+        "stderr": "",
+        "error": None,
+    }
+
+
+def _read_key_value_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    try:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if ":" in line:
+                key, value = line.split(":", 1)
+                values[key.strip()] = value.strip()
+    except OSError:
+        pass
+    return values
+
+
+def _read_optional_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+
+
+def system_info() -> dict[str, Any]:
+    mem = _read_key_value_file(Path("/proc/meminfo"))
+    disk = shutil.disk_usage(WORKSPACE)
+
+    battery_root = Path("/sys/class/power_supply/battery")
+    battery_capacity = _read_optional_text(battery_root / "capacity")
+    battery_status = _read_optional_text(battery_root / "status")
+
+    thermal_values: list[float] = []
+    for temp_path in Path("/sys/class/thermal").glob("thermal_zone*/temp"):
+        raw = _read_optional_text(temp_path)
+        try:
+            value = float(raw)
+            thermal_values.append(value / 1000.0 if value > 1000 else value)
+        except ValueError:
+            pass
+
+    android_release = ""
+    getprop = Path("/system/bin/getprop")
+    if getprop.exists():
+        try:
+            android_release = subprocess.check_output(
+                [str(getprop), "ro.build.version.release"],
+                text=True,
+                timeout=1,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    info = {
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "cpu_count": os.cpu_count(),
+        "android_release": android_release or None,
+        "python": platform.python_version(),
+        "termux_version": os.environ.get("TERMUX_VERSION") or None,
+        "memory_total": mem.get("MemTotal"),
+        "memory_available": mem.get("MemAvailable"),
+        "workspace": str(WORKSPACE),
+        "workspace_disk_total_bytes": disk.total,
+        "workspace_disk_free_bytes": disk.free,
+        "battery_capacity_percent": int(battery_capacity) if battery_capacity.isdigit() else None,
+        "battery_status": battery_status or None,
+        "max_thermal_c": round(max(thermal_values), 1) if thermal_values else None,
+    }
+    return {
+        "ok": True,
+        "exitCode": 0,
+        "stdout": json.dumps(info, ensure_ascii=False, indent=2),
+        "stderr": "",
+        "error": None,
+    }
+
+
+def _validated_public_https_url(raw_url: str) -> str:
+    if not raw_url or len(raw_url) > 4096:
+        raise ValueError("http.json requires a URL up to 4096 characters")
+
+    parsed = urllib.parse.urlsplit(raw_url)
+    if parsed.scheme.lower() != "https":
+        raise ValueError("http.json allows HTTPS only")
+    if parsed.username or parsed.password:
+        raise ValueError("Credentials in URL are not allowed")
+    if not parsed.hostname:
+        raise ValueError("URL hostname is required")
+    if parsed.port not in {None, 443}:
+        raise ValueError("http.json allows HTTPS port 443 only")
+
+    host = parsed.hostname.rstrip(".").lower()
+    if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
+        raise ValueError("Local hostnames are not allowed")
+
+    try:
+        addresses = {
+            item[4][0]
+            for item in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+        }
+    except socket.gaierror as exc:
+        raise ValueError(f"DNS lookup failed: {exc}") from exc
+
+    if not addresses:
+        raise ValueError("DNS lookup returned no addresses")
+
+    for address in addresses:
+        ip = ipaddress.ip_address(address.split("%", 1)[0])
+        if not ip.is_global:
+            raise ValueError(f"Non-public destination is blocked: {ip}")
+
+    return urllib.parse.urlunsplit(parsed)
+
+
+def http_json(args: dict[str, Any]) -> dict[str, Any]:
+    url = _validated_public_https_url(str(args.get("url", "")).strip())
+    timeout = _bounded_int(args.get("timeout"), 10, 1, 20)
+    request = urllib.request.Request(
+        url,
+        method="GET",
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "LumenaBridge/0.9",
+            "Cache-Control": "no-cache",
+        },
+    )
+
+    try:
+        response = PUBLIC_HTTPS_OPENER.open(request, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            location = exc.headers.get("Location", "")
+            raise ValueError(f"Redirects are blocked; target={location[:300]}") from exc
+        body = exc.read(4096).decode("utf-8", errors="replace")
+        raise ValueError(f"HTTP {exc.code}: {body[:1000]}") from exc
+    except urllib.error.URLError as exc:
+        raise ValueError(f"HTTPS request failed: {exc.reason}") from exc
+
+    with response:
+        content_length = response.headers.get("Content-Length")
+        if content_length and int(content_length) > MAX_HTTP_JSON:
+            raise ValueError("JSON response exceeds 2 MiB limit")
+
+        raw = response.read(MAX_HTTP_JSON + 1)
+        if len(raw) > MAX_HTTP_JSON:
+            raise ValueError("JSON response exceeds 2 MiB limit")
+
+        charset = response.headers.get_content_charset() or "utf-8"
+        text = raw.decode(charset, errors="replace")
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Response is not valid JSON: {exc}") from exc
+
+        result = {
+            "url": url,
+            "status": getattr(response, "status", 200),
+            "data": payload,
+        }
+        return {
+            "ok": True,
+            "exitCode": 0,
+            "stdout": clamp(json.dumps(result, ensure_ascii=False, indent=2)),
+            "stderr": "",
+            "error": None,
+        }
+
+
 def _register_process(request_id: str | None, process: subprocess.Popen[str]) -> None:
     if not request_id:
         return
