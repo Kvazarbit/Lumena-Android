@@ -50,6 +50,7 @@ object ToolRegistry {
         ToolSpec("python.syntax_check", ToolRisk.EXECUTABLE, setOf("script"), "Compile-check an existing .py file. The script arg is a file path only, never Python source code."),
         ToolSpec("python.tests", ToolRisk.EXECUTABLE, setOf("cwd"), "Run project tests through the controlled Python runner."),
         ToolSpec("ollama.start", ToolRisk.EXECUTABLE, description = "Start the same-phone Ollama sidecar."),
+        ToolSpec("ollama.generate", ToolRisk.EXECUTABLE, setOf("model", "prompt"), "Run one bounded inference request through the same-phone Ollama API without creating scripts or installing Python packages."),
         ToolSpec("ollama.pull", ToolRisk.EXECUTABLE, setOf("model"), "Download an Ollama model after approval.")
     ).associateBy { it.name }
 
@@ -67,7 +68,8 @@ object ToolRegistry {
         "process_status" to "process.status",
         "system_info" to "system.info",
         "file_write" to "file.write",
-        "python_run" to "python.run"
+        "python_run" to "python.run",
+        "ollama_generate" to "ollama.generate"
     )
 
     fun all(): List<ToolSpec> = specs.values.sortedBy { it.name }
