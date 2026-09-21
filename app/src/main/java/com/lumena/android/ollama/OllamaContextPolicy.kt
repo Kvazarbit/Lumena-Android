@@ -88,9 +88,11 @@ object OllamaContextPolicy {
     }
 
     private fun clipSystem(text: String, limit: Int): String {
+        if (limit <= 0) return ""
         if (text.length <= limit) return text
         val marker = "\n...[middle system context omitted]...\n"
-        val available = (limit - marker.length).coerceAtLeast(0)
+        if (limit <= marker.length) return text.take(limit)
+        val available = limit - marker.length
         val head = (available * 2) / 3
         val tail = available - head
         return text.take(head) + marker + text.takeLast(tail)
