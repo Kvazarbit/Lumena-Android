@@ -70,7 +70,7 @@ class WorkflowRunnerWebFailureTest {
             val task = TaskState(
                 id = "web-fail",
                 projectId = null,
-                goal = "Знайди останні новини в інтернеті",
+                goal = "Find latest world news on the internet",
                 status = TaskStatus.WAITING_MODEL
             )
             val runner = WorkflowRunner(
