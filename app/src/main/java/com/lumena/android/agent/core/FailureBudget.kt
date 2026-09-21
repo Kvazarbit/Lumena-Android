@@ -4,6 +4,8 @@ data class FailureBudget(
     val maxModelRetries: Int = 2,
     val maxIdenticalToolFailures: Int = 2,
     val maxPythonFailures: Int = 3,
+    val maxSemanticRecoveries: Int = 2,
+    val maxActionFamilyFailures: Int = 2,
     val maxTotalSteps: Int = 12
 )
 
