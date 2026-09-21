@@ -30,6 +30,11 @@ class TermuxBridgeClient(
     private val cancelEndpoint = base.newBuilder().addPathSegment("cancel").build()
 
     private val client = OkHttpClient.Builder()
+        // Tool POSTs can mutate state. A lost response must never cause an
+        // implicit transport replay or a redirect to another endpoint.
+        .retryOnConnectionFailure(false)
+        .followRedirects(false)
+        .followSslRedirects(false)
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.MINUTES)
         .writeTimeout(30, TimeUnit.SECONDS)
