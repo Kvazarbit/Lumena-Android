@@ -16,6 +16,10 @@ data class ToolResult(
     val outcomeUnknown: Boolean = false
 )
 
+fun interface ToolExecutor {
+    suspend fun execute(toolRequest: ToolRequest): ToolResult
+}
+
 data class PlannerDecision(
     val request: ToolRequest,
     val reason: String
