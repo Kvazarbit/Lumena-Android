@@ -3,5 +3,6 @@
 local.properties
 /build/
 /app/build/
+/third_party/llama.cpp/
 *.iml
 .DS_Store

@@ -54,6 +54,14 @@ void ensure_backend_init() {
 llama_model_params model_params_for(jint gpuLayers) {
     auto params = llama_model_default_params();
     params.n_gpu_layers = gpuLayers < 0 ? -1 : std::max(0, (int) gpuLayers);
+
+    // llama.cpp enables CPU weight repacking through "extra" buffer types by
+    // default.  That is useful on desktops, but it materializes a second copy
+    // of much of a Q4_K model while the mmap is still resident.  A 4.95 GiB
+    // Gemma 4 model peaked around 6.9 GiB during load and was killed on Android
+    // near the final layers.  Keep CPU loads mmap-backed and memory-stable.
+    // GPU loads may still use their device-specific buffer types.
+    params.use_extra_bufts = gpuLayers != 0;
     return params;
 }
 
@@ -61,8 +69,15 @@ llama_model_params model_params_for(jint gpuLayers) {
 llama_model_params probe_model_params() {
     auto params = llama_model_default_params();
     params.n_gpu_layers = 0;
-    params.no_alloc = true;
-    params.vocab_only = false;
+    params.use_extra_bufts = false;
+
+    // Do not combine no_alloc=true with a full (vocab_only=false) public model
+    // load.  The pinned llama.cpp revision reaches GGML_ASSERT(!ml.no_alloc)
+    // after creating the tensors.  Vocab-only still parses GGUF metadata,
+    // architecture, tokenizer, model size and parameter count without loading
+    // the multi-gigabyte weight buffers.
+    params.no_alloc = false;
+    params.vocab_only = true;
     params.check_tensors = false;
     return params;
 }
@@ -215,6 +230,9 @@ Java_com_lumena_android_llama_LlamaNative_nativeLoadModel(
     }
 
     ensure_backend_init();
+    append_log(gpuLayers == 0
+        ? "load_policy=cpu-mmap-no-extra-bufts\n"
+        : "load_policy=gpu-offload\n");
     g_model = llama_model_load_from_file(path.c_str(), model_params_for(gpuLayers));
     if (!g_model) append_log("llama_model_load_from_file returned null.\n");
     g_cancel_requested.store(false, std::memory_order_release);
@@ -253,6 +271,9 @@ Java_com_lumena_android_llama_LlamaNative_nativeLoadModelFd(
     }
 
     ensure_backend_init();
+    append_log(gpuLayers == 0
+        ? "load_policy=cpu-mmap-no-extra-bufts\n"
+        : "load_policy=gpu-offload\n");
     g_model = llama_model_load_from_file_ptr(file, model_params_for(gpuLayers));
     ::fclose(file);
 
