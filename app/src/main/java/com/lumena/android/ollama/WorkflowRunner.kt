@@ -175,7 +175,11 @@ class WorkflowRunner(
                         stdout = result.stdout,
                         stderr = result.stderr,
                         error = result.error,
-                        outcomeUnknown = result.outcomeUnknown
+                        outcomeUnknown = result.outcomeUnknown,
+                        errorCode = result.errorCode,
+                        failureClass = result.failureClass,
+                        retryable = result.retryable,
+                        dependency = result.dependency
                     )
                     state = transition.state.copy(preflightCompleted = true)
                     publish(state, onState)
@@ -196,6 +200,24 @@ class WorkflowRunner(
                         stderr = result.stderr,
                         error = result.error
                     )
+
+                    transition.partialReason?.let { reason ->
+                        return WorkflowOutcome.Finished(
+                            reason,
+                            current,
+                            state,
+                            images = collectedImages.toList()
+                        )
+                    }
+
+                    transition.partialReason?.let { reason ->
+                        return WorkflowOutcome.Finished(
+                            reason,
+                            current,
+                            state,
+                            images = collectedImages.toList()
+                        )
+                    }
 
                     transition.stopReason?.let { reason ->
                         return WorkflowOutcome.Failed(reason, current, state)
@@ -381,7 +403,11 @@ class WorkflowRunner(
                         stdout = result.stdout,
                         stderr = result.stderr,
                         error = result.error,
-                        outcomeUnknown = result.outcomeUnknown
+                        outcomeUnknown = result.outcomeUnknown,
+                        errorCode = result.errorCode,
+                        failureClass = result.failureClass,
+                        retryable = result.retryable,
+                        dependency = result.dependency
                     )
                     state = transition.state
                     publish(state, onState)
@@ -494,7 +520,11 @@ class WorkflowRunner(
             stdout = result.stdout,
             stderr = result.stderr,
             error = result.error,
-            outcomeUnknown = result.outcomeUnknown
+            outcomeUnknown = result.outcomeUnknown,
+            errorCode = result.errorCode,
+            failureClass = result.failureClass,
+            retryable = result.retryable,
+            dependency = result.dependency
         )
         publish(transition.state, onState)
 
@@ -515,6 +545,17 @@ class WorkflowRunner(
                 result.ok
             )
         )
+
+        transition.partialReason?.let { reason ->
+            return WorkflowOutcome.Finished(
+                reason,
+                next,
+                transition.state,
+                images = (pending.images + approvedImages)
+                    .distinctBy { it.thumbnailUrl }
+                    .take(8)
+            )
+        }
 
         transition.stopReason?.let { reason ->
             return WorkflowOutcome.Failed(reason, next, transition.state)
