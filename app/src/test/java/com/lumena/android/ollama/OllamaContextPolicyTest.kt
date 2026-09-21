@@ -146,4 +146,23 @@ class OllamaContextPolicyTest {
         assertTrue(compacted.last().content.contains("latest-user"))
         assertFalse(compacted.any { it.content.contains("-OLD-USER-END") })
     }
+    @Test
+    fun tinySystemBudgetStillCannotOverflowFromOmissionMarker() {
+        val budget = OllamaRequestBudget(
+            options = OllamaOptions(num_ctx = 64, num_predict = 16),
+            maxChars = 40,
+            maxPerMessage = 40
+        )
+        val compacted = OllamaContextPolicy.compact(
+            listOf(
+                OllamaMessage("system", "s".repeat(500)),
+                OllamaMessage("user", "latest")
+            ),
+            budget
+        )
+
+        assertTrue(compacted.sumOf { it.content.length } <= 40)
+        assertEquals("latest", compacted.last().content)
+    }
+
 }
