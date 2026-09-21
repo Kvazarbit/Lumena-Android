@@ -28,6 +28,9 @@ class OllamaClientProtocolTest {
         assertTrue(shouldRetryOllamaWithSmallerContext(IllegalStateException("context window exceeded")))
         assertTrue(shouldRetryOllamaWithSmallerContext(IllegalStateException("prompt too long")))
         assertTrue(shouldRetryOllamaWithSmallerContext(IllegalStateException("too many tokens")))
+        assertTrue(shouldRetryOllamaWithSmallerContext(IllegalStateException("requested tokens exceed available context")))
+        assertTrue(shouldRetryOllamaWithSmallerContext(IllegalStateException("request exceeds the context capacity")))
+        assertTrue(shouldRetryOllamaWithSmallerContext(IllegalStateException("invalid num_ctx for prompt")))
         assertFalse(shouldRetryOllamaWithSmallerContext(IllegalStateException("HTTP 500 upstream failure")))
         assertFalse(shouldRetryOllamaWithSmallerContext(IllegalStateException("model not found")))
     }
