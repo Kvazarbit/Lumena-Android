@@ -59,10 +59,10 @@ class OllamaClientHttpTest {
                         calls.incrementAndGet()
                         val bytes = body.toByteArray(Charsets.UTF_8)
                         val response = buildString {
-                            append("HTTP/1.1 200 OK\\r\\n")
-                            append("Content-Type: application/x-ndjson\\r\\n")
-                            append("Content-Length: ${bytes.size}\\r\\n")
-                            append("Connection: close\\r\\n\\r\\n")
+                            append("HTTP/1.1 200 OK\r\n")
+                            append("Content-Type: application/x-ndjson\r\n")
+                            append("Content-Length: ${bytes.size}\r\n")
+                            append("Connection: close\r\n\r\n")
                         }.toByteArray(Charsets.ISO_8859_1)
                         socket.getOutputStream().write(response)
                         socket.getOutputStream().write(bytes)
@@ -71,6 +71,8 @@ class OllamaClientHttpTest {
                 }
             } catch (_: SocketTimeoutException) {
                 // Missing or extra requests make assertions fail through call count/result.
+            } catch (_: java.net.SocketException) {
+                // Fixture teardown closes accept() after the test block returns.
             } finally {
                 runCatching { server.close() }
             }
