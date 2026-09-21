@@ -146,4 +146,29 @@ class OllamaContextPolicyTest {
         assertTrue(compacted.last().content.contains("latest-user"))
         assertFalse(compacted.any { it.content.contains("-OLD-USER-END") })
     }
+    @Test
+    fun compactionNeverExceedsHardBudgetAcrossBoundarySizes() {
+        val messages = listOf(
+            OllamaMessage("system", "SYSTEM-" + "s".repeat(4000) + "-TAIL"),
+            OllamaMessage("user", "older-" + "o".repeat(4000)),
+            OllamaMessage("assistant", "middle-" + "m".repeat(4000)),
+            OllamaMessage("user", "LATEST-" + "x".repeat(4000) + "-END")
+        )
+
+        for (maxChars in listOf(1, 8, 32, 40, 64, 127, 512, 999, 2000, 4096)) {
+            val budget = OllamaRequestBudget(
+                options = OllamaOptions(num_ctx = 4096, num_predict = 512),
+                maxChars = maxChars,
+                maxPerMessage = maxChars
+            )
+            val compacted = OllamaContextPolicy.compact(messages, budget)
+
+            assertTrue(
+                "budget=$maxChars actual=" + compacted.sumOf { it.content.length },
+                compacted.sumOf { it.content.length } <= maxChars
+            )
+            assertTrue(compacted.none { it.content.length > maxChars })
+        }
+    }
+
 }
