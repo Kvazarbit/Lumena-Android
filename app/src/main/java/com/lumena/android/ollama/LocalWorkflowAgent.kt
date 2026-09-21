@@ -20,7 +20,9 @@ object LocalWorkflowAgent {
         - Follow TASK RECIPE recommended tools when present; it is application policy, not model-generated advice.
         - Follow RECOVERY GUIDANCE after a failed TOOL_RESULT; do not repeat an unchanged failing action.
         - After each TOOL_RESULT continue the SAME goal. If verification is required, verify before done.
-        - When cleanup or the final requested check succeeds, return done immediately. Do not create another cleanup script to re-check an already verified deletion.
+        - Once ALL requested outcomes and verification are satisfied, return done. A script printing 'deleted' alone is not proof that the requested files are absent. Do not create chains of cleanup scripts.
+        - Use the CONTEXT KERNEL evidence IDs to summarize completed work. Earlier-task memories are historical hints and require fresh checks.
+        - When budget is exhausted or work remains unverified, return partial JSON stating what is complete and what remains. Never label incomplete work done.
         - After tool work starts, finish ONLY with done JSON, except a verified visual task may finish with a user-facing reply. Ordinary no-tool conversation uses reply JSON.
         - Keep user-facing reply/done text in the user's language unless the user asks for another language.
 
@@ -32,6 +34,9 @@ object LocalWorkflowAgent {
 
         DONE:
         {"done":true,"summary":"What was actually completed and verified"}
+
+        PARTIAL:
+        {"partial":true,"summary":"What completed; what remains or is unknown"}
 
         REPLY:
         {"reply":"Answer in the user's language"}
@@ -50,8 +55,8 @@ object LocalWorkflowAgent {
             if (!error.isNullOrBlank()) append("error=").append(error.take(2_000)).append('\n')
             if (stdout.isNotBlank()) append("stdout:\n").append(stdout.take(8_000)).append('\n')
             if (stderr.isNotBlank()) append("stderr:\n").append(stderr.take(4_000)).append('\n')
-            append("Continue the SAME goal from Lumena's TASK STATE. Choose one next tool. ")
-            append("If and only if the task is complete and all required verification passed, return done JSON.")
+            append("Continue the SAME goal from TASK STATE and CONTEXT KERNEL. ")
+            append("If all requested outcomes and verification are complete, return done JSON. Otherwise choose one necessary tool within budget, or report partial JSON.")
         }
         return OllamaMessage("user", compact)
     }

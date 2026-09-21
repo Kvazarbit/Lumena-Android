@@ -2,6 +2,7 @@ package com.lumena.android.ollama
 
 import com.lumena.android.agent.core.AgentControlState
 import com.lumena.android.agent.core.AgentController
+import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.AgentDecision
 import com.lumena.android.agent.core.ControllerInstruction
 import com.lumena.android.agent.core.TaskState
@@ -60,7 +61,8 @@ class WorkflowRunner(
     private val model: String,
     private val controller: AgentController = AgentController(),
     private val relevantMemoryProvider: (TaskState) -> List<String> = { emptyList() },
-    private val onToolExperience: (TaskState, ToolRequest, ToolResult, Long) -> Unit = { _, _, _, _ -> }
+    private val onToolExperience: (TaskState, ToolRequest, ToolResult, Long) -> Unit = { _, _, _, _ -> },
+    private val checkpoint: suspend (AgentControlState) -> Unit = {}
 ) {
     suspend fun run(
         history: List<OllamaMessage>,
@@ -77,7 +79,7 @@ class WorkflowRunner(
         var state = control ?: controller.initial(task)
         val collectedImages = initialImages.toMutableList()
         var protocolTurns = 0
-        onState(state)
+        publish(state, onState)
 
         val intentProfile = TaskIntentRouter.route(state.task.goal)
         if (!state.preflightCompleted && state.task.step == 0) {
@@ -88,7 +90,7 @@ class WorkflowRunner(
             val preflight = intentProfile.preflight
             if (preflight == null) {
                 state = state.copy(preflightCompleted = true)
-                onState(state)
+                publish(state, onState)
             } else {
                 val canonical = ToolRegistry.canonicalize(preflight.tool)
                 val spec = ToolRegistry.get(canonical)
@@ -101,7 +103,7 @@ class WorkflowRunner(
                                 "Unsafe preflight rejected: $canonical").takeLast(8)
                         )
                     )
-                    onState(stopped)
+                    publish(stopped, onState)
                     return WorkflowOutcome.Failed(
                         "Agent policy rejected a non-read-only preflight: $canonical",
                         current,
@@ -120,7 +122,7 @@ class WorkflowRunner(
                                     "Bridge token is required for mandatory $canonical preflight").takeLast(8)
                             )
                         )
-                        onState(stopped)
+                        publish(stopped, onState)
                         return WorkflowOutcome.Failed(
                             "Bridge token is required for this local task.",
                             current,
@@ -132,7 +134,7 @@ class WorkflowRunner(
                         preflightCompleted = true,
                         recoveryHint = "Optional $canonical preflight was skipped because the local bridge is unavailable. Do not invent local state."
                     )
-                    onState(state)
+                    publish(state, onState)
                 } else {
                     val request = ToolRequest(
                         tool = canonical,
@@ -143,6 +145,8 @@ class WorkflowRunner(
                         "PREFLIGHT · $canonical\n${preflight.reason.take(500)}"
                     )
 
+                    state = markInFlight(state, request)
+                    publish(state, onState)
                     val startedNs = System.nanoTime()
                     val rawResult = executeWithTelemetry(
                         localBridge,
@@ -170,10 +174,11 @@ class WorkflowRunner(
                         ok = result.ok,
                         stdout = result.stdout,
                         stderr = result.stderr,
-                        error = result.error
+                        error = result.error,
+                        outcomeUnknown = result.outcomeUnknown
                     )
                     state = transition.state.copy(preflightCompleted = true)
-                    onState(state)
+                    publish(state, onState)
                     onProgress(
                         toolResultTrace(
                             request.tool,
@@ -201,7 +206,7 @@ class WorkflowRunner(
             // A restored/in-progress task must not replay a new preflight over
             // already executed work.
             state = state.copy(preflightCompleted = true)
-            onState(state)
+            publish(state, onState)
         }
 
         while (state.task.canContinue) {
@@ -213,7 +218,7 @@ class WorkflowRunner(
                         errors = (state.task.errors + "Protocol turn cap reached").takeLast(8)
                     )
                 )
-                onState(stopped)
+                publish(stopped, onState)
                 return WorkflowOutcome.Failed(
                     "Agent stopped: protocol turn cap reached.",
                     current,
@@ -255,7 +260,7 @@ class WorkflowRunner(
                 )) {
                     is ControllerInstruction.AskModelAgain -> {
                         state = recovery.state
-                        onState(state)
+                        publish(state, onState)
                         current = current + OllamaMessage("user", recovery.feedback)
                         onProgress(
                             "MODEL RETRY · ${state.modelFailures}\n${recovery.feedback.take(2_000)}"
@@ -263,7 +268,7 @@ class WorkflowRunner(
                         continue
                     }
                     is ControllerInstruction.Stop -> {
-                        onState(recovery.state)
+                        publish(recovery.state, onState)
                         return WorkflowOutcome.Failed(recovery.reason, current, recovery.state)
                     }
                     else -> {
@@ -282,7 +287,7 @@ class WorkflowRunner(
             when (val instruction = controller.interpret(reply, state)) {
                 is ControllerInstruction.Execute -> {
                     state = instruction.state
-                    onState(state)
+                    publish(state, onState)
 
                     if (state.plan.isNotEmpty() && state.task.step == 0) {
                         onProgress(
@@ -312,7 +317,7 @@ class WorkflowRunner(
                                 errors = (state.task.errors + planned.reason).takeLast(8)
                             )
                         )
-                        onState(stopped)
+                        publish(stopped, onState)
                         return WorkflowOutcome.Failed(
                             "Blocked tool request: ${planned.request.tool} · ${planned.reason}",
                             current,
@@ -335,7 +340,7 @@ class WorkflowRunner(
                             control = state,
                             images = collectedImages.toList()
                         )
-                        onState(state)
+                        publish(state, onState)
                         return WorkflowOutcome.NeedsConfirmation(pending)
                     }
 
@@ -350,6 +355,8 @@ class WorkflowRunner(
                     )
 
                     onProgress("TOOL RUNNING · ${planned.request.tool}")
+                    state = markInFlight(state, planned.request)
+                    publish(state, onState)
                     val startedNs = System.nanoTime()
                     val rawResult = executeWithTelemetry(
                         localBridge,
@@ -373,10 +380,11 @@ class WorkflowRunner(
                         ok = result.ok,
                         stdout = result.stdout,
                         stderr = result.stderr,
-                        error = result.error
+                        error = result.error,
+                        outcomeUnknown = result.outcomeUnknown
                     )
                     state = transition.state
-                    onState(state)
+                    publish(state, onState)
                     onProgress(toolResultTrace(planned.request.tool, result.stdout, result.stderr, result.error, result.ok))
 
                     current = toolHistory + LocalWorkflowAgent.toolResultMessage(
@@ -394,7 +402,7 @@ class WorkflowRunner(
 
                 is ControllerInstruction.Finish -> {
                     state = instruction.state
-                    onState(state)
+                    publish(state, onState)
                     onProgress("FINISH\n${instruction.text.take(4_000)}")
                     val next = current + OllamaMessage("assistant", instruction.text)
                     return WorkflowOutcome.Finished(
@@ -407,7 +415,7 @@ class WorkflowRunner(
 
                 is ControllerInstruction.AskModelAgain -> {
                     state = instruction.state
-                    onState(state)
+                    publish(state, onState)
                     current = current +
                         OllamaMessage("assistant", reply.take(4_000)) +
                         OllamaMessage("user", instruction.feedback)
@@ -418,7 +426,7 @@ class WorkflowRunner(
                 }
 
                 is ControllerInstruction.Stop -> {
-                    onState(instruction.state)
+                    publish(instruction.state, onState)
                     onProgress("STOP\n${instruction.reason.take(2_000)}")
                     return WorkflowOutcome.Failed(
                         instruction.reason,
@@ -435,7 +443,7 @@ class WorkflowRunner(
                 errors = (state.task.errors + "Task can no longer continue").takeLast(8)
             )
         )
-        onState(stopped)
+        publish(stopped, onState)
         return WorkflowOutcome.Failed(
             "Agent stopped because the task cannot continue safely.",
             current,
@@ -459,6 +467,8 @@ class WorkflowRunner(
 
         onProgress(toolCallTrace(pending.plan))
         onProgress("TOOL RUNNING · ${pending.plan.request.tool}")
+        val executing = markInFlight(pending.control, pending.plan.request)
+        publish(executing, onState)
         val startedNs = System.nanoTime()
         val rawResult = executeWithTelemetry(
             localBridge,
@@ -478,14 +488,15 @@ class WorkflowRunner(
             plan = pending.control.plan
         )
         val transition = controller.afterTool(
-            state = pending.control,
+            state = executing,
             call = call,
             ok = result.ok,
             stdout = result.stdout,
             stderr = result.stderr,
-            error = result.error
+            error = result.error,
+            outcomeUnknown = result.outcomeUnknown
         )
-        onState(transition.state)
+        publish(transition.state, onState)
 
         val next = pending.history + LocalWorkflowAgent.toolResultMessage(
             tool = pending.plan.request.tool,
@@ -528,6 +539,9 @@ class WorkflowRunner(
         request: ToolRequest,
         result: ToolResult
     ): Pair<ToolResult, List<WorkflowImage>> {
+        ContextKernel.resultFailure(request.tool, result.ok, result.exitCode, result.tool, result.stdout)?.let {
+            return result.copy(ok = false, error = it) to emptyList()
+        }
         if (
             ToolRegistry.canonicalize(request.tool) != "image.search" ||
             !result.ok
@@ -629,8 +643,22 @@ class WorkflowRunner(
         }
     }
 
+    private suspend fun publish(state: AgentControlState, onState: (AgentControlState) -> Unit) {
+        // Persist before acknowledging state or dispatching the next external effect.
+        checkpoint(state)
+        onState(state)
+    }
+
+    private fun markInFlight(state: AgentControlState, request: ToolRequest): AgentControlState = state.copy(
+        task = state.task.copy(status = TaskStatus.EXECUTING, kernel = ContextKernel.before(
+            state.task.kernel, AgentDecision.ToolCall(request.tool, request.args))))
+
     private fun recordExperience(task: TaskState, request: ToolRequest, result: ToolResult,
                                  startedNs: Long, onProgress: (String) -> Unit) {
+        if (result.outcomeUnknown) {
+            onProgress("UNKNOWN OUTCOME · результат не врахований як успіх або невдача")
+            return
+        }
         try {
             onToolExperience(task, request, result, ((System.nanoTime() - startedNs) / 1_000_000).coerceAtLeast(0))
         } catch (error: Exception) {

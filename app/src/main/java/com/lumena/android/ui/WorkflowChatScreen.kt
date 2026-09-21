@@ -84,6 +84,8 @@ import com.lumena.android.ollama.WorkflowImage
 import com.lumena.android.ollama.WorkflowRunner
 import com.lumena.android.settings.LocalSessionSnapshot
 import com.lumena.android.settings.LocalSessionStore
+import com.lumena.android.settings.ContextCheckpointStore
+import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.settings.ContextGenomeStats
 import com.lumena.android.settings.ContextGenomeStore
 import com.lumena.android.settings.ExperienceMemoryStore
@@ -237,7 +239,7 @@ fun WorkflowChatScreen(
     }
 
     fun restoredPendingFrom(saved: PersistedPendingTool?): PendingWorkflowTool? = saved?.let {
-        val planned = ToolGate.plan(PlannerDecision(request = ToolRequest(it.tool, it.args), reason = it.reason))
+        val planned = ToolGate.plan(PlannerDecision(request = ToolRequest(it.tool, it.args, it.requestId), reason = it.reason))
         val control = it.control ?: currentTask?.let { task -> AgentControlState(task = task) } ?: return@let null
         if (planned.allowed) {
             PendingWorkflowTool(
@@ -283,6 +285,7 @@ fun WorkflowChatScreen(
                     PersistedPendingTool(
                         tool = active.plan.request.tool,
                         args = active.plan.request.args,
+                        requestId = active.plan.request.requestId,
                         reason = active.plan.reason,
                         control = active.control,
                         history = active.history.filterNot { it.role == "system" }
@@ -415,6 +418,9 @@ fun WorkflowChatScreen(
                 advice +
                     ExperienceMemoryStore.relevant(context, task.goal)
             },
+            checkpoint = { control ->
+                withContext(Dispatchers.IO) { ContextCheckpointStore.save(context, control) }
+            },
             onToolExperience = { task, request, result, elapsedMs ->
                 val eventId = ExperienceMemoryStore.record(context, request, result)
                 ExperienceLandscapeStore.record(context, session, task, request, result, elapsedMs, eventId)
@@ -462,7 +468,7 @@ fun WorkflowChatScreen(
                     text = outcome.text,
                     images = outcome.images
                 )
-                coordinator.finish(runToken, "Done")
+                coordinator.finish(runToken, if (outcome.control.task.status == TaskStatus.PARTIAL) "Частково виконано" else "Done")
                 taskApprovals.remove(taskId)
             }
             is WorkflowOutcome.NeedsConfirmation -> {
@@ -507,9 +513,14 @@ fun WorkflowChatScreen(
             status = TaskStatus.WAITING_MODEL
         )
         taskApprovals.clear()
+        val previous = currentTask
         currentTask = task
         bubbles += ChatBubble("user", text)
-        val turnHistory = history + OllamaMessage("user", text)
+        val previousContext = if (previous != null && Regex("(?i)(продовж|продолж|continue|resume)").containsMatchIn(text))
+            listOf(OllamaMessage("user", "HISTORICAL TASK CHECKPOINT; verify current state before acting. " +
+                "Earlier tool success is not proof for this new task.\n" + ContextKernel.capsule(previous.kernel, 1200)))
+            else emptyList()
+        val turnHistory = history + previousContext + OllamaMessage("user", text)
         history = turnHistory
         busy = true
         persistSession()
@@ -531,7 +542,8 @@ fun WorkflowChatScreen(
             } catch (_: CancellationException) {
                 return@launch
             } catch (t: Throwable) {
-                val failedTask = task.copy(status = TaskStatus.FAILED, errors = listOf(t.message ?: t.toString()))
+                val failedTask = (currentTask?.takeIf { it.id == task.id } ?: task)
+                    .copy(status = TaskStatus.FAILED, errors = listOf(t.message ?: t.toString()))
                 WorkflowOutcome.Failed(
                     t.message ?: t.toString(),
                     turnHistory,
@@ -543,6 +555,23 @@ fun WorkflowChatScreen(
     }
 
     LaunchedEffect(Unit) {
+        val saved = try { withContext(Dispatchers.IO) { ContextCheckpointStore.load(context) } }
+        catch (error: Exception) {
+            if (error is CancellationException) throw error
+            bubbles += ChatBubble("error", "Контрольна точка не читається: ${error.message}")
+            null
+        }
+        if (!coordinator.active && saved != null && saved.task.id == currentTask?.id &&
+            (currentTask?.status in setOf(TaskStatus.PLANNING, TaskStatus.WAITING_MODEL, TaskStatus.EXECUTING, TaskStatus.VERIFYING) ||
+                (currentTask?.status == TaskStatus.WAITING_CONFIRMATION && saved.task.kernel.inFlight != null))) {
+            currentTask = if (saved.task.status == TaskStatus.WAITING_CONFIRMATION)
+                saved.task.copy(status = TaskStatus.CANCELLED,
+                    errors = saved.task.errors + "Перерване очікування дозволу. Створіть новий запит після перевірки стану.")
+                else saved.task
+            pending = null // Never re-authorize an action from an interrupted execution.
+            busy = false
+            persistSession()
+        }
         val task = currentTask
         if (task != null &&
             task.status in setOf(TaskStatus.PLANNING, TaskStatus.WAITING_MODEL, TaskStatus.EXECUTING, TaskStatus.VERIFYING) &&
@@ -550,7 +579,9 @@ fun WorkflowChatScreen(
         ) {
             currentTask = task.copy(
                 status = TaskStatus.CANCELLED,
-                errors = (task.errors + "Previous agent run was interrupted before this app session resumed.").takeLast(8)
+                errors = (task.errors + if (task.kernel.inFlight != null)
+                    "Результат ${task.kernel.inFlight.tool} невідомий. Перед повтором перевірте фактичний стан."
+                    else "Previous agent run was interrupted before this app session resumed.").takeLast(8)
             )
             busy = false
             persistSession()
@@ -748,7 +779,7 @@ fun WorkflowChatScreen(
                     return@launch
                 } catch (t: Throwable) {
                     val failedControl = requested.control.copy(
-                        task = requested.control.task.copy(
+                        task = (currentTask?.takeIf { it.id == taskId } ?: requested.control.task).copy(
                             status = TaskStatus.FAILED,
                             errors = (requested.control.task.errors + (t.message ?: t.toString())).takeLast(8)
                         )

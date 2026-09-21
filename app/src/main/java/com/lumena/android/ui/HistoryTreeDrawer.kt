@@ -241,6 +241,7 @@ private fun BranchRow(
     val status = branch.session.task?.status
     val prefix = when (status) {
         TaskStatus.DONE -> "✓"
+        TaskStatus.PARTIAL -> "◐"
         TaskStatus.FAILED -> "!"
         TaskStatus.CANCELLED -> "■"
         TaskStatus.WAITING_CONFIRMATION -> "?"

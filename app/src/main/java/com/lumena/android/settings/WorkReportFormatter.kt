@@ -55,6 +55,7 @@ object WorkReportFormatter {
                 appendLine("TASK STATE")
                 appendLine("Goal: ${redact(task.goal)}")
                 appendLine("Step: ${task.step}/${task.maxSteps}")
+                appendLine(redact(com.lumena.android.agent.core.ContextKernel.capsule(task.kernel)))
                 appendLine("Last tool: ${task.lastTool ?: "-"}")
                 if (!task.lastResult.isNullOrBlank()) {
                     appendLine("Last result:")

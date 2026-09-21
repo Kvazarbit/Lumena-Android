@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.16
+Lumena Termux Bridge v0.17
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -467,7 +467,7 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.16",
+            "User-Agent": "LumenaBridge/0.17",
             "Cache-Control": "no-cache",
         },
     )
@@ -521,7 +521,7 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "text/html,text/plain,application/json,application/xml,text/xml,application/xhtml+xml;q=0.9,*/*;q=0.1",
-            "User-Agent": "LumenaBridge/0.16",
+            "User-Agent": "LumenaBridge/0.17",
             "Cache-Control": "no-cache",
         },
     )
@@ -657,7 +657,7 @@ def _wikimedia_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.16 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.17 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -729,7 +729,7 @@ def _openverse_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.16 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.17 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -1464,7 +1464,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"Lumena bridge OK\n"
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + root.name for root in READONLY_ROOTS if root.exists()) or '(none)'}\n"
-                f"version=0.16\n"
+                f"version=0.17\n"
             ),
             "stderr": "",
             "error": None,
@@ -1667,7 +1667,9 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         cwd = safe_path(cwd_arg, must_exist=True) if cwd_arg else script.parent
         if tool == "python.syntax_check":
             return run_process(
-                ["python", "-m", "py_compile", str(script)],
+                # Syntax verification must not create __pycache__ and trigger
+                # an agent cleanup loop merely because it checked a file.
+                ["python", "-c", "import pathlib,sys; p=pathlib.Path(sys.argv[1]); compile(p.read_bytes(), str(p), 'exec'); print('Syntax OK')", str(script)],
                 cwd,
                 int(args.get("timeout", 60)),
                 request_id=request_id,
@@ -1723,7 +1725,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.16"
+    server_version = "LumenaBridge/0.17"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[bridge] {self.address_string()} - {fmt % args}")
@@ -1753,7 +1755,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.16"})
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.17"})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
@@ -1805,7 +1807,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Lumena Termux Bridge v0.16")
+    print("Lumena Termux Bridge v0.17")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")

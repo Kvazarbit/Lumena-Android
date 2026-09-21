@@ -78,6 +78,7 @@ fun AgentWorkDrawer(
                         pendingApproval -> "? Waiting for approval"
                         running -> "● ${coordinator.stage}"
                         task?.status == TaskStatus.DONE -> "✓ Done"
+                        task?.status == TaskStatus.PARTIAL -> "◐ Частково виконано"
                         task?.status == TaskStatus.FAILED -> "! Failed"
                         task?.status == TaskStatus.CANCELLED -> "■ Cancelled"
                         else -> "○ Idle"
@@ -164,6 +165,21 @@ fun AgentWorkDrawer(
             )
             if (taskOpen) {
                 Text("Goal\n${current.goal}", style = MaterialTheme.typography.bodySmall)
+                Text("Локальне ядро контексту · ${com.lumena.android.agent.core.CoreDna.VERSION}", style = MaterialTheme.typography.titleSmall)
+                Text("Кроків залишилось: ${(current.maxSteps - current.step).coerceAtLeast(0)} · доказів ${current.kernel.evidence.size}/${current.kernel.observed}", style = MaterialTheme.typography.bodySmall)
+                current.kernel.inFlight?.let { Text("Результат ще не зафіксовано: ${it.tool}. Автоматичного повтору немає.", color = MaterialTheme.colorScheme.error) }
+                if (current.kernel.pendingVerification.isNotEmpty()) Text("Ще перевірити: ${current.kernel.pendingVerification.joinToString()}", style = MaterialTheme.typography.bodySmall)
+                current.kernel.evidence.groupBy { it.phase }.forEach { (phase, events) ->
+                    Text(when (phase) {
+                        com.lumena.android.agent.core.CognitivePhase.OBSERVE -> "Спостереження"
+                        com.lumena.android.agent.core.CognitivePhase.ACT -> "Дії"
+                        com.lumena.android.agent.core.CognitivePhase.VERIFY -> "Перевірки"
+                    }, style = MaterialTheme.typography.labelLarge)
+                    events.takeLast(4).forEach { event ->
+                        Text("${event.id} · ${if (event.ok) "✓" else "✕"} ${event.tool} · ${event.target}", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                Text("Доказ виконання інструмента не підтверджує всю мету. Записи збережені локально.", style = MaterialTheme.typography.labelSmall)
                 current.lastTool?.let {
                     Text("Last tool\n$it", style = MaterialTheme.typography.bodySmall)
                 }

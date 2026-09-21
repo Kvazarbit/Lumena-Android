@@ -72,7 +72,7 @@ class TermuxBridgeClient(
             override fun onFailure(call: Call, e: IOException) {
                 if (continuation.isActive) {
                     continuation.resume(
-                        ToolResult(ok = false, error = "${e::class.simpleName}: ${e.message}")
+                        ToolResult(ok = false, error = "${e::class.simpleName}: ${e.message}", outcomeUnknown = true)
                     )
                 }
             }
@@ -84,11 +84,11 @@ class TermuxBridgeClient(
                         val parsed = body.takeIf { value -> value.isNotBlank() }?.let(resultAdapter::fromJson)
                         parsed ?: ToolResult(
                             ok = false,
-                            error = "Bridge returned HTTP ${it.code} without a readable result."
+                            error = "Bridge returned HTTP ${it.code} without a readable result.", outcomeUnknown = true
                         )
                     }
                 } catch (t: Throwable) {
-                    ToolResult(ok = false, error = "${t::class.simpleName}: ${t.message}")
+                    ToolResult(ok = false, error = "${t::class.simpleName}: ${t.message}", outcomeUnknown = true)
                 }
                 if (continuation.isActive) continuation.resume(result)
             }

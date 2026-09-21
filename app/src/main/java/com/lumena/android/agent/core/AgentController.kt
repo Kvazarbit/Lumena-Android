@@ -70,6 +70,11 @@ class AgentController(
                 maxSteps = (task.maxSteps + reserve).coerceAtMost(budget.maxTotalSteps)
             ),
             intent = profile.intent,
+            pendingPythonPaths = task.kernel.pendingVerification,
+            verificationRequired = task.kernel.pendingVerification.isNotEmpty(),
+            verificationReason = task.kernel.pendingVerification.takeIf { it.isNotEmpty() }?.let {
+                "Verify the previously changed Python targets: " + it.joinToString()
+            },
             intentConfidence = profile.confidence,
             recommendedTools = profile.recommendedTools,
             intentGuidance = profile.guidance
@@ -124,6 +129,10 @@ class AgentController(
         return when (val decision = parser.parse(raw)) {
             is AgentDecision.ToolCall -> interpretTool(decision, state)
             is AgentDecision.Done -> interpretDone(decision, state)
+            is AgentDecision.Partial -> ControllerInstruction.Finish(
+                "Частково виконано.\n${decision.summary}",
+                state.copy(task = state.task.copy(status = TaskStatus.PARTIAL, lastResult = decision.summary.take(4000)))
+            )
             is AgentDecision.Reply -> interpretReply(decision, state)
         }
     }
@@ -137,11 +146,11 @@ class AgentController(
             // small local model may nevertheless propose one more cleanup/check
             // even though the latest TOOL_RESULT already completed the task.
             // Give it one constrained conclusion turn before reporting failure.
-            if (state.toolUsed && !state.verificationRequired && state.protocolRetries == 0) {
+            if (state.toolUsed && state.protocolRetries == 0) {
                 return ControllerInstruction.AskModelAgain(
                     feedback = "Tool budget is exhausted; the proposed ${ToolRegistry.canonicalize(decision.tool)} call was not executed. " +
                         "Use the existing verified TOOL_RESULT. If the goal is complete, return {\"done\":true,\"summary\":\"what was completed and verified\"}. " +
-                        "If it is incomplete, report that honestly in the summary. Do not request another tool.",
+                        "If anything is incomplete or unverified, return {\"partial\":true,\"summary\":\"completed work and what remains\"}. Do not request another tool.",
                     state = state.copy(
                         protocolRetries = 1,
                         task = state.task.copy(status = TaskStatus.WAITING_MODEL)
@@ -163,6 +172,14 @@ class AgentController(
         }
 
         val canonical = decision.copy(tool = validation.canonicalTool)
+        if (state.task.kernel.inFlight != null) {
+            return ControllerInstruction.Stop("Earlier tool outcome is unknown; inspect the checkpoint before continuing.",
+                fail(state, "Unknown tool outcome"))
+        }
+        if (ContextKernel.repeatedObservation(state.task.kernel, canonical)) {
+            return protocolRetry(state, "This exact observation returned the same result twice with no intervening mutation. " +
+                "Use the recorded evidence, choose a different relevant check, or return done/partial. Do not repeat it.")
+        }
         val nextPlan = if (state.plan.isEmpty() && canonical.plan.isNotEmpty()) {
             canonical.plan
                 .take(6)
@@ -197,7 +214,7 @@ class AgentController(
                 // Reserve turns for same-target verification, cleanup and the
                 // final evidence check. These are commonly omitted from a weak
                 // model's short initial plan.
-                (nextPlan.size + 3).coerceIn(4, budget.maxTotalSteps)
+                maxOf(state.task.maxSteps, nextPlan.size * 2 + 2).coerceIn(4, budget.maxTotalSteps)
             state.task.maxSteps < 3 ->
                 3
             else ->
@@ -228,6 +245,7 @@ class AgentController(
         decision: AgentDecision.Done,
         state: AgentControlState
     ): ControllerInstruction {
+        ContextKernel.completionBlocker(state.task.kernel)?.let { return protocolRetry(state, it) }
         if (requiresToolEvidence(state.intent) && !state.toolUsed) {
             return protocolRetry(
                 state,
@@ -336,8 +354,13 @@ class AgentController(
         ok: Boolean,
         stdout: String,
         stderr: String,
-        error: String?
+        error: String?,
+        outcomeUnknown: Boolean = false
     ): ToolTransition {
+        if (outcomeUnknown) {
+            val reason = "Tool outcome unknown after transport failure. Inspect current state before replaying ${call.tool}."
+            return ToolTransition(fail(state, reason), reason)
+        }
         val signature = signature(call)
         var pythonFailures = state.pythonFailures
         val repeatedFailures = state.repeatedToolFailures.toMutableMap()
@@ -355,13 +378,15 @@ class AgentController(
             repeatedFailures[signature] = count
             if (count > budget.maxIdenticalToolFailures) {
                 val reason = "Identical tool failure repeated $count times: ${call.tool}"
-                return ToolTransition(fail(state, reason), reason)
+                return ToolTransition(fail(state.copy(task = state.task.copy(kernel = ContextKernel.record(
+                    state.task.kernel, call, false, error ?: stderr))), reason), reason)
             }
             if (call.tool.startsWith("python.")) {
                 pythonFailures++
                 if (pythonFailures > budget.maxPythonFailures) {
                     val reason = "Python failure budget exceeded (${budget.maxPythonFailures})"
-                    return ToolTransition(fail(state, reason), reason)
+                    return ToolTransition(fail(state.copy(task = state.task.copy(kernel = ContextKernel.record(
+                        state.task.kernel, call, false, error ?: stderr))), reason), reason)
                 }
             }
         }
@@ -414,6 +439,7 @@ class AgentController(
             maxSteps = recoveryMaxSteps,
             lastTool = call.tool,
             lastResult = resultText,
+            kernel = ContextKernel.record(state.task.kernel, call, ok, resultText).copy(pendingVerification = pendingPythonPaths),
             errors = if (ok) state.task.errors else (state.task.errors + resultText).takeLast(8)
         )
 
@@ -460,7 +486,9 @@ class AgentController(
             intentConfidence = state.intentConfidence,
             recommendedTools = state.recommendedTools,
             intentGuidance = state.intentGuidance,
-            recoveryGuidance = state.recoveryHint
+            recoveryGuidance = state.recoveryHint,
+            kernelContext = if (state.task.kernel.observed > 0 || state.task.kernel.inFlight != null)
+                ContextKernel.capsule(state.task.kernel) else null
         )
     }
 

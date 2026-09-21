@@ -23,7 +23,8 @@ class ContextBuilder(
         intentConfidence: Int = 0,
         recommendedTools: List<String> = emptyList(),
         intentGuidance: String? = null,
-        recoveryGuidance: String? = null
+        recoveryGuidance: String? = null,
+        kernelContext: String? = null
     ): String {
         val sections = mutableListOf<String>()
 
@@ -37,6 +38,7 @@ class ContextBuilder(
             appendLine("goal=${sanitize(task.goal).take(1_000)}")
             appendLine("status=${task.status}")
             appendLine("step=${task.step}/${task.maxSteps}")
+            if (task.step >= task.maxSteps) appendLine("NO TOOL BUDGET. Return done only if complete; otherwise partial JSON.")
             task.lastTool?.let { appendLine("last_tool=$it") }
             task.lastResult?.let { appendLine("last_result=${sanitize(it).take(800)}") }
             if (task.createdFiles.isNotEmpty()) appendLine("created=${task.createdFiles.take(16).joinToString()}")
@@ -55,6 +57,7 @@ class ContextBuilder(
         }
 
         sections += CoreDna.prompt()
+        if (!kernelContext.isNullOrBlank()) sections += kernelContext
 
         if (intent != TaskIntent.GENERAL || recommendedTools.isNotEmpty()) {
             sections += buildString {

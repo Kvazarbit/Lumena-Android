@@ -216,7 +216,12 @@ class AgentControllerTest {
             """{"tool":"python.syntax_check","args":{"script":"demo.py"}}""",
             atLimit
         )
-        assertTrue(instruction is ControllerInstruction.Stop)
+        assertTrue(instruction is ControllerInstruction.AskModelAgain)
+        val corrected = instruction.state
+        assertTrue(controller.interpret("""{"done":true,"summary":"ok"}""", corrected) is ControllerInstruction.AskModelAgain)
+        val partial = controller.interpret("""{"partial":true,"summary":"demo.py still needs verification"}""", corrected)
+        assertTrue(partial is ControllerInstruction.Finish)
+        assertTrue(partial.state.task.status == TaskStatus.PARTIAL)
     }
 
     @Test

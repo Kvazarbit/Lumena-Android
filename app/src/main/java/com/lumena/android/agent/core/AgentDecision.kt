@@ -11,6 +11,7 @@ sealed interface AgentDecision {
     ) : AgentDecision
 
     data class Done(val summary: String) : AgentDecision
+    data class Partial(val summary: String) : AgentDecision
 }
 
 enum class TaskStatus {
@@ -21,6 +22,7 @@ enum class TaskStatus {
     VERIFYING,
     WAITING_MODEL,
     DONE,
+    PARTIAL,
     FAILED,
     CANCELLED
 }
@@ -36,7 +38,8 @@ data class TaskState(
     val lastResult: String? = null,
     val createdFiles: List<String> = emptyList(),
     val modifiedFiles: List<String> = emptyList(),
-    val errors: List<String> = emptyList()
+    val errors: List<String> = emptyList(),
+    val kernel: ContextKernelState = ContextKernelState()
 ) {
     /**
      * maxSteps limits tool executions, not the final model conclusion.
@@ -44,5 +47,5 @@ data class TaskState(
      * AgentController blocks any additional tool call at that point.
      */
     val canContinue: Boolean
-        get() = status !in setOf(TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED) && step <= maxSteps
+        get() = status !in setOf(TaskStatus.DONE, TaskStatus.PARTIAL, TaskStatus.FAILED, TaskStatus.CANCELLED) && step <= maxSteps
 }

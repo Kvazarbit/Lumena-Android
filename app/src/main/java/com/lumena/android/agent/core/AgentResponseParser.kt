@@ -27,6 +27,10 @@ class AgentResponseParser {
         val obj = runCatching { mapAdapter.fromJson(candidate) }.getOrNull()
             ?: return AgentDecision.Reply(text)
 
+        if (obj["partial"] == true) {
+            return AgentDecision.Partial(obj["summary"]?.toString()?.trim().orEmpty()
+                .ifBlank { "Task incomplete; inspect the recorded results before continuing." })
+        }
         if (obj["done"] == true) {
             val summary = obj["summary"]?.toString()?.trim().orEmpty()
             return AgentDecision.Done(summary.ifBlank { "Task complete." })

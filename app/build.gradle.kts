@@ -13,7 +13,7 @@ android {
         applicationId = "com.lumena.android"
         minSdk = 28
         targetSdk = 35
-        versionCode = 20
+        versionCode = 21
         versionName = "0.12.0"
         ndk { abiFilters += listOf("arm64-v8a") }
         externalNativeBuild {

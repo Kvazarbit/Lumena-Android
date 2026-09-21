@@ -12,7 +12,8 @@ data class ToolResult(
     val exitCode: Int? = null,
     val stdout: String = "",
     val stderr: String = "",
-    val error: String? = null
+    val error: String? = null,
+    val outcomeUnknown: Boolean = false
 )
 
 data class PlannerDecision(
