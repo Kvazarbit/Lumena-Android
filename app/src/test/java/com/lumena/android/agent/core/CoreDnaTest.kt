@@ -7,6 +7,8 @@ class CoreDnaTest {
     @Test fun seedHasExplicitMeaningsAndBoundedPrompt() {
         assertEquals(CoreDna.principles.size, CoreDna.principles.map { it.id }.distinct().size)
         assertTrue(CoreDna.principles.all { it.instruction.isNotBlank() })
+        assertEquals("lumena-core-v4", CoreDna.VERSION)
+        assertTrue(CoreDna.prompt().contains("dependency failure is not task failure"))
         assertTrue(CoreDna.prompt().length < 1_300)
     }
 
