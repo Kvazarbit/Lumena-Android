@@ -87,6 +87,7 @@ import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.settings.ContextGenomeStats
 import com.lumena.android.settings.ContextGenomeStore
 import com.lumena.android.settings.ExperienceMemoryStore
+import com.lumena.android.settings.ExperienceLandscapeStore
 import com.lumena.android.settings.GenomeCapsule
 import com.lumena.android.settings.GenomeUnpackedUnit
 import com.lumena.android.settings.LumenaPreferences
@@ -402,6 +403,24 @@ fun WorkflowChatScreen(
 
     fun modelNameForRun(): String = if (inferenceBackend == "embedded") "embedded-gguf" else selectedModel
 
+    fun workflowRunner(): WorkflowRunner {
+        // Capture one environment for this runner; later UI changes cannot relabel its observations.
+        val session = ExperienceLandscapeStore.session(context, inferenceBackend,
+            if (inferenceBackend == "embedded") ggufPath else selectedModel, computeMode,
+            "$bridgeUrl|$ollamaUrl")
+        return WorkflowRunner(modelClient(), bridgeOrNull(), modelNameForRun(),
+            relevantMemoryProvider = { task ->
+                val advice = try { ExperienceLandscapeStore.advice(context, session, task) }
+                catch (_: Exception) { listOf("Learned advice unavailable; use current task state and fixed controller rules.") }
+                advice +
+                    ExperienceMemoryStore.relevant(context, task.goal)
+            },
+            onToolExperience = { task, request, result, elapsedMs ->
+                val eventId = ExperienceMemoryStore.record(context, request, result)
+                ExperienceLandscapeStore.record(context, session, task, request, result, elapsedMs, eventId)
+            })
+    }
+
     fun refreshModels() {
         status = "Checking Ollama…"
         uiScope.launch {
@@ -497,17 +516,7 @@ fun WorkflowChatScreen(
 
         coordinator.launch(workScope, task.id, resetProgress = true) { runToken ->
             val outcome = try {
-                WorkflowRunner(
-                    modelClient(),
-                    bridgeOrNull(),
-                    modelNameForRun(),
-                    relevantMemoryProvider = { task ->
-                        ExperienceMemoryStore.relevant(context, task.goal)
-                    },
-                    onToolExperience = { request, result ->
-                        ExperienceMemoryStore.record(context, request, result)
-                    }
-                ).run(
+                workflowRunner().run(
                     history = turnHistory,
                     task = task,
                     onProgress = { reportProgress(task.id, runToken, it) },
@@ -724,17 +733,7 @@ fun WorkflowChatScreen(
                 }
 
                 val outcome = try {
-                    WorkflowRunner(
-                        modelClient(),
-                        bridgeOrNull(),
-                        modelNameForRun(),
-                        relevantMemoryProvider = { task ->
-                            ExperienceMemoryStore.relevant(context, task.goal)
-                        },
-                        onToolExperience = { request, result ->
-                            ExperienceMemoryStore.record(context, request, result)
-                        }
-                    ).approve(
+                    workflowRunner().approve(
                         pending = requested,
                         onProgress = { reportProgress(taskId, runToken, it) },
                         onModelText = { text ->
@@ -1284,6 +1283,7 @@ private fun ModelAndConnectionSheet(
 
         HorizontalDivider()
         Text("Verified experience memory", style = MaterialTheme.typography.titleMedium)
+        ExperienceLandscapePanel(busy = busy, refreshKey = experienceTotal.toString() + genomeStats.events)
         Text(
             "Only real TOOL_RESULT outcomes are stored. Model prose is never written as an experience anchor.",
             style = MaterialTheme.typography.bodySmall,

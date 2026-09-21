@@ -60,7 +60,7 @@ class WorkflowRunner(
     private val model: String,
     private val controller: AgentController = AgentController(),
     private val relevantMemoryProvider: (TaskState) -> List<String> = { emptyList() },
-    private val onToolExperience: (ToolRequest, ToolResult) -> Unit = { _, _ -> }
+    private val onToolExperience: (TaskState, ToolRequest, ToolResult, Long) -> Unit = { _, _, _, _ -> }
 ) {
     suspend fun run(
         history: List<OllamaMessage>,
@@ -143,6 +143,7 @@ class WorkflowRunner(
                         "PREFLIGHT · $canonical\n${preflight.reason.take(500)}"
                     )
 
+                    val startedNs = System.nanoTime()
                     val rawResult = executeWithTelemetry(
                         localBridge,
                         request,
@@ -157,7 +158,7 @@ class WorkflowRunner(
                             collectedImages += image
                         }
                     }
-                    runCatching { onToolExperience(request, result) }
+                    recordExperience(state.task, request, result, startedNs, onProgress)
 
                     val transition = controller.afterTool(
                         state = state,
@@ -349,6 +350,7 @@ class WorkflowRunner(
                     )
 
                     onProgress("TOOL RUNNING · ${planned.request.tool}")
+                    val startedNs = System.nanoTime()
                     val rawResult = executeWithTelemetry(
                         localBridge,
                         planned.request,
@@ -363,7 +365,7 @@ class WorkflowRunner(
                             collectedImages += image
                         }
                     }
-                    runCatching { onToolExperience(planned.request, result) }
+                    recordExperience(state.task, planned.request, result, startedNs, onProgress)
 
                     val transition = controller.afterTool(
                         state = state,
@@ -457,6 +459,7 @@ class WorkflowRunner(
 
         onProgress(toolCallTrace(pending.plan))
         onProgress("TOOL RUNNING · ${pending.plan.request.tool}")
+        val startedNs = System.nanoTime()
         val rawResult = executeWithTelemetry(
             localBridge,
             pending.plan.request,
@@ -466,7 +469,7 @@ class WorkflowRunner(
             pending.plan.request,
             rawResult
         )
-        runCatching { onToolExperience(pending.plan.request, result) }
+        recordExperience(pending.control.task, pending.plan.request, result, startedNs, onProgress)
 
         val call = AgentDecision.ToolCall(
             tool = pending.plan.request.tool,
@@ -623,6 +626,15 @@ class WorkflowRunner(
         return buildList {
             add(OllamaMessage("system", mergedSystem))
             addAll(history.filterNot { it.role == "system" })
+        }
+    }
+
+    private fun recordExperience(task: TaskState, request: ToolRequest, result: ToolResult,
+                                 startedNs: Long, onProgress: (String) -> Unit) {
+        try {
+            onToolExperience(task, request, result, ((System.nanoTime() - startedNs) / 1_000_000).coerceAtLeast(0))
+        } catch (error: Exception) {
+            onProgress("EXPERIENCE NOT SAVED · ${error.message.orEmpty().take(300)}")
         }
     }
 

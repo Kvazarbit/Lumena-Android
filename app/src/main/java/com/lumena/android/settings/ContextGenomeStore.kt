@@ -222,6 +222,7 @@ object ContextGenomeStore {
         } finally {
             db.endTransaction()
         }
+        eventId
     }
 
     fun capsules(

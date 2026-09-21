@@ -241,7 +241,7 @@ object ExperienceMemoryStore {
     ) = synchronized(lock) {
         val app = context.applicationContext
         val next = ExperienceMemoryIndex.record(load(app), request, result, now)
-        ContextGenomeStore.record(
+        val eventId = ContextGenomeStore.record(
             context = app,
             request = request,
             result = result,
@@ -252,6 +252,7 @@ object ExperienceMemoryStore {
         // writable JSON mirror; the legacy file is only an import source.
         val legacy = file(app)
         if (legacy.exists()) legacy.delete()
+        eventId
     }
 
     fun relevant(
@@ -290,6 +291,7 @@ object ExperienceMemoryStore {
     fun clear(context: Context) = synchronized(lock) {
         val app = context.applicationContext
         ContextGenomeStore.clear(app)
+        ExperienceLandscapeStore.clear(app)
         val legacy = file(app)
         if (legacy.exists()) legacy.delete()
     }
