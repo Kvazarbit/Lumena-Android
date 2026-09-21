@@ -242,6 +242,88 @@ class AgentControllerTest {
     }
 
     @Test
+    fun failedWebSearchTripsCircuitBreakerBeforeAnotherModelTurn() {
+        val webTask = TaskState(
+            id = "web-fail",
+            projectId = null,
+            goal = "Знайди останні новини в інтернеті",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val call = AgentDecision.ToolCall(
+            tool = "web.search",
+            args = mapOf("query" to "останні новини")
+        )
+        val initial = controller.initial(webTask)
+        val executing = initial.copy(
+            task = initial.task.copy(
+                status = TaskStatus.EXECUTING,
+                kernel = ContextKernel.before(initial.task.kernel, call)
+            )
+        )
+
+        val transition = controller.afterTool(
+            state = executing,
+            call = call,
+            ok = false,
+            stdout = """{"query":"останні новини","results":[],"attempts":[{"provider":"duckduckgo","error":"Upstream HTTP 202"}]}""",
+            stderr = "",
+            error = "Search unavailable. Do not invent current facts."
+        )
+
+        assertTrue(transition.stopReason?.contains("automatic retry stopped") == true)
+        assertTrue(transition.state.task.status == TaskStatus.FAILED)
+        assertTrue(transition.state.task.lastTool == "web.search")
+        assertTrue(transition.state.task.kernel.inFlight == null)
+        assertTrue(transition.state.task.errors.last().contains("Search unavailable"))
+    }
+
+    @Test
+    fun successfulWebSearchStillReturnsControlToModelForSourceReading() {
+        val webTask = TaskState(
+            id = "web-ok",
+            projectId = null,
+            goal = "Знайди новини в інтернеті",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val call = AgentDecision.ToolCall(
+            tool = "web.search",
+            args = mapOf("query" to "новини")
+        )
+        val initial = controller.initial(webTask)
+        val executing = initial.copy(
+            task = initial.task.copy(
+                status = TaskStatus.EXECUTING,
+                kernel = ContextKernel.before(initial.task.kernel, call)
+            )
+        )
+
+        val transition = controller.afterTool(
+            state = executing,
+            call = call,
+            ok = true,
+            stdout = """{"results":[{"url":"https://example.org","title":"Example"}]}""",
+            stderr = "",
+            error = null
+        )
+
+        assertTrue(transition.stopReason == null)
+        assertTrue(transition.state.task.status == TaskStatus.WAITING_MODEL)
+        assertTrue(transition.state.task.kernel.inFlight == null)
+    }
+
+    @Test
+    fun exhaustedContextErrorStopsInsteadOfStartingControllerRetryLoop() {
+        val instruction = controller.onModelFailure(
+            controller.initial(task()),
+            "Ollama stream error: context length exceeded; prompt has too many tokens"
+        )
+
+        assertTrue(instruction is ControllerInstruction.Stop)
+        assertTrue(instruction.state.task.status == TaskStatus.FAILED)
+        assertTrue(instruction.state.modelFailures == 1)
+    }
+
+    @Test
     fun imageGoalCannotFinishBeforeImageSearch() {
         val visualTask = TaskState(
             id = "img",

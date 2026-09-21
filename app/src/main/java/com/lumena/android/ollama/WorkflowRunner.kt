@@ -12,7 +12,7 @@ import com.lumena.android.agent.core.ToolRisk
 import com.lumena.android.agent.core.TaskIntentRouter
 import com.lumena.android.agent.local.PlannedTool
 import com.lumena.android.agent.local.PlannerDecision
-import com.lumena.android.agent.local.TermuxBridgeClient
+import com.lumena.android.agent.local.ToolExecutor
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.local.ToolResult
@@ -57,7 +57,7 @@ sealed interface WorkflowOutcome {
 
 class WorkflowRunner(
     private val modelClient: ChatModelClient,
-    private val bridge: TermuxBridgeClient?,
+    private val bridge: ToolExecutor?,
     private val model: String,
     private val controller: AgentController = AgentController(),
     private val relevantMemoryProvider: (TaskState) -> List<String> = { emptyList() },
@@ -561,7 +561,7 @@ class WorkflowRunner(
     }
 
     private suspend fun executeWithTelemetry(
-        localBridge: TermuxBridgeClient,
+        localBridge: ToolExecutor,
         request: ToolRequest,
         onToolTelemetry: (String) -> Unit
     ): ToolResult = coroutineScope {

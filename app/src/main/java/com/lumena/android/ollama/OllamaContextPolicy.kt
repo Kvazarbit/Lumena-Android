@@ -21,10 +21,22 @@ object OllamaContextPolicy {
         val predict = if (retry) min(basePredict, 512) else basePredict
         val temperature = if (retry) 0.10 else 0.15
 
-        val maxChars = (context * 3)
-            .coerceIn(6_000, 14_000)
-        val maxPerMessage = (maxChars / 3)
-            .coerceIn(2_000, 5_000)
+        // Reserve output tokens and an additional safety margin before deriving
+        // an approximate character budget. Two chars/token is intentionally
+        // conservative for Cyrillic + JSON/tool traces.
+        val reserveTokens = maxOf(128, context / 16)
+        val rawInputTokens = (context - predict - reserveTokens).coerceAtLeast(512)
+        // Context pressure must produce a genuinely smaller second request even
+        // on profiles that already run at a 2K/3K context.
+        val inputTokens = if (retry) {
+            (rawInputTokens * 2 / 3).coerceAtLeast(384)
+        } else {
+            rawInputTokens
+        }
+        val maxChars = (inputTokens * 2)
+            .coerceIn(2_000, 12_000)
+        val maxPerMessage = (maxChars / 2)
+            .coerceIn(1_000, 4_000)
 
         return OllamaRequestBudget(
             options = OllamaOptions(
@@ -46,18 +58,30 @@ object OllamaContextPolicy {
         val system = messages.firstOrNull { it.role == "system" }
         val nonSystem = messages.filterNot { it.role == "system" }
 
+        // Never let the system prompt consume the whole request budget: the
+        // newest non-system turn must retain space. Then enforce the total budget
+        // strictly while walking history from newest to oldest.
+        val systemLimit = min(budget.maxPerMessage, budget.maxChars / 2)
         val clippedSystem = system?.copy(
-            content = clipSystem(system.content, budget.maxPerMessage)
+            content = clipSystem(system.content, systemLimit)
         )
 
-        var used = clippedSystem?.content?.length ?: 0
+        var remaining = (budget.maxChars - (clippedSystem?.content?.length ?: 0))
+            .coerceAtLeast(0)
         val recent = ArrayList<OllamaMessage>()
         for (message in nonSystem.asReversed()) {
-            val clipped = message.content.takeLast(budget.maxPerMessage)
-            if (recent.isNotEmpty() && used + clipped.length > budget.maxChars) break
+            if (remaining <= 0) break
+            val requested = min(budget.maxPerMessage, message.content.length)
+            val take = if (recent.isEmpty()) {
+                min(requested, remaining)
+            } else {
+                if (requested > remaining) break
+                requested
+            }
+            val clipped = message.content.takeLast(take)
+            if (clipped.isEmpty()) continue
             recent += message.copy(content = clipped)
-            used += clipped.length
-            if (used >= budget.maxChars) break
+            remaining -= clipped.length
         }
         recent.reverse()
 
