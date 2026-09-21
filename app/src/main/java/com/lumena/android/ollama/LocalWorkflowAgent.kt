@@ -20,6 +20,7 @@ object LocalWorkflowAgent {
         - Follow TASK RECIPE recommended tools when present; it is application policy, not model-generated advice.
         - Follow RECOVERY GUIDANCE after a failed TOOL_RESULT; do not repeat an unchanged failing action.
         - After each TOOL_RESULT continue the SAME goal. If verification is required, verify before done.
+        - When cleanup or the final requested check succeeds, return done immediately. Do not create another cleanup script to re-check an already verified deletion.
         - After tool work starts, finish ONLY with done JSON, except a verified visual task may finish with a user-facing reply. Ordinary no-tool conversation uses reply JSON.
         - Keep user-facing reply/done text in the user's language unless the user asks for another language.
 

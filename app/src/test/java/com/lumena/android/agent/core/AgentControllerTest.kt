@@ -168,6 +168,58 @@ class AgentControllerTest {
     }
 
     @Test
+    fun extraToolAtLimitGetsOneConclusionTurnAfterVerifiedResult() {
+        val atLimit = controller.initial(task().copy(maxSteps = 5)).copy(
+            toolUsed = true,
+            task = task().copy(
+                status = TaskStatus.WAITING_MODEL,
+                step = 5,
+                maxSteps = 5,
+                lastTool = "python.run",
+                lastResult = "ok=true stdout=Cleanup script deleted"
+            )
+        )
+
+        val correction = controller.interpret(
+            """{"tool":"python.run","args":{"script":"last_step.py"},"reason":"cleanup again"}""",
+            atLimit
+        )
+        assertTrue(correction is ControllerInstruction.AskModelAgain)
+        correction as ControllerInstruction.AskModelAgain
+        assertTrue(correction.feedback.contains("was not executed"))
+        assertTrue(correction.feedback.contains("Do not request another tool"))
+
+        val done = controller.interpret(
+            """{"done":true,"summary":"Очищення виконано і перевірено."}""",
+            correction.state
+        )
+        assertTrue(done is ControllerInstruction.Finish)
+
+        val repeated = controller.interpret(
+            """{"tool":"python.run","args":{"script":"another_cleanup.py"}}""",
+            correction.state
+        )
+        assertTrue(repeated is ControllerInstruction.Stop)
+    }
+
+    @Test
+    fun pendingVerificationNeverGetsConclusionShortcutAtToolLimit() {
+        val atLimit = controller.initial(task().copy(maxSteps = 5)).copy(
+            toolUsed = true,
+            verificationRequired = true,
+            verificationReason = "verify demo.py",
+            pendingPythonPaths = setOf("demo.py"),
+            task = task().copy(status = TaskStatus.WAITING_MODEL, step = 5, maxSteps = 5)
+        )
+
+        val instruction = controller.interpret(
+            """{"tool":"python.syntax_check","args":{"script":"demo.py"}}""",
+            atLimit
+        )
+        assertTrue(instruction is ControllerInstruction.Stop)
+    }
+
+    @Test
     fun verifiedExperienceIsInjectedIntoDynamicContext() {
         val state = controller.initial(task())
         val context = controller.dynamicContext(

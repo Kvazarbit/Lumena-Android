@@ -133,6 +133,21 @@ class AgentController(
         state: AgentControlState
     ): ControllerInstruction {
         if (state.task.step >= minOf(state.task.maxSteps, budget.maxTotalSteps)) {
+            // The last model turn is deliberately available at the tool limit. A
+            // small local model may nevertheless propose one more cleanup/check
+            // even though the latest TOOL_RESULT already completed the task.
+            // Give it one constrained conclusion turn before reporting failure.
+            if (state.toolUsed && !state.verificationRequired && state.protocolRetries == 0) {
+                return ControllerInstruction.AskModelAgain(
+                    feedback = "Tool budget is exhausted; the proposed ${ToolRegistry.canonicalize(decision.tool)} call was not executed. " +
+                        "Use the existing verified TOOL_RESULT. If the goal is complete, return {\"done\":true,\"summary\":\"what was completed and verified\"}. " +
+                        "If it is incomplete, report that honestly in the summary. Do not request another tool.",
+                    state = state.copy(
+                        protocolRetries = 1,
+                        task = state.task.copy(status = TaskStatus.WAITING_MODEL)
+                    )
+                )
+            }
             return ControllerInstruction.Stop(
                 "Agent step limit reached (${state.task.maxSteps}).",
                 fail(state, "Step limit reached")
@@ -179,7 +194,10 @@ class AgentController(
 
         val adaptiveMaxSteps = when {
             nextPlan.isNotEmpty() ->
-                (nextPlan.size + 2).coerceIn(3, budget.maxTotalSteps)
+                // Reserve turns for same-target verification, cleanup and the
+                // final evidence check. These are commonly omitted from a weak
+                // model's short initial plan.
+                (nextPlan.size + 3).coerceIn(4, budget.maxTotalSteps)
             state.task.maxSteps < 3 ->
                 3
             else ->
