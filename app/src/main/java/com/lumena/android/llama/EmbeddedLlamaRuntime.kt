@@ -3,6 +3,8 @@ package com.lumena.android.llama
 import android.content.Context
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -70,7 +72,8 @@ object EmbeddedLlamaRuntime {
                     "System instructions and the newest user turn were preserved."
             }
 
-            LlamaNative.nativeGenerate(
+            coroutineContext.ensureActive()
+            val response = LlamaNative.nativeGenerate(
                 handle = handle,
                 prompt = fitted.prompt,
                 contextSize = generation.contextSize,
@@ -79,6 +82,8 @@ object EmbeddedLlamaRuntime {
                 threads = generation.threads,
                 batchSize = generation.batchSize
             )
+            coroutineContext.ensureActive()
+            response
         }
     }
 
@@ -197,26 +202,28 @@ object EmbeddedLlamaRuntime {
         if (old != 0L) LlamaNative.nativeFreeModel(old)
 
         val loaded = if (modelRef.startsWith("content://")) {
-            loadContentUri(context, Uri.parse(modelRef), profile, normalizedMode)
+            loadContentUri(context, Uri.parse(modelRef), normalizedMode)
         } else {
             val file = File(modelRef)
             require(file.isFile) { "GGUF model not found: $modelRef" }
-            val bytes = file.length()
+            val fileBytes = file.length()
             val probe = LlamaLoadDiagnostics.parseProbe(
                 LlamaNative.nativeProbeModel(modelRef)
             )
+            val bytes = LlamaRuntimePolicy.effectiveModelBytes(fileBytes, probe.modelSizeBytes)
+            val loadProfile = LlamaHardwareProfile.detect(context)
             if (!probe.ok) {
                 throwLoadFailure(
                     probe = probe,
-                    profile = profile,
+                    profile = loadProfile,
                     fileBytes = bytes,
                     nativeLog = probe.raw
                 )
             }
-            requireSafeMemory(bytes, profile)
+            requireSafeMemory(bytes, loadProfile)
             val result = loadWithGpuFallback(
                 modelBytes = bytes,
-                profile = profile,
+                profile = loadProfile,
                 computeMode = normalizedMode
             ) { gpuLayers ->
                 LlamaNative.nativeLoadModel(modelRef, gpuLayers)
@@ -226,7 +233,7 @@ object EmbeddedLlamaRuntime {
             } else {
                 throwLoadFailure(
                     probe = probe,
-                    profile = profile,
+                    profile = loadProfile,
                     fileBytes = bytes,
                     nativeLog = LlamaNative.nativeLastError()
                 )
@@ -245,30 +252,37 @@ object EmbeddedLlamaRuntime {
     private fun loadContentUri(
         context: Context,
         uri: Uri,
-        profile: LlamaRuntimeProfile,
         computeMode: String
     ): Long {
-        val descriptor = context.contentResolver.openFileDescriptor(uri, "r")
-            ?: error("Android could not open the selected GGUF file")
+        val descriptor = try {
+            context.contentResolver.openFileDescriptor(uri, "r")
+        } catch (failure: java.io.FileNotFoundException) {
+            throw IllegalStateException("Embedded model load failed. Selected GGUF is unavailable: ${failure.message}", failure)
+        } catch (failure: SecurityException) {
+            throw IllegalStateException("Embedded model load failed. Permission to read selected GGUF was denied.", failure)
+        }
+            ?: error("Embedded model load failed. Android could not open the selected GGUF file")
         return descriptor.use { pfd ->
-            check(pfd.fd >= 0) { "Android returned an invalid file descriptor for the GGUF model" }
-            val bytes = pfd.statSize.coerceAtLeast(0L)
+            check(pfd.fd >= 0) { "Embedded model load failed. Invalid Android file descriptor for the GGUF model" }
+            val fileBytes = pfd.statSize
             val probe = LlamaLoadDiagnostics.parseProbe(
                 LlamaNative.nativeProbeModelFd(pfd.fd)
             )
+            val bytes = LlamaRuntimePolicy.effectiveModelBytes(fileBytes, probe.modelSizeBytes)
+            val loadProfile = LlamaHardwareProfile.detect(context)
             if (!probe.ok) {
                 throwLoadFailure(
                     probe = probe,
-                    profile = profile,
+                    profile = loadProfile,
                     fileBytes = bytes,
                     nativeLog = probe.raw
                 )
             }
 
-            requireSafeMemory(bytes, profile)
+            requireSafeMemory(bytes, loadProfile)
             val result = loadWithGpuFallback(
                 modelBytes = bytes,
-                profile = profile,
+                profile = loadProfile,
                 computeMode = computeMode
             ) { gpuLayers ->
                 LlamaNative.nativeLoadModelFd(pfd.fd, gpuLayers)
@@ -278,7 +292,7 @@ object EmbeddedLlamaRuntime {
             } else {
                 throwLoadFailure(
                     probe = probe,
-                    profile = profile,
+                    profile = loadProfile,
                     fileBytes = bytes,
                     nativeLog = LlamaNative.nativeLastError()
                 )
@@ -307,11 +321,13 @@ object EmbeddedLlamaRuntime {
     }
 
     private fun requireSafeMemory(modelBytes: Long, profile: LlamaRuntimeProfile) {
-        if (modelBytes <= 0L) return
+        check(modelBytes > 0L) {
+            "Embedded model load failed. Cannot determine GGUF size for the RAM safety check."
+        }
         val modelGb = modelBytes / GIB
         val requiredGb = LlamaRuntimePolicy.requiredRamGb(modelBytes) ?: return
         check(profile.availableRamGb >= requiredGb) {
-            "Not enough free RAM to load this GGUF safely. " +
+            "Embedded model load failed. Not enough free RAM to load this GGUF safely. " +
                 "Model %.1f GB, available %.1f GB, recommended at least %.1f GB."
                     .format(modelGb, profile.availableRamGb, requiredGb)
         }

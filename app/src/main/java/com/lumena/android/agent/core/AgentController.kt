@@ -18,6 +18,7 @@ data class AgentControlState(
     val identicalToolCalls: Int = 0,
     val verificationRequired: Boolean = false,
     val verificationReason: String? = null,
+    val pendingPythonPaths: Set<String> = emptySet(),
     val visualEvidenceReady: Boolean = false,
     val intent: TaskIntent = TaskIntent.GENERAL,
     val intentConfidence: Int = 0,
@@ -92,6 +93,8 @@ class AgentController(
         val fullLower = message.lowercase()
         val nonRetryable = listOf(
             "embedded model load failed",
+            "not enough free ram to load this gguf safely",
+            "embedded generation failed",
             "could not load this gguf model",
             "gguf model not found",
             "invalid android file descriptor",
@@ -279,6 +282,9 @@ class AgentController(
         }
 
         if (requiresVisualEvidence(state.task.goal) && state.visualEvidenceReady) {
+            if (state.verificationRequired) {
+                return protocolRetry(state, state.verificationReason ?: "Verification is required.")
+            }
             val finished = state.copy(
                 task = state.task.copy(
                     status = TaskStatus.DONE,
@@ -344,15 +350,26 @@ class AgentController(
 
         var verificationRequired = state.verificationRequired
         var verificationReason = state.verificationReason
+        val pendingPythonPaths = state.pendingPythonPaths.toMutableSet()
         if (ok && call.tool in setOf("file.write", "file.patch")) {
-            val path = call.args["path"].orEmpty().lowercase()
-            if (path.endsWith(".py")) {
+            val path = normalizePath(call.args["path"].orEmpty())
+            if (path.endsWith(".py", ignoreCase = true)) {
+                pendingPythonPaths += path
                 verificationRequired = true
-                verificationReason = "Python code changed; run python.syntax_check, python.tests, or python.run successfully before finishing."
             }
         }
-        if (ok && call.tool in setOf("python.syntax_check", "python.tests", "python.run")) {
-            verificationRequired = false
+        if (ok && call.tool in setOf("python.syntax_check", "python.run")) {
+            // A successful unrelated script (or selected pytest subset) proves
+            // nothing about the files changed by this task.
+            pendingPythonPaths.remove(normalizePath(call.args["script"].orEmpty()))
+            if (state.pendingPythonPaths.isNotEmpty()) {
+                verificationRequired = pendingPythonPaths.isNotEmpty()
+            }
+        }
+        if (pendingPythonPaths.isNotEmpty()) {
+            verificationReason = "Python code changed; successfully run python.syntax_check or python.run for each pending file: " +
+                pendingPythonPaths.sorted().joinToString(", ")
+        } else if (!verificationRequired) {
             verificationReason = null
         }
 
@@ -392,6 +409,7 @@ class AgentController(
                 repeatedToolFailures = repeatedFailures,
                 verificationRequired = verificationRequired,
                 verificationReason = verificationReason,
+                pendingPythonPaths = pendingPythonPaths,
                 visualEvidenceReady = state.visualEvidenceReady ||
                     (ok && ToolRegistry.canonicalize(call.tool) == "image.search"),
                 recoveryHint = RecoveryAdvisor.suggest(
@@ -490,4 +508,7 @@ class AgentController(
         val args = call.args.toSortedMap().entries.joinToString("&") { (k, v) -> "$k=${v.trim()}" }
         return "${ToolRegistry.canonicalize(call.tool)}|$args"
     }
+
+    private fun normalizePath(path: String): String =
+        java.io.File(path.trim()).toPath().normalize().toString()
 }

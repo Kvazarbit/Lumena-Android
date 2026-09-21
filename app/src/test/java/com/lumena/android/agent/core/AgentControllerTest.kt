@@ -60,6 +60,7 @@ class AgentControllerTest {
         var state = controller.initial(task()).copy(
             toolUsed = true,
             verificationRequired = true,
+            pendingPythonPaths = setOf("demo.py"),
             verificationReason = "verify python"
         )
         val call = AgentDecision.ToolCall(
@@ -78,6 +79,48 @@ class AgentControllerTest {
 
         val done = controller.interpret("""{"done":true,"summary":"verified"}""", state)
         assertTrue(done is ControllerInstruction.Finish)
+    }
+
+    @Test
+    fun verificationIsBoundToEachChangedPathAndReopenedAfterAnotherWrite() {
+        fun apply(state: AgentControlState, tool: String, key: String, path: String, ok: Boolean = true) =
+            controller.afterTool(state, AgentDecision.ToolCall(tool, mapOf(key to path)),
+                ok, "", "", null).state
+
+        var state = apply(controller.initial(task()), "file.write", "path", "A.py")
+        state = apply(state, "file.patch", "path", "B.py")
+        state = apply(state, "python.syntax_check", "script", "unrelated.py")
+        state = apply(state, "python.tests", "cwd", ".")
+        assertTrue(state.pendingPythonPaths == setOf("A.py", "B.py"))
+        state = apply(state, "python.syntax_check", "script", "a.py")
+        assertTrue(state.pendingPythonPaths.contains("A.py"))
+        state = apply(state, "python.syntax_check", "script", "./A.py")
+        assertTrue(state.verificationRequired)
+        state = apply(state, "python.syntax_check", "script", "B.py", ok = false)
+        assertTrue(state.verificationRequired)
+        state = apply(state, "python.syntax_check", "script", "B.py")
+        assertFalse(state.verificationRequired)
+        state = apply(state, "file.patch", "path", "A.py")
+        assertTrue(state.verificationRequired)
+    }
+
+    @Test
+    fun visualReplyCannotBypassPendingCodeVerification() {
+        val state = controller.initial(task().copy(goal = "Find a photo of a cat")).copy(
+            toolUsed = true, visualEvidenceReady = true,
+            verificationRequired = true, pendingPythonPaths = setOf("demo.py")
+        )
+        assertTrue(controller.interpret("Here is the photo", state) is ControllerInstruction.AskModelAgain)
+    }
+
+    @Test
+    fun memoryAndNativeGenerationFailuresStopWithoutUnchangedRetry() {
+        for (message in listOf(
+            "Not enough free RAM to load this GGUF safely.",
+            "Embedded generation failed. llama_decode failed; partial output discarded."
+        )) {
+            assertTrue(controller.onModelFailure(controller.initial(task()), message) is ControllerInstruction.Stop)
+        }
     }
 
     @Test

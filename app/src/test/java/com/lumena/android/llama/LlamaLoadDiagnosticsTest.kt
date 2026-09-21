@@ -7,6 +7,35 @@ import org.junit.Test
 
 class LlamaLoadDiagnosticsTest {
     @Test
+    fun failedProbePreservesTailAndClassifiesAllocationBeforeMetadata() {
+        val probe = LlamaLoadDiagnostics.parseProbe(
+            "ERROR\n" + "metadata spam\n".repeat(2000) + "failed to allocate tokenizer memory"
+        )
+        val failure = LlamaLoadDiagnostics.classify(probe, probe.raw, 1.0, 0)
+        assertTrue(probe.raw.length <= 8_000)
+        assertEquals(LlamaLoadFailureKind.ALLOCATION_OR_MMAP, failure.kind)
+        assertFalse(failure.userMessage.contains("metadata is readable"))
+        assertTrue(failure.technicalSummary.contains("failed to allocate tokenizer memory"))
+    }
+
+    @Test
+    fun inaccessibleFileIsNotCalledIncompatibleMetadata() {
+        val probe = LlamaLoadDiagnostics.parseProbe("ERROR\nGGUF file descriptor is not seekable.")
+        assertEquals(LlamaLoadFailureKind.FILE_ACCESS,
+            LlamaLoadDiagnostics.classify(probe, probe.raw, 8.0, 0).kind)
+    }
+
+    @Test
+    fun informationalTensorTypeDoesNotProveLayoutFailureOrEvictError() {
+        val log = "tensor type Q4_K\nerror: backend initialization failed\n" +
+            "create_tensor: loading tensor 'blk.7.weight'\n".repeat(100)
+        val failure = LlamaLoadDiagnostics.classify(LlamaModelProbeInfo(ok = true), log, 8.0, 0)
+        assertEquals(LlamaLoadFailureKind.FULL_LOAD_FAILED, failure.kind)
+        assertTrue(failure.userMessage.contains("blk.7.weight"))
+        assertTrue(failure.technicalSummary.contains("backend initialization failed"))
+    }
+
+    @Test
     fun parsesSuccessfulGemma4Probe() {
         val probe = LlamaLoadDiagnostics.parseProbe(
             """

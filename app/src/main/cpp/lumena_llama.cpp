@@ -29,8 +29,9 @@ void append_log(const char * text) {
     }
 }
 
-void llama_log_capture(enum ggml_log_level, const char * text, void *) {
-    append_log(text);
+void llama_log_capture(enum ggml_log_level level, const char * text, void *) {
+    // Per-tensor debug output must not evict the actual loader failure.
+    if (level != GGML_LOG_LEVEL_DEBUG) append_log(text);
 }
 
 void clear_last_log() {
@@ -57,9 +58,9 @@ llama_model_params model_params_for(jint gpuLayers) {
 
     // llama.cpp enables CPU weight repacking through "extra" buffer types by
     // default.  That is useful on desktops, but it materializes a second copy
-    // of much of a Q4_K model while the mmap is still resident.  A 4.95 GiB
-    // Gemma 4 model peaked around 6.9 GiB during load and was killed on Android
-    // near the final layers.  Keep CPU loads mmap-backed and memory-stable.
+    // of weights while the mmap is still resident. A Linux synthetic GGUF
+    // load showed a higher peak with repacking; this does not establish the
+    // cause of a device crash. Avoid this optional CPU allocation overhead.
     // GPU loads may still use their device-specific buffer types.
     params.use_extra_bufts = gpuLayers != 0;
     return params;
@@ -127,6 +128,14 @@ std::string token_piece(const llama_vocab * vocab, llama_token token) {
     }
     return n > 0 ? std::string(buf.data(), (size_t) n) : std::string();
 }
+
+jstring generation_failure(JNIEnv * env, const char * message) {
+    append_log(message);
+    const std::string diagnostic = std::string("Embedded generation failed. ") + message + "\n" + last_log_copy();
+    jclass exception = env->FindClass("java/lang/IllegalStateException");
+    if (exception) env->ThrowNew(exception, diagnostic.c_str());
+    return nullptr;
+}
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -192,7 +201,10 @@ Java_com_lumena_android_llama_LlamaNative_nativeProbeModelFd(
     }
     // SAF descriptors can retain a shared file offset across dup(). Always
     // probe from the beginning, then restore the caller's offset when seekable.
-    (void) ::lseek(dup_fd, 0, SEEK_SET);
+    if (::lseek(dup_fd, 0, SEEK_SET) < 0) {
+        ::close(dup_fd);
+        return env->NewStringUTF("ERROR\nGGUF file descriptor is not seekable. Copy the file to local storage.");
+    }
 
     FILE * file = ::fdopen(dup_fd, "rb");
     if (!file) {
@@ -261,7 +273,11 @@ Java_com_lumena_android_llama_LlamaNative_nativeLoadModelFd(
         return 0;
     }
     // Be independent of any previous metadata probe/read on the same SAF FD.
-    (void) ::lseek(dup_fd, 0, SEEK_SET);
+    if (::lseek(dup_fd, 0, SEEK_SET) < 0) {
+        append_log("GGUF file descriptor is not seekable. Copy the file to local storage.\n");
+        ::close(dup_fd);
+        return 0;
+    }
 
     FILE * file = ::fdopen(dup_fd, "rb");
     if (!file) {
@@ -426,7 +442,8 @@ Java_com_lumena_android_llama_LlamaNative_nativeGenerate(
         jint threads, jint batchSize) {
     std::lock_guard<std::mutex> lock(g_mutex);
     auto * model = reinterpret_cast<llama_model *>(handle);
-    if (!model || model != g_model) return env->NewStringUTF("");
+    clear_last_log();
+    if (!model || model != g_model) return generation_failure(env, "No active model.");
 
     g_cancel_requested.store(false, std::memory_order_release);
 
@@ -444,13 +461,13 @@ Java_com_lumena_android_llama_LlamaNative_nativeGenerate(
     const int wanted_batch = std::clamp((int) batchSize, 32, wanted_ctx);
 
     int n_prompt = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), nullptr, 0, true, true);
-    if (n_prompt <= 0) return env->NewStringUTF("");
+    if (n_prompt <= 0) return generation_failure(env, "Prompt tokenization produced no tokens.");
 
     std::vector<llama_token> tokens((size_t) n_prompt);
     const int tokenized = llama_tokenize(
         vocab, prompt.c_str(), prompt.size(), tokens.data(), n_prompt, true, true
     );
-    if (tokenized < 0) return env->NewStringUTF("");
+    if (tokenized < 0) return generation_failure(env, "Prompt tokenization failed.");
     tokens.resize((size_t) tokenized);
 
     // Kotlin pre-fits chat history with this exact tokenizer. Never silently
@@ -462,7 +479,7 @@ Java_com_lumena_android_llama_LlamaNative_nativeGenerate(
              std::to_string(tokens.size()) + " > " +
              std::to_string(max_prompt_tokens) + "\n").c_str()
         );
-        return env->NewStringUTF("");
+        return generation_failure(env, "Prompt exceeds the native context budget.");
     }
 
     auto cp = llama_context_default_params();
@@ -473,7 +490,7 @@ Java_com_lumena_android_llama_LlamaNative_nativeGenerate(
     cp.n_threads_batch = wanted_threads;
 
     llama_context * ctx = llama_init_from_model(model, cp);
-    if (!ctx) return env->NewStringUTF("");
+    if (!ctx) return generation_failure(env, "Could not allocate inference context.");
 
     llama_sampler * sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
     llama_sampler_chain_add(sampler, llama_sampler_init_min_p(0.05f, 1));
@@ -502,11 +519,21 @@ Java_com_lumena_android_llama_LlamaNative_nativeGenerate(
 
             llama_token decoded = next;
             llama_batch next_batch = llama_batch_get_one(&decoded, 1);
-            if (llama_decode(ctx, next_batch) != 0) break;
+            if (llama_decode(ctx, next_batch) != 0) {
+                decode_failed = true;
+                break;
+            }
         }
     }
 
     llama_sampler_free(sampler);
     llama_free(ctx);
+    // Never send incomplete tool JSON/prose from a failed decode to the agent.
+    if (decode_failed) return generation_failure(env, "llama_decode failed; partial output discarded.");
+    if (g_cancel_requested.load(std::memory_order_acquire)) {
+        jclass exception = env->FindClass("java/util/concurrent/CancellationException");
+        if (exception) env->ThrowNew(exception, "Embedded generation cancelled.");
+        return nullptr;
+    }
     return env->NewStringUTF(response.c_str());
 }

@@ -16,6 +16,9 @@ import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.local.ToolResult
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -240,9 +243,11 @@ class WorkflowRunner(
             val replyResult = modelClient.chatStreaming(model, modelMessages) { partial ->
                 onModelText(partial)
             }
+            coroutineContext.ensureActive()
 
             if (replyResult.isFailure) {
                 val error = replyResult.exceptionOrNull()
+                if (error is CancellationException) throw error
                 when (val recovery = controller.onModelFailure(
                     state,
                     error?.message ?: error?.javaClass?.simpleName.orEmpty()

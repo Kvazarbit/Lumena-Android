@@ -13,6 +13,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build host CPU bridge and test JNI failure boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/sync_llama_cpp.sh
+          cmake -S third_party/llama.cpp -B /tmp/lumena-native-smoke \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_VULKAN=OFF \
+            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_APP=OFF
+          cmake --build /tmp/lumena-native-smoke --target llama -j 2
+          g++ -std=c++17 -fPIC -shared app/src/main/cpp/lumena_llama.cpp \
+            -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
+            -Ithird_party/llama.cpp/include -Ithird_party/llama.cpp/ggml/include \
+            /tmp/lumena-native-smoke/src/libllama.a \
+            /tmp/lumena-native-smoke/ggml/src/libggml.a \
+            /tmp/lumena-native-smoke/ggml/src/libggml-cpu.a \
+            /tmp/lumena-native-smoke/ggml/src/libggml-base.a \
+            -fopenmp -pthread -ldl -lm -o /tmp/lumena-native-smoke/liblumena_llama.so
+          mkfifo /tmp/lumena-native-smoke/model-pipe
+          java --add-opens=java.base/java.io=ALL-UNNAMED \
+            -Djava.library.path=/tmp/lumena-native-smoke \
+            app/src/testNative/java/LlamaNative.java /tmp/lumena-native-smoke/model-pipe
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30

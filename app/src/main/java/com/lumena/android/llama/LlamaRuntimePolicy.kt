@@ -12,6 +12,10 @@ data class LlamaGenerationConfig(
 object LlamaRuntimePolicy {
     private const val GIB = 1024.0 * 1024.0 * 1024.0
 
+    // SAF providers may report statSize=-1. Never treat unknown size as small.
+    fun effectiveModelBytes(fileBytes: Long, probeBytes: Long?): Long =
+        maxOf(fileBytes.coerceAtLeast(0L), probeBytes?.coerceAtLeast(0L) ?: 0L)
+
     fun generationConfig(
         profile: LlamaRuntimeProfile,
         modelBytes: Long
@@ -47,16 +51,14 @@ object LlamaRuntimePolicy {
     ): Int {
         if (computeMode == "cpu") return 0
         if (profile.gpuName.isNullOrBlank()) return 0
+        if (modelBytes <= 0L) return 0
 
         val modelGb = if (modelBytes > 0) modelBytes / GIB else 0.0
 
         if (computeMode == "gpu") {
             val safeFullOffload =
-                modelGb <= 0.0 ||
-                    (
-                        modelGb <= profile.totalRamGb * 0.50 &&
-                            profile.availableRamGb >= modelGb + 1.5
-                    )
+                modelGb <= profile.totalRamGb * 0.50 &&
+                    profile.availableRamGb >= modelGb + 1.5
             if (safeFullOffload) return -1
 
             return when {

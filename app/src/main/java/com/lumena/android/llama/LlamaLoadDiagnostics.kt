@@ -10,6 +10,7 @@ data class LlamaModelProbeInfo(
 )
 
 enum class LlamaLoadFailureKind {
+    FILE_ACCESS,
     METADATA_INCOMPATIBLE,
     ALLOCATION_OR_MMAP,
     TENSOR_LAYOUT,
@@ -25,7 +26,7 @@ data class LlamaLoadFailure(
 object LlamaLoadDiagnostics {
     private val keyValue = Regex("^([A-Za-z0-9_.-]+)=(.*)$")
     private val tensorName = Regex(
-        "(?:loading tensor|tensor)\\s+([A-Za-z0-9_.-]+)",
+        "(?:loading tensor|tensor)\\s+['\"]?([A-Za-z0-9_.-]+)",
         RegexOption.IGNORE_CASE
     )
 
@@ -53,7 +54,8 @@ object LlamaLoadDiagnostics {
             description = values["description"]?.takeIf { it.isNotBlank() && it != "(unknown)" },
             modelSizeBytes = values["model_size_bytes"]?.toLongOrNull(),
             parameters = values["parameters"]?.toLongOrNull(),
-            raw = trimmed.take(8_000)
+            raw = if (trimmed.length <= 8_000) trimmed else
+                trimmed.take(1_000) + "\n...[probe log omitted]...\n" + trimmed.takeLast(6_900)
         )
     }
 
@@ -70,9 +72,6 @@ object LlamaLoadDiagnostics {
         val lower = normalized.lowercase()
 
         val kind = when {
-            !probe.ok ->
-                LlamaLoadFailureKind.METADATA_INCOMPATIBLE
-
             listOf(
                 "out of memory",
                 "cannot allocate memory",
@@ -85,16 +84,23 @@ object LlamaLoadDiagnostics {
             ).any(lower::contains) ->
                 LlamaLoadFailureKind.ALLOCATION_OR_MMAP
 
+            listOf("permission denied", "no such file", "invalid android file descriptor",
+                "not seekable", "fdopen failed", "dup(fd) failed", "failed to open")
+                .any(lower::contains) -> LlamaLoadFailureKind.FILE_ACCESS
+
             listOf(
                 "wrong shape",
                 "unexpected tensor",
                 "unknown tensor",
                 "unsupported tensor",
-                "tensor type",
+                "unsupported tensor type",
+                "invalid tensor type",
                 "tensor mismatch",
                 "expected tensor"
             ).any(lower::contains) ->
                 LlamaLoadFailureKind.TENSOR_LAYOUT
+
+            !probe.ok -> LlamaLoadFailureKind.METADATA_INCOMPATIBLE
 
             else ->
                 LlamaLoadFailureKind.FULL_LOAD_FAILED
@@ -122,12 +128,14 @@ object LlamaLoadDiagnostics {
         }.trim().trimEnd('·').trim()
 
         val headline = when (kind) {
+            LlamaLoadFailureKind.FILE_ACCESS ->
+                "The selected GGUF file could not be opened or read as a seekable file."
             LlamaLoadFailureKind.METADATA_INCOMPATIBLE ->
                 "GGUF metadata could not be parsed by this embedded llama.cpp build."
             LlamaLoadFailureKind.ALLOCATION_OR_MMAP ->
-                "GGUF metadata is readable, but full model allocation/mmap failed."
+                "Model allocation/mmap failed during ${if (probe.ok) "full loading" else "the metadata probe"}."
             LlamaLoadFailureKind.TENSOR_LAYOUT ->
-                "GGUF metadata is readable, but the full tensor layout is not accepted by this loader."
+                "The tensor layout is not accepted by this loader."
             LlamaLoadFailureKind.FULL_LOAD_FAILED ->
                 "GGUF metadata is readable, but the full model load failed before inference started."
         }
@@ -170,8 +178,7 @@ object LlamaLoadDiagnostics {
                     "cannot" in l ||
                     "out of memory" in l ||
                     "mmap" in l ||
-                    "returned null" in l ||
-                    "loading tensor" in l
+                    "returned null" in l
             }
             .toList()
             .takeLast(10)

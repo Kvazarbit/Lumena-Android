@@ -5,6 +5,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LlamaPolicyTest {
+    @Test
+    fun unknownSafSizeUsesProbeSizeForMemoryAndGeneration() {
+        val large = 5L * 1024 * 1024 * 1024
+        val bytes = LlamaRuntimePolicy.effectiveModelBytes(-1L, large)
+        assertEquals(large, bytes)
+        assertEquals(6.8, LlamaRuntimePolicy.requiredRamGb(bytes)!!, 0.001)
+        assertEquals(2048, LlamaRuntimePolicy.generationConfig(profile(), bytes).contextSize)
+        assertEquals(large + 100, LlamaRuntimePolicy.effectiveModelBytes(large + 100, large))
+    }
+
+    @Test
+    fun unknownSizeNeverForcesFullGpuOffload() {
+        assertEquals(0, LlamaRuntimePolicy.chooseGpuLayers(profile(), 0, "gpu"))
+        assertEquals(0L, LlamaRuntimePolicy.effectiveModelBytes(-1L, null))
+    }
+
     private fun profile(
         total: Double = 15.0,
         available: Double = 9.5,
