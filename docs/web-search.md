@@ -13,8 +13,9 @@ non-retryable in the controller. The Ollama context compactor also reserves outp
 and tokenizer headroom and enforces an absolute character ceiling while keeping the
 newest turn.
 
-Regression coverage includes a real localhost HTTP bridge fixture proving that a
-failed mandatory web preflight performs exactly one bridge call and zero model calls.
+Regression coverage injects a deterministic failing tool executor and proves that a
+failed mandatory web preflight performs exactly one search call and zero model calls.
+Transport replay behavior remains covered separately by TermuxBridgeClient tests.
 
 ## Follow-up and HTTP 202 regression fix
 
