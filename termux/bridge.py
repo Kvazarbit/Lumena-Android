@@ -2097,7 +2097,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.19"})
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.20"})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
