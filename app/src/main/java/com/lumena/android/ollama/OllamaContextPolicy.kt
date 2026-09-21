@@ -64,9 +64,22 @@ object OllamaContextPolicy {
         for (message in nonSystem.asReversed()) {
             val remaining = (budget.maxChars - used).coerceAtLeast(0)
             if (remaining == 0) break
-            val perMessage = min(budget.maxPerMessage, remaining)
-            val clipped = message.content.takeLast(perMessage)
-            if (clipped.isEmpty()) continue
+
+            val candidate = message.content.takeLast(budget.maxPerMessage)
+            if (candidate.isEmpty()) continue
+
+            // The newest non-system message is mandatory and may be trimmed to
+            // the remaining budget. Older messages are atomic: if a clipped
+            // message does not fit, drop it and everything older rather than
+            // injecting a misleading tail fragment without its turn boundary.
+            val clipped = if (recent.isEmpty()) {
+                candidate.takeLast(remaining)
+            } else {
+                if (candidate.length > remaining) break
+                candidate
+            }
+            if (clipped.isEmpty()) break
+
             recent += message.copy(content = clipped)
             used += clipped.length
             if (used >= budget.maxChars) break
