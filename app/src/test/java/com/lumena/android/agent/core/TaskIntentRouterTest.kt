@@ -83,4 +83,21 @@ class TaskIntentRouterTest {
         assertEquals(0, profile.confidence)
         assertNull(profile.preflight)
     }
+    @Test
+    fun latestWebQueryDoesNotAccidentallyMatchCodeTestKeyword() {
+        val profile = TaskIntentRouter.route("Find latest world news on the internet")
+
+        assertEquals(TaskIntent.PUBLIC_WEB, profile.intent)
+        assertEquals("web.search", profile.preflight?.tool)
+        assertTrue(profile.preflight?.mandatory == true)
+    }
+
+    @Test
+    fun explicitAsciiTestCommandStillRoutesToCodeWork() {
+        val profile = TaskIntentRouter.route("test Python code")
+
+        assertEquals(TaskIntent.CODE_WORK, profile.intent)
+        assertEquals("context.snapshot", profile.preflight?.tool)
+    }
+
 }
