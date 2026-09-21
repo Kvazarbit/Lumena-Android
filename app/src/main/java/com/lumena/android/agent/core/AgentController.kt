@@ -109,7 +109,12 @@ class AgentController(
             "tensor layout is not accepted",
             "unauthorized",
             "http 401",
-            "bridge token is required"
+            "bridge token is required",
+            "context length exceeded",
+            "context window",
+            "prompt is too long",
+            "too many tokens",
+            "input is too long"
         ).any(fullLower::contains)
 
         return when {
@@ -387,6 +392,7 @@ class AgentController(
             val reason = "Tool outcome unknown after transport failure. Inspect current state before replaying ${call.tool}."
             return ToolTransition(fail(state, reason), reason)
         }
+        val canonicalTool = ToolRegistry.canonicalize(call.tool)
         val signature = signature(call)
         var pythonFailures = state.pythonFailures
         val repeatedFailures = state.repeatedToolFailures.toMutableMap()
@@ -450,6 +456,41 @@ class AgentController(
         }
 
         val nextStep = state.task.step + 1
+        val recordedKernel = ContextKernel.record(state.task.kernel, call, ok, resultText)
+
+        // web.search already exhausts every configured provider inside the bridge.
+        // A failed result is therefore terminal for this search attempt. Sending it
+        // back to the model caused query paraphrasing loops, repeated generations
+        // and eventual context exhaustion without adding evidence.
+        if (!ok && canonicalTool == "web.search") {
+            val detail = sequenceOf(error, stderr)
+                .filterNotNull()
+                .firstOrNull { it.isNotBlank() }
+                ?.take(900)
+                ?: "No usable result from any configured search provider."
+            val reason =
+                "Web search unavailable; automatic model retry stopped to protect context. $detail"
+            val failedTask = state.task.copy(
+                status = TaskStatus.FAILED,
+                step = nextStep,
+                lastTool = canonicalTool,
+                lastResult = resultText,
+                kernel = recordedKernel,
+                errors = (state.task.errors + resultText + reason).takeLast(8)
+            )
+            return ToolTransition(
+                state.copy(
+                    task = failedTask,
+                    toolUsed = true,
+                    protocolRetries = 0,
+                    modelFailures = state.modelFailures,
+                    repeatedToolFailures = repeatedFailures,
+                    recoveryHint = null
+                ),
+                reason
+            )
+        }
+
         val recoveryMaxSteps = if (recovered) {
             maxOf(
                 state.task.maxSteps,
@@ -465,7 +506,7 @@ class AgentController(
             maxSteps = recoveryMaxSteps,
             lastTool = call.tool,
             lastResult = resultText,
-            kernel = ContextKernel.record(state.task.kernel, call, ok, resultText).copy(pendingVerification = pendingPythonPaths),
+            kernel = recordedKernel.copy(pendingVerification = pendingPythonPaths),
             errors = if (ok) state.task.errors else (state.task.errors + resultText).takeLast(8)
         )
 
@@ -474,7 +515,7 @@ class AgentController(
                 task = nextTask,
                 toolUsed = true,
                 protocolRetries = 0,
-                modelFailures = 0,
+                modelFailures = if (ok) 0 else state.modelFailures,
                 pythonFailures = pythonFailures,
                 repeatedToolFailures = repeatedFailures,
                 verificationRequired = verificationRequired,
