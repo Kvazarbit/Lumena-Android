@@ -37,6 +37,13 @@ android {
             version = "3.22.1"
         }
     }
+    buildTypes {
+        getByName("debug") {
+            applicationIdSuffix = ".rc"
+            versionNameSuffix = "-rc"
+        }
+    }
+
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
 
