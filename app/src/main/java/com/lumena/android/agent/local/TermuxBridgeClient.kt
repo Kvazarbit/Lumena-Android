@@ -23,7 +23,7 @@ class TermuxBridgeClient(
     baseUrl: String,
     token: String,
     private val context: Context? = null
-) {
+) : ToolExecutor {
     private val token = LumenaPreferences.normalizeBridgeToken(token)
     private val base: HttpUrl = normalizeLoopbackBaseUrl(baseUrl)
         ?: throw IllegalArgumentException("Bridge URL must use localhost/127.0.0.1 over http")
@@ -49,7 +49,7 @@ class TermuxBridgeClient(
     private val resultAdapter = moshi.adapter(ToolResult::class.java)
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
-    suspend fun execute(toolRequest: ToolRequest): ToolResult {
+    override suspend fun execute(toolRequest: ToolRequest): ToolResult {
         context?.let { appContext ->
             val started = TermuxBridgeAutoStarter.ensureRunning(appContext, base)
             if (started.isFailure) {

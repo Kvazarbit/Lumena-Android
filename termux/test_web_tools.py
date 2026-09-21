@@ -49,6 +49,20 @@ class WebToolsTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, expected):
                     self.b._web_fetch("https://example.org")
 
+    def test_http_202_becomes_terminal_search_failure_contract(self):
+        response = Response("Accepted")
+        response.status = 202
+        with patch.object(self.b.socket, "getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 443))]), \
+                patch.object(self.b.PUBLIC_HTTPS_OPENER, "open", return_value=response):
+            result = self.b.web_search({"query": "latest world news"})
+
+        self.assertFalse(result["ok"])
+        payload = json.loads(result["stdout"])
+        self.assertEqual([], payload["results"])
+        self.assertEqual("duckduckgo", payload["attempts"][0]["provider"])
+        self.assertIn("HTTP 202", payload["attempts"][0]["error"])
+        self.assertIn("Search unavailable", result["error"])
+
     def test_search_extracts_real_urls_unwraps_deduplicates_and_caches(self):
         html = '''<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.example.org%2Fguide%3Futm_source%3Dx">Python <b>guide</b></a>
         <a class="result__snippet">Verified <b>documentation</b></a>

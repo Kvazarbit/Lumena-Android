@@ -99,4 +99,44 @@ class OllamaContextPolicyTest {
         assertTrue(compacted.last().content.contains("latest-user"))
         assertFalse(compacted.any { it.content.contains("-OLD-USER-END") })
     }
+
+    @Test
+    fun normalBudgetReservesGenerationAndSafetyHeadroom() {
+        val budget = OllamaContextPolicy.budget(profile(), retry = false)
+
+        assertEquals(6144, budget.maxChars)
+        assertTrue(budget.maxPerMessage <= budget.maxChars / 2)
+    }
+
+    @Test
+    fun pressureBudgetShrinksPromptCharsWithContext() {
+        val budget = OllamaContextPolicy.budget(
+            profile(available = 1.5, lowMemory = true),
+            retry = false
+        )
+
+        assertEquals(2816, budget.maxChars)
+        assertTrue(budget.maxPerMessage <= 1408)
+    }
+
+    @Test
+    fun compactionNeverExceedsDeclaredMaxChars() {
+        val budget = OllamaRequestBudget(
+            options = OllamaOptions(num_ctx = 2048, num_predict = 384),
+            maxChars = 3000,
+            maxPerMessage = 2400
+        )
+        val compacted = OllamaContextPolicy.compact(
+            listOf(
+                OllamaMessage("system", "S".repeat(8000)),
+                OllamaMessage("user", "U".repeat(7000))
+            ),
+            budget
+        )
+
+        assertTrue(compacted.sumOf { it.content.length } <= budget.maxChars)
+        assertTrue(compacted.any { it.role == "user" && it.content.isNotEmpty() })
+        assertTrue(compacted.first().content.length <= budget.maxChars / 2)
+    }
+
 }

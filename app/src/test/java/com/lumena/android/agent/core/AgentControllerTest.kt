@@ -1,5 +1,6 @@
 package com.lumena.android.agent.core
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -424,4 +425,47 @@ class AgentControllerTest {
         val instruction = controller.interpret("Looks good, done!", state)
         assertTrue(instruction is ControllerInstruction.AskModelAgain)
     }
+
+    @Test
+    fun failedWebSearchIsTerminalForCurrentAttempt() {
+        val webTask = TaskState(
+            id = "web-fail",
+            projectId = null,
+            goal = "знайди останні новини в інтернеті",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val state = controller.initial(webTask)
+        val call = AgentDecision.ToolCall(
+            tool = "web.search",
+            args = mapOf("query" to "latest world news")
+        )
+
+        val transition = controller.afterTool(
+            state = state,
+            call = call,
+            ok = false,
+            stdout = """{"attempts":[{"provider":"duckduckgo","error":"HTTP 202"}]}""",
+            stderr = "",
+            error = "Search unavailable. Do not invent current facts."
+        )
+
+        assertTrue(transition.stopReason.orEmpty().contains("automatic model retry stopped"))
+        assertEquals(TaskStatus.FAILED, transition.state.task.status)
+        assertEquals("web.search", transition.state.task.lastTool)
+        assertTrue(transition.state.task.kernel.evidence.last().ok.not())
+    }
+
+    @Test
+    fun contextOverflowModelFailureDoesNotTriggerControllerRetry() {
+        val state = controller.initial(task())
+        for (message in listOf(
+            "Ollama: context length exceeded",
+            "Ollama: prompt is too long for the context window",
+            "Ollama: too many tokens"
+        )) {
+            val instruction = controller.onModelFailure(state, message)
+            assertTrue(instruction is ControllerInstruction.Stop)
+        }
+    }
+
 }

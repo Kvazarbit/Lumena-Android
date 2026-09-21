@@ -45,8 +45,23 @@ data class OllamaChatRequest(
 
 data class OllamaChatResponse(
     val message: OllamaMessage? = null,
-    val done: Boolean? = null
+    val done: Boolean? = null,
+    val error: String? = null
 )
+
+internal fun ollamaProtocolError(chunk: OllamaChatResponse): String? =
+    chunk.error?.trim()?.takeIf { it.isNotEmpty() }?.let { "Ollama: $it" }
+
+internal fun isOllamaContextLimitFailure(message: String): Boolean {
+    val lower = message.lowercase()
+    return listOf(
+        "context length exceeded",
+        "context window",
+        "prompt is too long",
+        "too many tokens",
+        "input is too long"
+    ).any(lower::contains)
+}
 
 data class OllamaModel(
     val name: String
@@ -128,7 +143,13 @@ class OllamaClient(
                     options = normalBudget.options,
                     onPartial = onPartial
                 )
-            } catch (timeout: SocketTimeoutException) {
+            } catch (first: Throwable) {
+                if (first is CancellationException) throw first
+                val retryable =
+                    first is SocketTimeoutException ||
+                        isOllamaContextLimitFailure(first.message.orEmpty())
+                if (!retryable) throw first
+
                 onPartial("")
                 val retryBudget = OllamaContextPolicy.budget(runtimeProfile, retry = true)
                 executeStreamingChat(
@@ -183,6 +204,7 @@ class OllamaClient(
                     val line = source.readUtf8Line() ?: break
                     if (line.isBlank()) continue
                     val chunk = responseAdapter.fromJson(line) ?: continue
+                    ollamaProtocolError(chunk)?.let { error(it) }
                     chunk.message?.content?.let { piece ->
                         if (piece.isNotEmpty()) {
                             accumulated.append(piece)
@@ -229,7 +251,10 @@ class OllamaClient(
                     response.use {
                         val body = it.body?.string().orEmpty()
                         if (!it.isSuccessful) error("Ollama HTTP ${it.code}: $body")
-                        val text = responseAdapter.fromJson(body)?.message?.content
+                        val parsed = responseAdapter.fromJson(body)
+                            ?: error("Ollama returned an unreadable response")
+                        ollamaProtocolError(parsed)?.let { error(it) }
+                        val text = parsed.message?.content
                             ?.takeIf { value -> value.isNotBlank() }
                             ?: error("Ollama returned no message")
                         if (continuation.isActive) continuation.resume(text)

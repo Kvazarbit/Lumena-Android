@@ -21,10 +21,16 @@ object OllamaContextPolicy {
         val predict = if (retry) min(basePredict, 512) else basePredict
         val temperature = if (retry) 0.10 else 0.15
 
-        val maxChars = (context * 3)
-            .coerceIn(6_000, 14_000)
-        val maxPerMessage = (maxChars / 3)
-            .coerceIn(2_000, 5_000)
+        // num_ctx is shared by prompt + generation. Reserve generation plus a
+        // deterministic safety margin, then use a conservative multilingual
+        // character/token guard. This prevents tool traces and Cyrillic text from
+        // silently consuming the output budget.
+        val safetyTokens = 256
+        val inputTokenBudget = (context - predict - safetyTokens).coerceAtLeast(512)
+        val maxChars = (inputTokenBudget * 2)
+            .coerceIn(2_400, 10_000)
+        val maxPerMessage = (maxChars / 2)
+            .coerceIn(1_200, 4_000)
 
         return OllamaRequestBudget(
             options = OllamaOptions(
@@ -46,15 +52,34 @@ object OllamaContextPolicy {
         val system = messages.firstOrNull { it.role == "system" }
         val nonSystem = messages.filterNot { it.role == "system" }
 
+        // Keep system rules, but never let them consume the whole request. The
+        // latest user/tool evidence must retain room inside maxChars.
+        val systemLimit = min(budget.maxPerMessage, (budget.maxChars / 2).coerceAtLeast(1))
         val clippedSystem = system?.copy(
-            content = clipSystem(system.content, budget.maxPerMessage)
+            content = clipSystem(system.content, systemLimit)
         )
 
         var used = clippedSystem?.content?.length ?: 0
         val recent = ArrayList<OllamaMessage>()
         for (message in nonSystem.asReversed()) {
-            val clipped = message.content.takeLast(budget.maxPerMessage)
-            if (recent.isNotEmpty() && used + clipped.length > budget.maxChars) break
+            val remaining = (budget.maxChars - used).coerceAtLeast(0)
+            if (remaining == 0) break
+
+            val candidate = message.content.takeLast(budget.maxPerMessage)
+            if (candidate.isEmpty()) continue
+
+            // The newest non-system message is mandatory and may be trimmed to
+            // the remaining budget. Older messages are atomic: if a clipped
+            // message does not fit, drop it and everything older rather than
+            // injecting a misleading tail fragment without its turn boundary.
+            val clipped = if (recent.isEmpty()) {
+                candidate.takeLast(remaining)
+            } else {
+                if (candidate.length > remaining) break
+                candidate
+            }
+            if (clipped.isEmpty()) break
+
             recent += message.copy(content = clipped)
             used += clipped.length
             if (used >= budget.maxChars) break
