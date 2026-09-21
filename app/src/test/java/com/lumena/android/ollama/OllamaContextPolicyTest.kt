@@ -58,6 +58,41 @@ class OllamaContextPolicyTest {
     }
 
     @Test
+    fun adaptiveBudgetReservesPredictionAndSafetyTokens() {
+        val budget = OllamaContextPolicy.budget(profile(), retry = false)
+        val reserveTokens = maxOf(128, budget.options.num_ctx / 16)
+        val safeInputChars =
+            (budget.options.num_ctx - budget.options.num_predict - reserveTokens) * 2
+
+        assertTrue(budget.maxChars <= safeInputChars)
+        assertTrue(budget.maxChars > 0)
+        assertTrue(budget.maxPerMessage <= budget.maxChars / 2)
+    }
+
+    @Test
+    fun compactionStrictlyHonorsTotalBudgetUnderLargeSystemAndLatestTurn() {
+        val budget = OllamaRequestBudget(
+            options = OllamaOptions(num_ctx = 2048, num_predict = 384),
+            maxChars = 3000,
+            maxPerMessage = 2500
+        )
+        val compacted = OllamaContextPolicy.compact(
+            listOf(
+                OllamaMessage("system", "SYS-" + "s".repeat(7000) + "-SYSTEM-TAIL"),
+                OllamaMessage("user", "OLD-" + "o".repeat(4000)),
+                OllamaMessage("assistant", "MID-" + "m".repeat(4000)),
+                OllamaMessage("user", "NEW-" + "n".repeat(4000) + "-LATEST-TAIL")
+            ),
+            budget
+        )
+
+        assertTrue(compacted.sumOf { it.content.length } <= budget.maxChars)
+        assertTrue(compacted.last().role == "user")
+        assertTrue(compacted.last().content.endsWith("-LATEST-TAIL"))
+        assertFalse(compacted.any { it.content.startsWith("OLD-") })
+    }
+
+    @Test
     fun clippedSystemPreservesRulesAndDynamicTail() {
         val budget = OllamaRequestBudget(
             options = OllamaOptions(num_ctx = 2048, num_predict = 384),
