@@ -107,6 +107,13 @@ class AgentController(
             "full model load failed",
             "allocation/mmap failed",
             "tensor layout is not accepted",
+            "context length exceeded",
+            "context window exceeded",
+            "exceeds the context window",
+            "prompt is too long",
+            "input is too long",
+            "too many tokens",
+            "requested tokens exceed",
             "unauthorized",
             "http 401",
             "bridge token is required"
@@ -469,29 +476,50 @@ class AgentController(
             errors = if (ok) state.task.errors else (state.task.errors + resultText).takeLast(8)
         )
 
-        return ToolTransition(
-            state = state.copy(
-                task = nextTask,
-                toolUsed = true,
-                protocolRetries = 0,
-                modelFailures = 0,
-                pythonFailures = pythonFailures,
-                repeatedToolFailures = repeatedFailures,
-                verificationRequired = verificationRequired,
-                verificationReason = verificationReason,
-                pendingPythonPaths = pendingPythonPaths,
-                visualEvidenceReady = state.visualEvidenceReady ||
-                    (ok && ToolRegistry.canonicalize(call.tool) == "image.search"),
-                recoveryHint = RecoveryAdvisor.suggest(
-                    task = state.task,
-                    call = call,
-                    ok = ok,
-                    stdout = stdout,
-                    stderr = stderr,
-                    error = error
-                )
+        val nextState = state.copy(
+            task = nextTask,
+            toolUsed = true,
+            protocolRetries = if (ok) 0 else state.protocolRetries,
+            modelFailures = if (ok) 0 else state.modelFailures,
+            pythonFailures = pythonFailures,
+            repeatedToolFailures = repeatedFailures,
+            verificationRequired = verificationRequired,
+            verificationReason = verificationReason,
+            pendingPythonPaths = pendingPythonPaths,
+            visualEvidenceReady = state.visualEvidenceReady ||
+                (ok && ToolRegistry.canonicalize(call.tool) == "image.search"),
+            recoveryHint = RecoveryAdvisor.suggest(
+                task = state.task,
+                call = call,
+                ok = ok,
+                stdout = stdout,
+                stderr = stderr,
+                error = error
             )
         )
+
+        // web.search already exhausted every configured provider inside the bridge.
+        // Do not spend another model turn asking a fallible model how to retry the
+        // same unavailable capability. A new user turn may explicitly retry later.
+        if (!ok && ToolRegistry.canonicalize(call.tool) == "web.search") {
+            val detail = sequenceOf(error, stderr)
+                .filterNotNull()
+                .firstOrNull { it.isNotBlank() }
+                ?.take(700)
+                ?: "No usable search evidence was returned."
+            val reason = "Web search failed after provider fallback; automatic model retry suppressed. $detail"
+            return ToolTransition(
+                state = nextState.copy(
+                    task = nextState.task.copy(
+                        status = TaskStatus.FAILED,
+                        errors = (nextState.task.errors + reason).takeLast(8)
+                    )
+                ),
+                stopReason = reason
+            )
+        }
+
+        return ToolTransition(state = nextState)
     }
 
     fun dynamicContext(
