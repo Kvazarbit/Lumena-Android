@@ -182,7 +182,7 @@ object TaskIntentRouter {
             "виправ", "fix", "редаг", "edit", "patch", "перевір", "test",
             "запуст", "run", "debug", "build", "збір", "commit"
         )
-        return codeTerms.any(lower::contains) && actionTerms.any(lower::contains)
+        return codeTerms.any { containsTerm(lower, it) } && actionTerms.any { containsTerm(lower, it) }
     }
 
     private fun isFileInspection(lower: String): Boolean {
@@ -194,7 +194,7 @@ object TaskIntentRouter {
             "знайд", "find", "покаж", "show", "прочит", "read", "відкрий",
             "open", "перевір", "inspect", "list", "список", "де ", "where"
         )
-        return fileTerms.any(lower::contains) && actionTerms.any(lower::contains)
+        return fileTerms.any { containsTerm(lower, it) } && actionTerms.any { containsTerm(lower, it) }
     }
 
     private fun isPublicWeb(lower: String): Boolean {
