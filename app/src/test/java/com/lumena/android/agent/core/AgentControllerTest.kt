@@ -242,7 +242,7 @@ class AgentControllerTest {
     }
 
     @Test
-    fun failedWebSearchTripsCircuitBreakerBeforeAnotherModelTurn() {
+    fun failedWebSearchBecomesBoundedSemanticRecoveryInsteadOfTaskFailure() {
         val webTask = TaskState(
             id = "web-fail",
             projectId = null,
@@ -267,14 +267,79 @@ class AgentControllerTest {
             ok = false,
             stdout = """{"query":"останні новини","results":[],"attempts":[{"provider":"duckduckgo","error":"Upstream HTTP 202"}]}""",
             stderr = "",
-            error = "Search unavailable. Do not invent current facts."
+            error = "Search unavailable. Do not invent current facts.",
+            errorCode = "SEARCH_EXHAUSTED",
+            failureClass = "DEPENDENCY_EXHAUSTED",
+            retryable = false,
+            dependency = "web.search"
         )
 
-        assertTrue(transition.stopReason?.contains("automatic retry stopped") == true)
-        assertTrue(transition.state.task.status == TaskStatus.FAILED)
+        assertTrue(transition.stopReason == null)
+        assertTrue(transition.partialReason == null)
+        assertTrue(transition.state.task.status == TaskStatus.WAITING_MODEL)
         assertTrue(transition.state.task.lastTool == "web.search")
         assertTrue(transition.state.task.kernel.inFlight == null)
-        assertTrue(transition.state.task.errors.last().contains("Search unavailable"))
+        assertTrue(transition.state.semanticRecoverySpent == 1)
+        assertTrue(transition.state.actionFamilyFailures["web.search"] == 1)
+        assertTrue(transition.state.recoveryHint.orEmpty().contains("provider", ignoreCase = true))
+    }
+
+    @Test
+    fun secondFailedSearchVariantDegradesPartialWithoutThirdLoop() {
+        val webTask = TaskState(
+            id = "web-two",
+            projectId = null,
+            goal = "Знайди останні новини в інтернеті",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val first = AgentDecision.ToolCall(
+            tool = "web.search",
+            args = mapOf("query" to "останні новини")
+        )
+        val initial = controller.initial(webTask)
+        val firstExecuting = initial.copy(
+            task = initial.task.copy(
+                status = TaskStatus.EXECUTING,
+                kernel = ContextKernel.before(initial.task.kernel, first)
+            )
+        )
+        val afterFirst = controller.afterTool(
+            state = firstExecuting,
+            call = first,
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "Search unavailable",
+            errorCode = "SEARCH_EXHAUSTED",
+            failureClass = "DEPENDENCY_EXHAUSTED"
+        ).state
+
+        val second = AgentDecision.ToolCall(
+            tool = "web.search",
+            args = mapOf("query" to "головні світові новини сьогодні")
+        )
+        val secondExecuting = afterFirst.copy(
+            task = afterFirst.task.copy(
+                status = TaskStatus.EXECUTING,
+                kernel = ContextKernel.before(afterFirst.task.kernel, second)
+            )
+        )
+        val afterSecond = controller.afterTool(
+            state = secondExecuting,
+            call = second,
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "Search unavailable",
+            errorCode = "SEARCH_EXHAUSTED",
+            failureClass = "DEPENDENCY_EXHAUSTED"
+        )
+
+        assertTrue(afterSecond.stopReason == null)
+        assertTrue(afterSecond.partialReason != null)
+        assertTrue(afterSecond.state.task.status == TaskStatus.PARTIAL)
+        assertTrue(afterSecond.state.semanticRecoverySpent == 2)
+        assertTrue(afterSecond.state.actionFamilyFailures["web.search"] == 2)
     }
 
     @Test
