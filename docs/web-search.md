@@ -1,4 +1,4 @@
-# Web research — Bridge 0.19 / Android build 24
+# Web research — Bridge 0.19 / Android build 25 (app 0.12.1)
 
 ## Follow-up and HTTP 202 regression fix
 
@@ -18,6 +18,23 @@ evidence. This is a diagnostic repair, not a claim that DuckDuckGo now works on
 the affected phone. Configure a supported provider below when it remains blocked.
 Offline regressions cover both 202 cases; live phone/provider verification is
 still required. APK signing continuity remains a separate release prerequisite.
+
+## Failure circuit and model-context invariant
+
+A failed `web.search` is terminal for the current task. The bridge already tries
+every configured provider once, so feeding that exhausted result back into the
+model used to create a `model -> search -> model` loop with slightly rewritten
+queries. Build 25 records the failed TOOL_RESULT, clears any in-flight evidence,
+marks the task FAILED, and returns the real provider error without an automatic
+follow-up model turn. A user may explicitly retry in a new turn.
+
+The Ollama stream parser now consumes a top-level `error` field. Timeout or
+context-pressure errors receive one compact retry inside the client; if the
+smaller request still reports a context limit, the controller stops instead of
+starting another model retry cycle. Prompt compaction also reserves output tokens,
+caps the system message to half of the request budget, preserves the newest turn,
+and never exceeds its total character budget.
+
 
 `web.search` discovers source URLs. `web.read` retrieves readable evidence. Raw
 `http.get` and `http.json` remain available for compatibility; their redirects
