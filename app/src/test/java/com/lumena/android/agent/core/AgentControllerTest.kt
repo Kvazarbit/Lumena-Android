@@ -424,4 +424,75 @@ class AgentControllerTest {
         val instruction = controller.interpret("Looks good, done!", state)
         assertTrue(instruction is ControllerInstruction.AskModelAgain)
     }
+    @Test
+    fun failedWebSearchTripsCircuitBreakerWithoutResettingFailureBudgets() {
+        val webTask = TaskState(
+            id = "web-circuit",
+            projectId = null,
+            goal = "Знайди останні новини в інтернеті",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val state = controller.initial(webTask).copy(
+            modelFailures = 1,
+            protocolRetries = 1
+        )
+
+        val transition = controller.afterTool(
+            state = state,
+            call = AgentDecision.ToolCall(
+                tool = "web.search",
+                args = mapOf("query" to "latest world news")
+            ),
+            ok = false,
+            stdout = """{"attempts":[{"provider":"duckduckgo","error":"Upstream HTTP 202"}]}""",
+            stderr = "",
+            error = "Search unavailable after configured providers"
+        )
+
+        assertTrue(transition.stopReason.orEmpty().contains("automatic model retry suppressed"))
+        assertTrue(transition.state.task.status == TaskStatus.FAILED)
+        assertTrue(transition.state.modelFailures == 1)
+        assertTrue(transition.state.protocolRetries == 1)
+        assertTrue(transition.state.task.kernel.evidence.lastOrNull()?.tool == "web.search")
+        assertFalse(transition.state.task.kernel.evidence.lastOrNull()?.ok ?: true)
+    }
+
+    @Test
+    fun contextOverflowModelErrorsStopInsteadOfRepeatingSameRequest() {
+        val state = controller.initial(task())
+        for (message in listOf(
+            "Ollama error: context length exceeded",
+            "Ollama error: prompt is too long for the context window",
+            "Ollama error: too many tokens"
+        )) {
+            val instruction = controller.onModelFailure(state, message)
+            assertTrue(instruction is ControllerInstruction.Stop)
+            assertFalse(instruction is ControllerInstruction.AskModelAgain)
+        }
+    }
+
+    @Test
+    fun ordinaryNonWebToolFailureRemainsRecoverable() {
+        val state = controller.initial(task()).copy(
+            modelFailures = 1,
+            protocolRetries = 1
+        )
+        val transition = controller.afterTool(
+            state = state,
+            call = AgentDecision.ToolCall(
+                tool = "file.read",
+                args = mapOf("path" to "missing.txt")
+            ),
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "FileNotFoundError"
+        )
+
+        assertTrue(transition.stopReason == null)
+        assertTrue(transition.state.task.status == TaskStatus.WAITING_MODEL)
+        assertTrue(transition.state.modelFailures == 1)
+        assertTrue(transition.state.protocolRetries == 1)
+    }
+
 }
