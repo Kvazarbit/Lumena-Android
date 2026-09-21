@@ -107,6 +107,14 @@ class AgentController(
             "full model load failed",
             "allocation/mmap failed",
             "tensor layout is not accepted",
+            // OllamaClient already retries these once with a smaller context.
+            // A second automatic controller retry would just spend another model turn.
+            "context length",
+            "context window",
+            "prompt too long",
+            "too many tokens",
+            "input is too long",
+            "maximum context",
             "unauthorized",
             "http 401",
             "bridge token is required"
@@ -387,6 +395,39 @@ class AgentController(
             val reason = "Tool outcome unknown after transport failure. Inspect current state before replaying ${call.tool}."
             return ToolTransition(fail(state, reason), reason)
         }
+
+        val canonicalTool = ToolRegistry.canonicalize(call.tool)
+        if (!ok && canonicalTool == "web.search") {
+            // web.search itself already exhausts every configured provider. Feeding
+            // that failure back into the model used to create a model→search→model
+            // loop (often with slightly changed queries), consuming context/tokens.
+            // A new user turn may explicitly retry, but this task stops here.
+            val detail = sequenceOf(error, stderr, stdout)
+                .filterNotNull()
+                .map { it.replace(Regex("[\\r\\n]+"), " ").trim() }
+                .firstOrNull { it.isNotBlank() }
+                ?.take(1_200)
+                ?: "Search provider returned no usable evidence."
+            val resultText = "ok=false error=$detail"
+            val failedTask = state.task.copy(
+                status = TaskStatus.FAILED,
+                step = state.task.step + 1,
+                lastTool = canonicalTool,
+                lastResult = resultText,
+                kernel = ContextKernel.record(state.task.kernel, call, false, resultText),
+                errors = (state.task.errors + resultText).takeLast(8)
+            )
+            val reason = "web.search failed; automatic retry stopped to prevent a model/tool loop. $detail"
+            return ToolTransition(
+                state.copy(
+                    task = failedTask,
+                    toolUsed = true,
+                    recoveryHint = null
+                ),
+                reason
+            )
+        }
+
         val signature = signature(call)
         var pythonFailures = state.pythonFailures
         val repeatedFailures = state.repeatedToolFailures.toMutableMap()
