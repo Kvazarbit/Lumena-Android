@@ -115,6 +115,9 @@ class AgentController(
             "too many tokens",
             "input is too long",
             "maximum context",
+            "requested tokens exceed",
+            "exceeds the context",
+            "num_ctx",
             "unauthorized",
             "http 401",
             "bridge token is required"
@@ -514,8 +517,11 @@ class AgentController(
             state = state.copy(
                 task = nextTask,
                 toolUsed = true,
+                // A valid tool call proves protocol recovery, so protocol retries reset.
+                // A failed tool does NOT prove the model runtime recovered; keep the
+                // model-failure budget until a successful tool observation occurs.
                 protocolRetries = 0,
-                modelFailures = 0,
+                modelFailures = if (ok) 0 else state.modelFailures,
                 pythonFailures = pythonFailures,
                 repeatedToolFailures = repeatedFailures,
                 verificationRequired = verificationRequired,
