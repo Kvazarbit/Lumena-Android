@@ -13,7 +13,11 @@ data class ToolResult(
     val stdout: String = "",
     val stderr: String = "",
     val error: String? = null,
-    val outcomeUnknown: Boolean = false
+    val outcomeUnknown: Boolean = false,
+    val errorCode: String? = null,
+    val failureClass: String? = null,
+    val retryable: Boolean? = null,
+    val dependency: String? = null
 )
 
 interface ToolExecutor {
