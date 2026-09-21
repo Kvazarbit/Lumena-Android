@@ -25,7 +25,14 @@ object OllamaContextPolicy {
         // an approximate character budget. Two chars/token is intentionally
         // conservative for Cyrillic + JSON/tool traces.
         val reserveTokens = maxOf(128, context / 16)
-        val inputTokens = (context - predict - reserveTokens).coerceAtLeast(512)
+        val rawInputTokens = (context - predict - reserveTokens).coerceAtLeast(512)
+        // Context pressure must produce a genuinely smaller second request even
+        // on profiles that already run at a 2K/3K context.
+        val inputTokens = if (retry) {
+            (rawInputTokens * 2 / 3).coerceAtLeast(384)
+        } else {
+            rawInputTokens
+        }
         val maxChars = (inputTokens * 2)
             .coerceIn(2_000, 12_000)
         val maxPerMessage = (maxChars / 2)
