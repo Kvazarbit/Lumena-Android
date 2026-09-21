@@ -61,7 +61,10 @@ internal fun shouldRetryOllamaWithSmallerContext(error: Throwable): Boolean {
         "prompt too long",
         "too many tokens",
         "input is too long",
-        "maximum context"
+        "maximum context",
+        "requested tokens exceed",
+        "exceeds the context",
+        "num_ctx"
     ).any(lower::contains)
 }
 
