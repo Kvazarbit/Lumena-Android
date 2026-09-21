@@ -230,7 +230,7 @@ class WorkflowRunnerTest {
         val task = TaskState(
             id = "budget-separation",
             projectId = null,
-            goal = "Перевір вміст missing.txt",
+            goal = "Виконай контрольовану перевірку інструментом",
             status = TaskStatus.WAITING_MODEL
         )
         val outcome = WorkflowRunner(modelClient, bridge, "fixture").run(
