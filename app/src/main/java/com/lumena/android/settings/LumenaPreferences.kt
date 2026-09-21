@@ -1,6 +1,7 @@
 package com.lumena.android.settings
 
 import android.content.Context
+import com.lumena.android.llama.LlamaTuning
 
 data class LumenaConnectionSettings(
     val bridgeUrl: String = DEFAULT_BRIDGE_URL,
@@ -26,6 +27,25 @@ data class LumenaConnectionSettings(
  * itself is loopback-only, so the token is never intentionally exposed to Wi-Fi.
  */
 object LumenaPreferences {
+    fun loadTuning(context: Context): LlamaTuning {
+        val stored = prefs(context)
+        return LlamaTuning(
+            stored.getInt("llama_context", 0), stored.getInt("llama_batch", 0),
+            stored.getInt("llama_threads", 0), stored.getInt("llama_response", 0),
+            stored.getInt("llama_extra_ram_mb", 0)
+        ).normalized()
+    }
+
+    fun saveTuning(context: Context, value: LlamaTuning) {
+        val safe = value.normalized()
+        prefs(context).edit()
+            .putInt("llama_context", safe.contextTokens)
+            .putInt("llama_batch", safe.batchTokens)
+            .putInt("llama_threads", safe.cpuThreads)
+            .putInt("llama_response", safe.responseTokens)
+            .putInt("llama_extra_ram_mb", safe.extraRamMb).apply()
+    }
+
     private const val FILE = "lumena_settings"
     private const val LEGACY_COMPANION_FILE = "lumena_companion"
 

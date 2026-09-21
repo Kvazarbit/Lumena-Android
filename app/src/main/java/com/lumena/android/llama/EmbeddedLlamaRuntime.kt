@@ -9,6 +9,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import com.lumena.android.settings.LumenaPreferences
 
 /**
  * One process-wide embedded runtime.
@@ -38,10 +39,15 @@ object EmbeddedLlamaRuntime {
         withContext(Dispatchers.IO) {
             ensureLoaded(context.applicationContext, modelRef, profile, computeMode)
 
-            val generation = LlamaRuntimePolicy.generationConfig(
-                profile = profile,
+            val tuning = LumenaPreferences.loadTuning(context)
+            val currentProfile = LlamaHardwareProfile.detect(context)
+            check(currentProfile.availableRamGb >= tuning.extraRamMb / 1024.0) {
+                "Embedded generation failed. Available RAM is below the additional reserve selected in settings."
+            }
+            val generation = tuning.applyTo(LlamaRuntimePolicy.generationConfig(
+                profile = currentProfile,
                 modelBytes = loadedModelBytes
-            )
+            ))
             val maxPromptTokens = (generation.contextSize - generation.maxTokens - 8)
                 .coerceAtLeast(32)
 
@@ -220,7 +226,7 @@ object EmbeddedLlamaRuntime {
                     nativeLog = probe.raw
                 )
             }
-            requireSafeMemory(bytes, loadProfile)
+            requireSafeMemory(context, bytes, loadProfile)
             val result = loadWithGpuFallback(
                 modelBytes = bytes,
                 profile = loadProfile,
@@ -279,7 +285,7 @@ object EmbeddedLlamaRuntime {
                 )
             }
 
-            requireSafeMemory(bytes, loadProfile)
+            requireSafeMemory(context, bytes, loadProfile)
             val result = loadWithGpuFallback(
                 modelBytes = bytes,
                 profile = loadProfile,
@@ -320,12 +326,13 @@ object EmbeddedLlamaRuntime {
         )
     }
 
-    private fun requireSafeMemory(modelBytes: Long, profile: LlamaRuntimeProfile) {
+    private fun requireSafeMemory(context: Context, modelBytes: Long, profile: LlamaRuntimeProfile) {
         check(modelBytes > 0L) {
             "Embedded model load failed. Cannot determine GGUF size for the RAM safety check."
         }
         val modelGb = modelBytes / GIB
-        val requiredGb = LlamaRuntimePolicy.requiredRamGb(modelBytes) ?: return
+        val requiredGb = (LlamaRuntimePolicy.requiredRamGb(modelBytes) ?: return) +
+            LumenaPreferences.loadTuning(context).extraRamMb / 1024.0
         check(profile.availableRamGb >= requiredGb) {
             "Embedded model load failed. Not enough free RAM to load this GGUF safely. " +
                 "Model %.1f GB, available %.1f GB, recommended at least %.1f GB."

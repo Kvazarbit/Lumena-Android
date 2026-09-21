@@ -19,6 +19,7 @@ data class LlamaRuntimeProfile(
     val summary: String
         get() = buildString {
             append("%.1f GB RAM".format(totalRamGb))
+            append(" · %.1f GB free".format(availableRamGb))
             append(" · ")
             append(cpuCores)
             append(" CPU")
@@ -121,4 +122,3 @@ object LlamaHardwarePolicy {
         )
     }
 }
-

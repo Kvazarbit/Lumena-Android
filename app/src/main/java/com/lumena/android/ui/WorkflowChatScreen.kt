@@ -1233,6 +1233,7 @@ private fun ModelAndConnectionSheet(
             Text(if (ggufPath.isBlank()) "No GGUF selected" else ggufDisplayName, fontWeight = FontWeight.Medium)
             Text("Hardware: $hardwareSummary", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("Actual inference: $runtimeSummary", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            PerformanceSettingsAccordion(busy = busy)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(enabled = !busy, onClick = onChooseGguf) { Text(if (ggufPath.isBlank()) "Choose GGUF" else "Change GGUF") }
                 if (ggufPath.isNotBlank()) TextButton(enabled = !busy, onClick = onForgetGguf) { Text("Forget") }
