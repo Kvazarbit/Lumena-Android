@@ -1,0 +1,76 @@
+package com.lumena.android.agent.core
+
+import org.junit.Assert.*
+import org.junit.Test
+
+class PlainReplyRecoveryTest {
+    private val controller = AgentController()
+    private fun webState() = controller.initial(TaskState("web", null, "Знайди новини в інтернеті"))
+        .copy(toolUsed = true)
+
+    @Test fun repeatedProseBecomesExplicitPartialInsteadOfProtocolCrash() {
+        val first = controller.interpret("Ось відповідь", webState()) as ControllerInstruction.AskModelAgain
+        assertTrue(first.feedback.contains("\"partial\":true"))
+        assertTrue(first.feedback.contains("web.read"))
+        val second = controller.interpret("Ось відповідь", first.state) as ControllerInstruction.Finish
+        assertEquals(TaskStatus.PARTIAL, second.state.task.status)
+        assertTrue(second.text.contains("Неперевірений текст моделі"))
+        assertTrue(second.text.contains("Ось відповідь"))
+        assertEquals(0, second.state.task.step)
+        assertEquals(first.state.task.kernel, second.state.task.kernel)
+    }
+
+    @Test fun correctedProtocolCanStillCompleteWithExistingEvidence() {
+        val evidence = ContextKernel.record(ContextKernelState(),
+            AgentDecision.ToolCall("web.read", mapOf("url" to "https://example.org/news")), true, "Read article")
+        val state = webState().let { it.copy(task = it.task.copy(kernel = evidence)) }
+        val correction = controller.interpret("Підсумок", state) as ControllerInstruction.AskModelAgain
+        val result = controller.interpret("""{"done":true,"summary":"Перевірений підсумок"}""", correction.state)
+        assertEquals(TaskStatus.DONE, result.state.task.status)
+    }
+
+    @Test fun missingExecutionCannotTurnProseIntoSuccess() {
+        val state = webState().copy(toolUsed = false, protocolRetries = 1)
+        val result = controller.interpret("Я все перевірила", state) as ControllerInstruction.Finish
+        assertEquals(TaskStatus.PARTIAL, result.state.task.status)
+        assertFalse(result.state.toolUsed)
+        assertEquals(0, result.state.task.kernel.observed)
+    }
+
+    @Test fun failedFetchRemainsFailedEvidenceInPartialReport() {
+        val evidence = ContextKernel.record(ContextKernelState(),
+            AgentDecision.ToolCall("web.search", mapOf("query" to "news")), false, "No network")
+        val state = webState().let { it.copy(protocolRetries = 1, task = it.task.copy(kernel = evidence)) }
+        val result = controller.interpret("Мережа недоступна", state) as ControllerInstruction.Finish
+        assertEquals(TaskStatus.PARTIAL, result.state.task.status)
+        assertEquals(evidence, result.state.task.kernel)
+        assertTrue(result.text.contains("latest tool failed"))
+    }
+
+    @Test fun visualReplyCannotBypassUnknownMutationOrPendingTargets() {
+        val kernel = ContextKernelState(inFlight = ActionFlight("file.write", "test.py", "sig"),
+            pendingVerification = setOf("test.py"))
+        val state = controller.initial(TaskState("image", null, "Знайди фото в інтернеті", kernel = kernel))
+            .copy(toolUsed = true, visualEvidenceReady = true, protocolRetries = 1)
+        val result = controller.interpret("Ось фото, все готово", state) as ControllerInstruction.Finish
+        assertEquals(TaskStatus.PARTIAL, result.state.task.status)
+        assertEquals(kernel, result.state.task.kernel)
+        assertTrue(result.state.verificationRequired)
+    }
+
+    @Test fun malformedCommandsRemainNonExecutableProtocolFailures() {
+        for (raw in listOf("Run this {\"tool\":\"file.write\",\"args\":{}}",
+            "Run this {\"name\":\"file.write\",\"arguments\":{}}", "Oops {\"partial\":true")) {
+            val result = controller.interpret(raw, webState().copy(protocolRetries = 2))
+            assertTrue(result is ControllerInstruction.Stop)
+            assertEquals(TaskStatus.FAILED, result.state.task.status)
+            assertEquals(0, result.state.task.step)
+        }
+    }
+
+    @Test fun emptyOutputNeverCompletesConversation() {
+        val result = controller.interpret(" ", controller.initial(TaskState("chat", null, "Привіт")))
+        assertTrue(result is ControllerInstruction.AskModelAgain)
+        assertNotEquals(TaskStatus.DONE, result.state.task.status)
+    }
+}

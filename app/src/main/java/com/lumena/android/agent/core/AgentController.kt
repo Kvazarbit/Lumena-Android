@@ -283,6 +283,9 @@ class AgentController(
         state: AgentControlState
     ): ControllerInstruction {
         val trimmed = decision.text.trim()
+        if (trimmed.isEmpty()) {
+            return protocolRetry(state, "The model returned no answer. Return one valid tool/done/partial/reply JSON object.")
+        }
         val hasProtocolJsonShape =
             trimmed.contains("{") &&
                 (
@@ -290,7 +293,9 @@ class AgentController(
                         trimmed.contains("\"tool\"") &&
                             (trimmed.contains("\"args\"") || trimmed.contains("\"plan\""))
                     ) ||
-                    trimmed.contains("\"done\"")
+                    trimmed.contains("\"done\"") ||
+                    trimmed.contains("\"partial\"") ||
+                    (trimmed.contains("\"name\"") && trimmed.contains("\"arguments\""))
                 )
         val looksLikeBrokenProtocol =
             hasProtocolJsonShape ||
@@ -299,35 +304,32 @@ class AgentController(
         if (looksLikeBrokenProtocol) {
             return protocolRetry(
                 state,
-                "The previous output looked like a tool/protocol message but could not be parsed safely. Return one valid Lumena JSON tool call, or ordinary prose with no protocol fields."
+                "The previous output looked like a tool/protocol message but could not be parsed safely. Return exactly one valid tool/done/partial/reply JSON object. No proposed tool was executed."
             )
         }
 
         if (requiresToolEvidence(state.intent) && !state.toolUsed) {
-            return protocolRetry(
-                state,
+            return recoverPlainReply(
+                state, trimmed,
                 "This operational task requires a real TOOL_RESULT before replying. Use a recommended tool from TASK RECIPE; do not substitute prose for execution."
             )
         }
 
         if (requiresVisualEvidence(state.task.goal) && !state.visualEvidenceReady) {
-            return protocolRetry(
-                state,
+            return recoverPlainReply(
+                state, trimmed,
                 "The user asked to find/show an image. Use image.search successfully before replying. A text-only answer does not satisfy this goal."
             )
         }
 
+        // Plain replies must not bypass interruption or same-target verification,
+        // including the existing verified-image completion shortcut.
+        val blocker = ContextKernel.completionBlocker(state.task.kernel)
+            ?: if (state.verificationRequired) state.verificationReason ?: "Verification is required." else null
+        if (blocker != null) return recoverPlainReply(state, trimmed, blocker)
+
         if (requiresVisualEvidence(state.task.goal) && state.visualEvidenceReady) {
-            if (state.verificationRequired) {
-                return protocolRetry(state, state.verificationReason ?: "Verification is required.")
-            }
-            val finished = state.copy(
-                task = state.task.copy(
-                    status = TaskStatus.DONE,
-                    lastResult = decision.text.take(4_000)
-                )
-            )
-            return ControllerInstruction.Finish(decision.text, finished)
+            return interpretDone(AgentDecision.Done(trimmed), state)
         }
 
         // A plain reply is acceptable for ordinary conversation before any tool work.
@@ -342,10 +344,33 @@ class AgentController(
         }
 
         // Once an agentic task has started, prose alone is not proof of completion.
-        return protocolRetry(
-            state,
-            "An active tool task cannot finish with plain prose. Return exactly one next tool call, or {\"done\":true,\"summary\":\"...\"} after verification."
-        )
+        return recoverPlainReply(state, trimmed, "An active tool task needs a verified conclusion.")
+    }
+
+    private fun recoverPlainReply(state: AgentControlState, text: String, problem: String): ControllerInstruction {
+        if (state.protocolRetries == 0) {
+            val researchHint = if (state.intent == TaskIntent.PUBLIC_WEB)
+                " Search snippets alone are not verification: read relevant source URLs with web.read and cite them."
+            else ""
+            return protocolRetry(state, "$problem$researchHint " +
+                "Choose ONE next tool call, or {\"done\":true,\"summary\":\"verified result\"} only after completing checks, " +
+                "or {\"partial\":true,\"summary\":\"what is known and what remains unverified\"}. JSON only.")
+        }
+
+        // Preserve useful model output without inventing completion evidence or
+        // executing text. This is a partial report, never an automatic done.
+        val blocker = ContextKernel.completionBlocker(state.task.kernel)
+            ?: state.verificationReason.takeIf { state.verificationRequired }
+        val report = buildString {
+            append("Задачу не завершено: модель повторно відповіла поза службовим форматом. Успішне завершення не підтверджено.")
+            if (blocker != null) append("\nНезавершена перевірка: ").append(blocker.take(600))
+            append("\n\nНеперевірений текст моделі:\n").append(text.take(3000))
+        }
+        return ControllerInstruction.Finish(report, state.copy(task = state.task.copy(
+            status = TaskStatus.PARTIAL,
+            lastResult = report,
+            errors = (state.task.errors + "Plain reply preserved as partial: $problem").takeLast(8)
+        )))
     }
 
     fun afterTool(

@@ -23,6 +23,21 @@ invent a remaining-token or RAM value.
 
 ## Completion and progress
 
+Build 23 handles nonempty plain replies during tool work with one protocol
+correction that explicitly permits done, partial, or the next tool. If the model
+still returns prose, the controller preserves it as an explicitly unverified
+PARTIAL report rather than a protocol crash. This does not award success, execute
+text, clear pending verification, or discard an unknown-operation marker.
+Malformed tool/protocol envelopes still fail closed. Empty responses cannot
+complete even ordinary conversation. The verified-image shortcut now observes
+the same kernel completion blockers as explicit done.
+
+This improves graceful degradation, not proof of news accuracy or a cure for
+provider failures. Inspect TOOL_RESULT to distinguish search failure from output
+format failure. Build 22 installations do not contain this behavior; Bridge 0.18
+does not need replacing for this Android controller fix. The signing-continuity
+prerequisite in the roadmap still applies to installing a subsequent APK.
+
 `partial` is a distinct protocol output and terminal task status. It can report
 unfinished verification without pretending that the task succeeded. A final
 model turn can choose done or partial at the tool limit. Unknown outcomes and
