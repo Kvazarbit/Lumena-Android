@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.18
+Lumena Termux Bridge v0.19
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -499,7 +499,7 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.18",
+            "User-Agent": "LumenaBridge/0.19",
             "Cache-Control": "no-cache",
         },
     )
@@ -553,7 +553,7 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "text/html,text/plain,application/json,application/xml,text/xml,application/xhtml+xml;q=0.9,*/*;q=0.1",
-            "User-Agent": "LumenaBridge/0.18",
+            "User-Agent": "LumenaBridge/0.19",
             "Cache-Control": "no-cache",
         },
     )
@@ -618,7 +618,7 @@ def _web_fetch(url: str, *, headers: dict[str, str] | None = None, redirects: in
             raise ValueError("Redirect loop")
         visited.add(url)
         request = urllib.request.Request(url, headers={
-            "User-Agent": "LumenaBridge/0.18", "Accept-Encoding": "identity",
+            "User-Agent": "LumenaBridge/0.19", "Accept-Encoding": "identity",
             "Accept": "text/html,application/json,text/plain;q=0.9", **(headers or {}),
         })
         try:
@@ -636,7 +636,8 @@ def _web_fetch(url: str, *, headers: dict[str, str] | None = None, redirects: in
         except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
             raise ValueError(f"Public HTTPS transport failed ({type(exc).__name__})") from exc
         with response:
-            if getattr(response, "status", 200) != 200:
+            status = getattr(response, "status", 200)
+            if status not in {200, 202}:
                 raise ValueError(f"Upstream HTTP {response.status}; not a usable page")
             content_type = response.headers.get_content_type().lower()
             if not (content_type.startswith("text/") or content_type in {"application/json", "application/xhtml+xml"}):
@@ -652,6 +653,11 @@ def _web_fetch(url: str, *, headers: dict[str, str] | None = None, redirects: in
                 text = raw.decode(charset, errors="replace")
             except LookupError:
                 text = raw.decode("utf-8", errors="replace")
+            if status == 202:
+                challenge = any(marker in text.lower() for marker in
+                                ("anomaly.js", "anomaly-modal", "challenge-form", "g-recaptcha", "cf-chl-"))
+                detail = "human verification page detected" if challenge else "request accepted but no completed response"
+                raise ValueError(f"Upstream HTTP 202; {detail}; no usable evidence")
             return url, content_type, text
     raise ValueError("Too many redirects")
 
@@ -963,7 +969,7 @@ def _wikimedia_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.18 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.19 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -1035,7 +1041,7 @@ def _openverse_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.18 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.19 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -1772,7 +1778,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"Lumena bridge OK\n"
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + root.name for root in READONLY_ROOTS if root.exists()) or '(none)'}\n"
-                f"version=0.18\n"
+                f"version=0.19\n"
             ),
             "stderr": "",
             "error": None,
@@ -2039,7 +2045,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.18"
+    server_version = "LumenaBridge/0.19"
     protocol_version = "HTTP/1.1"
 
     def setup(self) -> None:
@@ -2082,7 +2088,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.18"})
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.19"})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
@@ -2134,7 +2140,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Lumena Termux Bridge v0.18")
+    print("Lumena Termux Bridge v0.19")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")

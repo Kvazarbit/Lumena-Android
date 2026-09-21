@@ -1,4 +1,23 @@
-# Web research — Bridge 0.18 / Android build 22
+# Web research — Bridge 0.19 / Android build 24
+
+## Follow-up and HTTP 202 regression fix
+
+Standalone `повтори` / `retry` / `continue` now retain the previous task goal,
+so intent routing sees the actual research request. The new task still has fresh
+execution counters and approvals; historical observations do not prove completion.
+A single registered tool key such as `{"web.search":{"query":"news"}}` is
+normalized through the existing registry and permission checks. Ambiguous or
+unknown dotted tool-key JSON requests protocol correction instead of finishing
+as a successful plain-text answer.
+
+The reported phone diagnostic showed only DuckDuckGo was attempted and returned
+HTTP 202. That status alone does not establish CAPTCHA or loss of connectivity.
+Bridge 0.19 inspects a bounded textual body for known challenge markers and
+reports either human verification or an uncompleted response. Neither is search
+evidence. This is a diagnostic repair, not a claim that DuckDuckGo now works on
+the affected phone. Configure a supported provider below when it remains blocked.
+Offline regressions cover both 202 cases; live phone/provider verification is
+still required. APK signing continuity remains a separate release prerequisite.
 
 `web.search` discovers source URLs. `web.read` retrieves readable evidence. Raw
 `http.get` and `http.json` remain available for compatibility; their redirects

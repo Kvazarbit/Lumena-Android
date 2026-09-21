@@ -42,10 +42,15 @@ class AgentResponseParser {
 
         // Lumena JSON: {"tool":"file.read","args":{...}}
         // Hermes/OpenAI-style content fallback: {"name":"file.read","arguments":{...}}
-        val tool = (obj["tool"] ?: obj["name"])?.toString()?.trim().orEmpty()
+        // Some small models emit {"web.search":{...}}. Normalize only a single
+        // registered tool with object arguments; controller validation still applies.
+        val shorthand = obj.entries.singleOrNull()?.takeIf {
+            ToolRegistry.get(it.key) != null && it.value is Map<*, *>
+        }
+        val tool = (obj["tool"] ?: obj["name"] ?: shorthand?.key)?.toString()?.trim().orEmpty()
         if (tool.isBlank()) return AgentDecision.Reply(text)
 
-        val rawArgs = when (val value = obj["args"] ?: obj["arguments"]) {
+        val rawArgs = when (val value = obj["args"] ?: obj["arguments"] ?: shorthand?.value) {
             is Map<*, *> -> value
             is String -> runCatching { mapAdapter.fromJson(value) }.getOrNull() ?: emptyMap<String, Any?>()
             else -> emptyMap<String, Any?>()

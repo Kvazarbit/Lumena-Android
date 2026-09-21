@@ -86,6 +86,7 @@ import com.lumena.android.settings.LocalSessionSnapshot
 import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.settings.ContextCheckpointStore
 import com.lumena.android.agent.core.ContextKernel
+import com.lumena.android.agent.core.FollowUpGoal
 import com.lumena.android.settings.ContextGenomeStats
 import com.lumena.android.settings.ContextGenomeStore
 import com.lumena.android.settings.ExperienceMemoryStore
@@ -506,21 +507,23 @@ fun WorkflowChatScreen(
         }
 
         input = ""
+        val previous = currentTask
+        val resolvedGoal = FollowUpGoal.resolve(text, previous?.goal)
         val task = TaskState(
             id = UUID.randomUUID().toString(),
             projectId = null,
-            goal = text,
+            goal = resolvedGoal,
             status = TaskStatus.WAITING_MODEL
         )
         taskApprovals.clear()
-        val previous = currentTask
         currentTask = task
         bubbles += ChatBubble("user", text)
-        val previousContext = if (previous != null && Regex("(?i)(продовж|продолж|continue|resume)").containsMatchIn(text))
+        val previousContext = if (previous != null && (FollowUpGoal.isReference(text) || Regex("(?i)(продовж|продолж|continue|resume)").containsMatchIn(text)))
             listOf(OllamaMessage("user", "HISTORICAL TASK CHECKPOINT; verify current state before acting. " +
                 "Earlier tool success is not proof for this new task.\n" + ContextKernel.capsule(previous.kernel, 1200)))
             else emptyList()
-        val turnHistory = history + previousContext + OllamaMessage("user", text)
+        val turnHistory = history + previousContext + OllamaMessage("user",
+            if (resolvedGoal != text) "$text\nМета попереднього завдання: $resolvedGoal" else text)
         history = turnHistory
         busy = true
         persistSession()

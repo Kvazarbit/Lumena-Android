@@ -5,6 +5,13 @@ import org.junit.Test
 
 class PlainReplyRecoveryTest {
     private val controller = AgentController()
+
+    @Test fun ambiguousToolKeyCannotFinishGeneralTask() {
+        val state = controller.initial(TaskState("retry", null, "повтори"))
+        for (text in listOf("""{"web.search":{},"file.read":{}}""", """{"unknown.run":{}}""")) {
+            assertTrue(controller.interpret(text, state) is ControllerInstruction.AskModelAgain)
+        }
+    }
     private fun webState() = controller.initial(TaskState("web", null, "Знайди новини в інтернеті"))
         .copy(toolUsed = true)
 

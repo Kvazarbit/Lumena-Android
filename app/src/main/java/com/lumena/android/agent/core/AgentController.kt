@@ -299,6 +299,7 @@ class AgentController(
                 )
         val looksLikeBrokenProtocol =
             hasProtocolJsonShape ||
+                (trimmed.startsWith("{") && Regex("\"[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\"\\s*:").containsMatchIn(trimmed)) ||
                 trimmed.contains("<tool_call>", ignoreCase = true)
 
         if (looksLikeBrokenProtocol) {
