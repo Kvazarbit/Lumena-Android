@@ -506,4 +506,63 @@ class AgentControllerTest {
         val instruction = controller.interpret("Looks good, done!", state)
         assertTrue(instruction is ControllerInstruction.AskModelAgain)
     }
+    @Test
+    fun failedNonWebToolCannotEraseExistingModelFailureBudget() {
+        val initial = controller.initial(task()).copy(modelFailures = 2)
+        val transition = controller.afterTool(
+            state = initial,
+            call = AgentDecision.ToolCall(
+                tool = "file.read",
+                args = mapOf("path" to "missing.txt")
+            ),
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "FileNotFoundError"
+        )
+
+        assertTrue(transition.stopReason == null)
+        assertTrue(transition.state.modelFailures == 2)
+
+        val nextFailure = controller.onModelFailure(
+            transition.state,
+            "temporary model transport failure"
+        )
+        assertTrue(nextFailure is ControllerInstruction.Stop)
+    }
+
+    @Test
+    fun successfulToolObservationClearsModelFailureBudget() {
+        val initial = controller.initial(task()).copy(modelFailures = 2)
+        val transition = controller.afterTool(
+            state = initial,
+            call = AgentDecision.ToolCall(
+                tool = "workspace.list",
+                args = emptyMap()
+            ),
+            ok = true,
+            stdout = "workspace ok",
+            stderr = "",
+            error = null
+        )
+
+        assertTrue(transition.stopReason == null)
+        assertTrue(transition.state.modelFailures == 0)
+    }
+
+    @Test
+    fun alternateOllamaContextPressureMessagesRemainNonRetryableAtControllerLayer() {
+        for (message in listOf(
+            "Ollama stream error: requested tokens exceed model capacity",
+            "Ollama stream error: input exceeds the context limit",
+            "Ollama stream error: invalid num_ctx for request"
+        )) {
+            val instruction = controller.onModelFailure(
+                controller.initial(task()),
+                message
+            )
+            assertTrue(instruction is ControllerInstruction.Stop)
+        }
+    }
+
 }
