@@ -45,8 +45,19 @@ data class OllamaChatRequest(
 
 data class OllamaChatResponse(
     val message: OllamaMessage? = null,
-    val done: Boolean? = null
+    val done: Boolean? = null,
+    val error: String? = null
 )
+
+/** Parse-level guard shared by streaming and non-streaming Ollama responses. */
+internal object OllamaStreamProtocol {
+    fun requireUsable(chunk: OllamaChatResponse) {
+        chunk.error
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { error("Ollama error: $it") }
+    }
+}
 
 data class OllamaModel(
     val name: String
@@ -183,6 +194,7 @@ class OllamaClient(
                     val line = source.readUtf8Line() ?: break
                     if (line.isBlank()) continue
                     val chunk = responseAdapter.fromJson(line) ?: continue
+                    OllamaStreamProtocol.requireUsable(chunk)
                     chunk.message?.content?.let { piece ->
                         if (piece.isNotEmpty()) {
                             accumulated.append(piece)
@@ -229,7 +241,10 @@ class OllamaClient(
                     response.use {
                         val body = it.body?.string().orEmpty()
                         if (!it.isSuccessful) error("Ollama HTTP ${it.code}: $body")
-                        val text = responseAdapter.fromJson(body)?.message?.content
+                        val parsed = responseAdapter.fromJson(body)
+                            ?: error("Ollama returned an unreadable response")
+                        OllamaStreamProtocol.requireUsable(parsed)
+                        val text = parsed.message?.content
                             ?.takeIf { value -> value.isNotBlank() }
                             ?: error("Ollama returned no message")
                         if (continuation.isActive) continuation.resume(text)
