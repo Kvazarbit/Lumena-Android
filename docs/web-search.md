@@ -1,4 +1,20 @@
-# Web research — Bridge 0.19 / Android build 24
+# Web research — Bridge 0.19 / Android build 25
+
+## Android 0.12.1 circuit breaker and Ollama error propagation
+
+A failed `web.search` now ends the current agent turn after the bridge has exhausted
+its configured providers. The runner does not call the model again to decide how to
+retry the same unavailable search capability. This prevents search-provider failures
+from consuming repeated local-model generations.
+
+Ollama streaming responses now preserve a top-level `error` field and terminate
+immediately with that original reason. Context-window/token-overflow errors are
+non-retryable in the controller. The Ollama context compactor also reserves output
+and tokenizer headroom and enforces an absolute character ceiling while keeping the
+newest turn.
+
+Regression coverage includes a real localhost HTTP bridge fixture proving that a
+failed mandatory web preflight performs exactly one bridge call and zero model calls.
 
 ## Follow-up and HTTP 202 regression fix
 
