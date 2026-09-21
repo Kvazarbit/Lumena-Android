@@ -53,7 +53,7 @@ internal fun ollamaChunkError(chunk: OllamaChatResponse): String? =
     chunk.error?.trim()?.takeIf { it.isNotEmpty() }
 
 internal fun shouldRetryOllamaWithSmallerContext(error: Throwable): Boolean {
-    if (error is SocketTimeoutException) return true
+    if (error is SocketTimeoutException) return false
     val lower = error.message.orEmpty().lowercase()
     return listOf(
         "context length",
@@ -67,6 +67,11 @@ internal fun shouldRetryOllamaWithSmallerContext(error: Throwable): Boolean {
         "num_ctx"
     ).any(lower::contains)
 }
+
+internal fun isOllamaTransportTimeout(error: Throwable): Boolean =
+    error is SocketTimeoutException ||
+        error.message.orEmpty().contains("timeout", ignoreCase = true) ||
+        error.message.orEmpty().contains("timed out", ignoreCase = true)
 
 data class OllamaModel(
     val name: String
