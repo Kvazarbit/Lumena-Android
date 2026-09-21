@@ -65,6 +65,10 @@ class WebToolsTest(unittest.TestCase):
         self.assertEqual("duckduckgo", payload["attempts"][0]["provider"])
         self.assertIn("HTTP 202", payload["attempts"][0]["error"])
         self.assertIn("Search unavailable", result["error"])
+        self.assertEqual("SEARCH_EXHAUSTED", result["errorCode"])
+        self.assertEqual("DEPENDENCY_EXHAUSTED", result["failureClass"])
+        self.assertFalse(result["retryable"])
+        self.assertEqual("web.search", result["dependency"])
 
     def test_search_extracts_real_urls_unwraps_deduplicates_and_caches(self):
         html = '''<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.example.org%2Fguide%3Futm_source%3Dx">Python <b>guide</b></a>
