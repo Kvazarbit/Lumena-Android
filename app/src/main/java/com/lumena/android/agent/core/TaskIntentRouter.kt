@@ -161,12 +161,12 @@ object TaskIntentRouter {
             "ollama", "локальн", "local model", "gguf model", "model loaded",
             "модель завантаж", "модель запущ", "модель працю", "модел запущ",
             "модел загруж", "модел работает"
-        ).any(lower::contains)
+        ).any { containsTerm(lower, it) }
         val action = listOf(
             "status", "стан", "статус", "запуст", "запущ", "start", "pull", "download",
             "generate", "генер", "завантаж", "loaded", "running", "працю", "работ",
             "uruchom", "działa", "dziala"
-        ).any(lower::contains)
+        ).any { containsTerm(lower, it) }
         return subject && action
     }
 
@@ -182,7 +182,7 @@ object TaskIntentRouter {
             "виправ", "fix", "редаг", "edit", "patch", "перевір", "test",
             "запуст", "run", "debug", "build", "збір", "commit"
         )
-        return codeTerms.any(lower::contains) && actionTerms.any(lower::contains)
+        return codeTerms.any { containsTerm(lower, it) } && actionTerms.any { containsTerm(lower, it) }
     }
 
     private fun isFileInspection(lower: String): Boolean {
@@ -194,7 +194,7 @@ object TaskIntentRouter {
             "знайд", "find", "покаж", "show", "прочит", "read", "відкрий",
             "open", "перевір", "inspect", "list", "список", "де ", "where"
         )
-        return fileTerms.any(lower::contains) && actionTerms.any(lower::contains)
+        return fileTerms.any { containsTerm(lower, it) } && actionTerms.any { containsTerm(lower, it) }
     }
 
     private fun isPublicWeb(lower: String): Boolean {
@@ -202,6 +202,23 @@ object TaskIntentRouter {
             "інтернет", "internet", "web", "онлайн", "online", "api",
             "https://", "http://", "сайт", "website", "url", "latest",
             "останні новини", "актуальн"
-        ).any(lower::contains)
+        ).any { containsTerm(lower, it) }
+    }
+
+    /**
+     * ASCII command words are matched as lexical tokens, not arbitrary substrings.
+     * This prevents e.g. "latest" from satisfying the code/action term "test".
+     * Cyrillic stems and explicit phrases intentionally keep substring matching.
+     */
+    private fun containsTerm(lower: String, term: String): Boolean {
+        val lexicalAscii = term.isNotEmpty() && term.all { ch ->
+            ch in 'a'..'z' || ch in '0'..'9' || ch == '_'
+        }
+        return if (lexicalAscii) {
+            Regex("(?<![a-z0-9_])" + Regex.escape(term) + "(?![a-z0-9_])")
+                .containsMatchIn(lower)
+        } else {
+            lower.contains(term)
+        }
     }
 }
