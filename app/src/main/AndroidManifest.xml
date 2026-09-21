@@ -10,7 +10,7 @@
 
     <application
         android:allowBackup="true"
-        android:label="Lumena"
+        android:label="Lumena RC"
         android:theme="@style/Theme.Lumena"
         android:usesCleartextTraffic="true">
 
