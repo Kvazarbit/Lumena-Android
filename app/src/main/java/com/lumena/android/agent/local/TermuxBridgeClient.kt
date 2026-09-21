@@ -56,7 +56,11 @@ class TermuxBridgeClient(
                 val error = started.exceptionOrNull()
                 return ToolResult(
                     ok = false,
-                    error = error?.message ?: "Could not start the Termux bridge"
+                    error = error?.message ?: "Could not start the Termux bridge",
+                    errorCode = "BRIDGE_START_FAILED",
+                    failureClass = "AUTH_OR_CONFIG",
+                    retryable = false,
+                    dependency = "termux_bridge"
                 )
             }
         }
@@ -68,10 +72,21 @@ class TermuxBridgeClient(
 
     private data class Attempt(val result: ToolResult, val transportFailure: Boolean = false)
 
-    private fun transportFailure(tool: String, message: String) = Attempt(
-        ToolResult(ok = false, error = "Bridge transport: $message", outcomeUnknown = BridgeTransportPolicy.outcomeUnknown(tool)),
-        transportFailure = true
-    )
+    private fun transportFailure(tool: String, message: String): Attempt {
+        val unknown = BridgeTransportPolicy.outcomeUnknown(tool)
+        return Attempt(
+            ToolResult(
+                ok = false,
+                error = "Bridge transport: $message",
+                outcomeUnknown = unknown,
+                errorCode = "BRIDGE_TRANSPORT",
+                failureClass = if (unknown) "UNKNOWN_EFFECT" else "TRANSIENT_TRANSPORT",
+                retryable = !unknown,
+                dependency = "termux_bridge"
+            ),
+            transportFailure = true
+        )
+    }
 
     private suspend fun executeOnce(toolRequest: ToolRequest): Attempt = suspendCancellableCoroutine { continuation ->
         val json = requestAdapter.toJson(toolRequest)

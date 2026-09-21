@@ -24,7 +24,8 @@ class OllamaClientProtocolTest {
 
     @Test
     fun onlyTimeoutAndContextPressureUseTheCompactRetryPath() {
-        assertTrue(shouldRetryOllamaWithSmallerContext(SocketTimeoutException("read timed out")))
+        assertFalse(shouldRetryOllamaWithSmallerContext(SocketTimeoutException("read timed out")))
+        assertTrue(isOllamaTransportTimeout(SocketTimeoutException("read timed out")))
         assertTrue(shouldRetryOllamaWithSmallerContext(IllegalStateException("context window exceeded")))
         assertTrue(shouldRetryOllamaWithSmallerContext(IllegalStateException("prompt too long")))
         assertTrue(shouldRetryOllamaWithSmallerContext(IllegalStateException("too many tokens")))
