@@ -12,6 +12,8 @@ data class AgentControlState(
     val toolUsed: Boolean = false,
     val protocolRetries: Int = 0,
     val modelFailures: Int = 0,
+    val semanticRecoverySpent: Int = 0,
+    val actionFamilyFailures: Map<String, Int> = emptyMap(),
     val pythonFailures: Int = 0,
     val repeatedToolFailures: Map<String, Int> = emptyMap(),
     val lastToolSignature: String? = null,
@@ -55,7 +57,8 @@ sealed interface ControllerInstruction {
 
 data class ToolTransition(
     val state: AgentControlState,
-    val stopReason: String? = null
+    val stopReason: String? = null,
+    val partialReason: String? = null
 )
 
 class AgentController(
@@ -183,6 +186,33 @@ class AgentController(
         }
 
         val canonical = decision.copy(tool = validation.canonicalTool)
+
+        if (state.recoveryHint != null &&
+            state.semanticRecoverySpent >= budget.maxSemanticRecoveries
+        ) {
+            val report = "Частково виконано. Ліміт семантичного відновлення вичерпано без нових перевірених доказів."
+            return ControllerInstruction.Finish(
+                report,
+                state.copy(
+                    task = state.task.copy(
+                        status = TaskStatus.PARTIAL,
+                        lastResult = report,
+                        errors = (state.task.errors + report).takeLast(8)
+                    )
+                )
+            )
+        }
+
+        val actionFamily = RecoveryPolicy.actionFamily(canonical)
+        val familyFailures = state.actionFamilyFailures[actionFamily] ?: 0
+        if (familyFailures >= budget.maxActionFamilyFailures) {
+            return protocolRetry(
+                state,
+                "Action family $actionFamily already failed $familyFailures times in this task. " +
+                    "Choose a different evidence-producing tool family or return partial; rephrasing arguments does not reset this history."
+            )
+        }
+
         if (state.task.kernel.inFlight != null) {
             return ControllerInstruction.Stop("Earlier tool outcome is unknown; inspect the checkpoint before continuing.",
                 fail(state, "Unknown tool outcome"))
@@ -392,7 +422,11 @@ class AgentController(
         stdout: String,
         stderr: String,
         error: String?,
-        outcomeUnknown: Boolean = false
+        outcomeUnknown: Boolean = false,
+        errorCode: String? = null,
+        failureClass: String? = null,
+        retryable: Boolean? = null,
+        dependency: String? = null
     ): ToolTransition {
         if (outcomeUnknown) {
             val reason = "Tool outcome unknown after transport failure. Inspect current state before replaying ${call.tool}."
@@ -400,40 +434,11 @@ class AgentController(
         }
 
         val canonicalTool = ToolRegistry.canonicalize(call.tool)
-        if (!ok && canonicalTool == "web.search") {
-            // web.search itself already exhausts every configured provider. Feeding
-            // that failure back into the model used to create a model→search→model
-            // loop (often with slightly changed queries), consuming context/tokens.
-            // A new user turn may explicitly retry, but this task stops here.
-            val detail = sequenceOf(error, stderr, stdout)
-                .filterNotNull()
-                .map { it.replace(Regex("[\\r\\n]+"), " ").trim() }
-                .firstOrNull { it.isNotBlank() }
-                ?.take(1_200)
-                ?: "Search provider returned no usable evidence."
-            val resultText = "ok=false error=$detail"
-            val failedTask = state.task.copy(
-                status = TaskStatus.FAILED,
-                step = state.task.step + 1,
-                lastTool = canonicalTool,
-                lastResult = resultText,
-                kernel = ContextKernel.record(state.task.kernel, call, false, resultText),
-                errors = (state.task.errors + resultText).takeLast(8)
-            )
-            val reason = "web.search failed; automatic retry stopped to prevent a model/tool loop. $detail"
-            return ToolTransition(
-                state.copy(
-                    task = failedTask,
-                    toolUsed = true,
-                    recoveryHint = null
-                ),
-                reason
-            )
-        }
-
         val signature = signature(call)
+        val actionFamily = RecoveryPolicy.actionFamily(call)
         var pythonFailures = state.pythonFailures
         val repeatedFailures = state.repeatedToolFailures.toMutableMap()
+        val familyFailures = state.actionFamilyFailures.toMutableMap()
         val recoveredFromPythonFailure =
             ok && call.tool.startsWith("python.") && state.pythonFailures > 0
         val recoveredFromRepeatedToolFailure =
@@ -446,6 +451,7 @@ class AgentController(
         } else {
             val count = (repeatedFailures[signature] ?: 0) + 1
             repeatedFailures[signature] = count
+            familyFailures[actionFamily] = (familyFailures[actionFamily] ?: 0) + 1
             if (count > budget.maxIdenticalToolFailures) {
                 val reason = "Identical tool failure repeated $count times: ${call.tool}"
                 return ToolTransition(fail(state.copy(task = state.task.copy(kernel = ContextKernel.record(
@@ -488,6 +494,10 @@ class AgentController(
 
         val resultText = buildString {
             append("ok=").append(ok)
+            if (!errorCode.isNullOrBlank()) append(" code=").append(errorCode.take(120))
+            if (!failureClass.isNullOrBlank()) append(" class=").append(failureClass.take(120))
+            if (!dependency.isNullOrBlank()) append(" dependency=").append(dependency.take(120))
+            if (retryable != null) append(" retryable=").append(retryable)
             if (!error.isNullOrBlank()) append(" error=").append(error.take(700))
             if (stdout.isNotBlank()) append(" stdout=").append(stdout.take(1_500))
             if (stderr.isNotBlank()) append(" stderr=").append(stderr.take(1_000))
@@ -513,32 +523,98 @@ class AgentController(
             errors = if (ok) state.task.errors else (state.task.errors + resultText).takeLast(8)
         )
 
-        return ToolTransition(
-            state = state.copy(
-                task = nextTask,
-                toolUsed = true,
-                // A valid tool call proves protocol recovery, so protocol retries reset.
-                // A failed tool does NOT prove the model runtime recovered; keep the
-                // model-failure budget until a successful tool observation occurs.
-                protocolRetries = 0,
-                modelFailures = if (ok) 0 else state.modelFailures,
-                pythonFailures = pythonFailures,
-                repeatedToolFailures = repeatedFailures,
-                verificationRequired = verificationRequired,
-                verificationReason = verificationReason,
-                pendingPythonPaths = pendingPythonPaths,
-                visualEvidenceReady = state.visualEvidenceReady ||
-                    (ok && ToolRegistry.canonicalize(call.tool) == "image.search"),
-                recoveryHint = RecoveryAdvisor.suggest(
-                    task = state.task,
-                    call = call,
-                    ok = ok,
-                    stdout = stdout,
-                    stderr = stderr,
-                    error = error
-                )
+        val semanticSpent = state.semanticRecoverySpent + if (ok) 0 else 1
+        val advisorHint = RecoveryAdvisor.suggest(
+            task = state.task,
+            call = call,
+            ok = ok,
+            stdout = stdout,
+            stderr = stderr,
+            error = error
+        )
+        val nextState = state.copy(
+            task = nextTask,
+            toolUsed = true,
+            protocolRetries = 0,
+            // modelFailures is a consecutive model-runtime counter. A valid model
+            // reply resets it in interpretTool(); tool success/failure must not
+            // redefine model runtime health.
+            modelFailures = state.modelFailures,
+            semanticRecoverySpent = semanticSpent,
+            actionFamilyFailures = familyFailures,
+            pythonFailures = pythonFailures,
+            repeatedToolFailures = repeatedFailures,
+            verificationRequired = verificationRequired,
+            verificationReason = verificationReason,
+            pendingPythonPaths = pendingPythonPaths,
+            visualEvidenceReady = state.visualEvidenceReady ||
+                (ok && ToolRegistry.canonicalize(call.tool) == "image.search"),
+            recoveryHint = advisorHint
+        )
+
+        if (ok) return ToolTransition(state = nextState.copy(recoveryHint = null))
+
+        val classified = RecoveryPolicy.classifyToolFailure(
+            tool = canonicalTool,
+            errorCode = errorCode,
+            suppliedClass = failureClass,
+            error = error,
+            stderr = stderr,
+            stdout = stdout,
+            outcomeUnknown = outcomeUnknown
+        )
+        val familyCount = familyFailures[actionFamily] ?: 0
+        val decision = RecoveryPolicy.decide(
+            RecoveryContext(
+                failureClass = classified,
+                effectClass = RecoveryPolicy.effectClass(canonicalTool),
+                actionFamily = actionFamily,
+                familyFailures = familyCount,
+                semanticRecoverySpent = semanticSpent,
+                maxFamilyFailures = budget.maxActionFamilyFailures,
+                maxSemanticRecoveries = budget.maxSemanticRecoveries
             )
         )
+
+        fun combinedHint(policy: String): String =
+            listOf(policy, advisorHint)
+                .filterNotNull()
+                .filter { it.isNotBlank() }
+                .distinct()
+                .joinToString(" ")
+                .take(2_000)
+
+        return when (decision) {
+            is RecoveryDecision.RetryVariant ->
+                ToolTransition(nextState.copy(recoveryHint = combinedHint(decision.guidance)))
+
+            is RecoveryDecision.TryAlternative ->
+                ToolTransition(nextState.copy(recoveryHint = combinedHint(decision.guidance)))
+
+            is RecoveryDecision.DegradePartial -> {
+                val report = buildString {
+                    append("Частково виконано. ")
+                    append(decision.reason)
+                    append(" Остання помилка: ")
+                    append((error ?: stderr.ifBlank { stdout }).take(900))
+                }
+                ToolTransition(
+                    state = nextState.copy(
+                        recoveryHint = null,
+                        task = nextState.task.copy(
+                            status = TaskStatus.PARTIAL,
+                            lastResult = report
+                        )
+                    ),
+                    partialReason = report
+                )
+            }
+
+            is RecoveryDecision.Stop -> {
+                val reason = decision.reason
+                ToolTransition(fail(nextState.copy(recoveryHint = null), reason), stopReason = reason)
+            }
+        }
     }
 
     fun dynamicContext(
