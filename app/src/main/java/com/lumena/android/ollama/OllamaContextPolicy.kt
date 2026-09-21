@@ -64,8 +64,14 @@ object OllamaContextPolicy {
         val recent = ArrayList<OllamaMessage>()
         for (message in nonSystem.asReversed()) {
             if (remaining <= 0) break
-            val perMessage = min(budget.maxPerMessage, remaining)
-            val clipped = message.content.takeLast(perMessage)
+            val requested = min(budget.maxPerMessage, message.content.length)
+            val take = if (recent.isEmpty()) {
+                min(requested, remaining)
+            } else {
+                if (requested > remaining) break
+                requested
+            }
+            val clipped = message.content.takeLast(take)
             if (clipped.isEmpty()) continue
             recent += message.copy(content = clipped)
             remaining -= clipped.length
