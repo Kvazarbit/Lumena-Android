@@ -16,6 +16,11 @@ data class ToolResult(
     val outcomeUnknown: Boolean = false
 )
 
+/** Small execution seam: production uses TermuxBridgeClient, tests can use deterministic fakes. */
+interface ToolExecutor {
+    suspend fun execute(toolRequest: ToolRequest): ToolResult
+}
+
 data class PlannerDecision(
     val request: ToolRequest,
     val reason: String
