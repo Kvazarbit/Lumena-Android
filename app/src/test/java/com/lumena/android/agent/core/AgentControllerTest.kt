@@ -597,7 +597,7 @@ class AgentControllerTest {
     }
 
     @Test
-    fun successfulToolObservationClearsModelFailureBudget() {
+    fun toolResultDoesNotOwnModelRuntimeFailureCounter() {
         val initial = controller.initial(task()).copy(modelFailures = 2)
         val transition = controller.afterTool(
             state = initial,
@@ -612,7 +612,15 @@ class AgentControllerTest {
         )
 
         assertTrue(transition.stopReason == null)
-        assertTrue(transition.state.modelFailures == 0)
+        assertTrue(transition.state.modelFailures == 2)
+
+        val modelRecovered = controller.interpret(
+            """{"tool":"workspace.list","args":{},"reason":"model generated a valid next action"}""",
+            initial
+        )
+        assertTrue(modelRecovered is ControllerInstruction.Execute)
+        modelRecovered as ControllerInstruction.Execute
+        assertTrue(modelRecovered.state.modelFailures == 0)
     }
 
     @Test
