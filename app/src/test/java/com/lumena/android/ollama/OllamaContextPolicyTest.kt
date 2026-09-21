@@ -99,4 +99,39 @@ class OllamaContextPolicyTest {
         assertTrue(compacted.last().content.contains("latest-user"))
         assertFalse(compacted.any { it.content.contains("-OLD-USER-END") })
     }
+    @Test
+    fun budgetReservesOutputAndTokenizerSafetyMargin() {
+        val budget = OllamaContextPolicy.budget(profile(), retry = false)
+        val context = budget.options.num_ctx
+        val predict = budget.options.num_predict
+        val safetyTokens = maxOf(256, context / 8)
+        val theoreticalCharCeiling = (context - predict - safetyTokens).coerceAtLeast(512) * 2
+
+        assertTrue(budget.maxChars <= theoreticalCharCeiling)
+        assertTrue(budget.maxChars < context * 3)
+    }
+
+    @Test
+    fun compactionNeverExceedsHardCharacterBudget() {
+        val budget = OllamaRequestBudget(
+            options = OllamaOptions(num_ctx = 2048, num_predict = 384),
+            maxChars = 1000,
+            maxPerMessage = 900
+        )
+        val compacted = OllamaContextPolicy.compact(
+            listOf(
+                OllamaMessage("system", "SYSTEM-HEAD-" + "s".repeat(3000) + "-SYSTEM-TAIL"),
+                OllamaMessage("user", "old-" + "o".repeat(3000)),
+                OllamaMessage("assistant", "middle-" + "m".repeat(3000)),
+                OllamaMessage("user", "LATEST-" + "x".repeat(3000) + "-END")
+            ),
+            budget
+        )
+
+        assertTrue(compacted.sumOf { it.content.length } <= budget.maxChars)
+        assertTrue(compacted.last().content.endsWith("-END"))
+        assertTrue(compacted.first().role == "system")
+        assertTrue(compacted.first().content.contains("middle system context omitted"))
+    }
+
 }
