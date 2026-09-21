@@ -161,12 +161,12 @@ object TaskIntentRouter {
             "ollama", "локальн", "local model", "gguf model", "model loaded",
             "модель завантаж", "модель запущ", "модель працю", "модел запущ",
             "модел загруж", "модел работает"
-        ).any(lower::contains)
+        ).any { containsTerm(lower, it) }
         val action = listOf(
             "status", "стан", "статус", "запуст", "запущ", "start", "pull", "download",
             "generate", "генер", "завантаж", "loaded", "running", "працю", "работ",
             "uruchom", "działa", "dziala"
-        ).any(lower::contains)
+        ).any { containsTerm(lower, it) }
         return subject && action
     }
 
@@ -202,6 +202,24 @@ object TaskIntentRouter {
             "інтернет", "internet", "web", "онлайн", "online", "api",
             "https://", "http://", "сайт", "website", "url", "latest",
             "останні новини", "актуальн"
-        ).any(lower::contains)
+        ).any { containsTerm(lower, it) }
     }
+
+    /**
+     * ASCII command words are matched as lexical tokens, not arbitrary substrings.
+     * Example: "latest" must not satisfy the code/action keyword "test".
+     * Non-ASCII stems and explicit phrases intentionally retain substring matching.
+     */
+    private fun containsTerm(lower: String, term: String): Boolean {
+        val lexicalAscii = term.isNotEmpty() && term.all { ch ->
+            ch in 'a'..'z' || ch in '0'..'9' || ch == '_'
+        }
+        return if (lexicalAscii) {
+            Regex("(?<![a-z0-9_])" + Regex.escape(term) + "(?![a-z0-9_])")
+                .containsMatchIn(lower)
+        } else {
+            lower.contains(term)
+        }
+    }
+
 }
