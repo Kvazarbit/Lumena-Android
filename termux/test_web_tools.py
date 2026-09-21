@@ -49,6 +49,23 @@ class WebToolsTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, expected):
                     self.b._web_fetch("https://example.org")
 
+    def test_exhausted_search_provider_returns_one_failed_tool_result(self):
+        with patch.object(
+                self.b,
+                "_search_provider",
+                side_effect=ValueError("Upstream HTTP 202; human verification page detected; no usable evidence")
+        ) as provider:
+            result = self.b.execute_tool("web.search", {"query": "latest news"})
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(1, result["exitCode"])
+        self.assertEqual(1, provider.call_count)
+        payload = json.loads(result["stdout"])
+        self.assertEqual([], payload["results"])
+        self.assertEqual("duckduckgo", payload["attempts"][0]["provider"])
+        self.assertIn("HTTP 202", payload["attempts"][0]["error"])
+        self.assertIn("Search unavailable", result["error"])
+
     def test_search_extracts_real_urls_unwraps_deduplicates_and_caches(self):
         html = '''<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.example.org%2Fguide%3Futm_source%3Dx">Python <b>guide</b></a>
         <a class="result__snippet">Verified <b>documentation</b></a>
