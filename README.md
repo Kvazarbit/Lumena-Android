@@ -2,6 +2,17 @@
 
 Android companion / local-agent client built with Kotlin + Jetpack Compose.
 
+## Build 22: evidence-based web research
+
+Bridge 0.18 adds `web.search` and `web.read`: source discovery, bounded readable
+text, provider fallback, safe redirects, and one read-only local transport retry.
+Core DNA v3 distinguishes sourced facts from hypotheses. Update both APK and Bridge.
+
+* [Search setup and limitations](docs/web-search.md)
+* [Детальний план контекстної ОС та конституції досвіду](docs/cognitive-exoskeleton-roadmap.uk.md)
+* [Current context kernel](docs/context-kernel.md)
+* [Current learned landscape](docs/experience-landscape.md)
+
 ## v0.7.3 local-agent architecture
 
 `User -> Local chat -> bounded Ollama context -> one-step agent decision -> ToolGate -> localhost Termux bridge -> tool result -> local model -> next step`

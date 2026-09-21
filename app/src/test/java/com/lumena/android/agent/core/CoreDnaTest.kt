@@ -7,7 +7,7 @@ class CoreDnaTest {
     @Test fun seedHasExplicitMeaningsAndBoundedPrompt() {
         assertEquals(CoreDna.principles.size, CoreDna.principles.map { it.id }.distinct().size)
         assertTrue(CoreDna.principles.all { it.instruction.isNotBlank() })
-        assertTrue(CoreDna.prompt().length < 1_100)
+        assertTrue(CoreDna.prompt().length < 1_300)
     }
 
     @Test fun seedDoesNotPretendToBeMeasuredExperience() {

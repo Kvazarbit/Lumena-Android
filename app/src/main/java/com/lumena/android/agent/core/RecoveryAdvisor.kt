@@ -19,6 +19,15 @@ object RecoveryAdvisor {
             .take(4_000)
 
         return when {
+            "bridge transport" in detail ->
+                "The app lost the LOCAL bridge response after one read-only retry. This does not prove a remote website blocked access. Check health; report partial if the bridge remains unreachable."
+
+            tool == "web.search" ->
+                "Search already tried the configured providers. Never replace missing evidence with invented current facts. Use a meaningfully narrower query only if useful; otherwise report partial and the provider error. Do not write scraping scripts to bypass restrictions."
+
+            tool == "web.read" ->
+                "Use another URL from web.search or a documented public API. Do not repeat an unchanged failing URL. Report which sources could not be read; snippets alone are not verification."
+
             tool == "image.search" ->
                 "image.search already tries query broadening and multiple providers. Do not repeat the identical query; change the key subject terms while preserving the user's intent."
 
@@ -40,7 +49,7 @@ object RecoveryAdvisor {
                 "Do not repeat the identical failing URL. Verify the public HTTPS endpoint; use http.get instead only when the response is text/HTML rather than JSON."
 
             tool == "http.get" ->
-                "Do not repeat the identical failing URL. Verify the public HTTPS endpoint; use http.json instead when a structured JSON API exists."
+                "Use web.read for page text and safely validated redirects, web.search to discover real source URLs, or http.json for a documented API. Do not infer a remote block from a local bridge transport error."
 
             tool == "ollama.generate" ->
                 "Inspect ollama.status before retrying generation. If the API is down, ollama.start requires approval; do not create ad-hoc Python HTTP helper scripts."

@@ -66,6 +66,16 @@ class TaskIntentRouterTest {
     }
 
     @Test
+    fun webResearchStartsWithActualSearchRatherThanGuessedHomepage() {
+        val profile = TaskIntentRouter.route("знайди в інтернеті актуальні інструменти AI")
+        assertEquals(TaskIntent.PUBLIC_WEB, profile.intent)
+        assertEquals("web.search", profile.preflight?.tool)
+        assertTrue(profile.preflight?.mandatory == true)
+        assertTrue(profile.preflight?.args?.get("query").orEmpty().contains("інструменти AI"))
+        assertTrue("web.read" in profile.recommendedTools)
+    }
+
+    @Test
     fun ordinaryConversationStaysGeneral() {
         val profile = TaskIntentRouter.route("поясни мені різницю між RAM і SSD")
 

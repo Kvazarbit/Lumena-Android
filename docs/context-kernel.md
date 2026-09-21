@@ -1,4 +1,4 @@
-# Local context kernel v1 / Core DNA v2
+# Local context kernel v1 / Core DNA v3
 
 The cognitive exoskeleton is a deterministic runtime around a fallible model.
 It preserves task-local execution evidence separately from model prose and
@@ -41,9 +41,11 @@ is not a supported monitoring mode of this finite agent loop.
 
 Tool envelopes are checked for mismatched tool names and nonzero exit status.
 A claimed successful batch also requires nonempty successful child results.
-Transport errors are marked outcome-unknown and terminate the run; they do not
-produce a positive or negative learned-experience vote. This deliberately does
-not promise exactly-once execution across a network failure.
+Transport errors for mutating/executable/unknown tools are marked outcome-unknown
+and terminate the run; they do not produce an experience vote. Build 22 permits
+one explicit retry for READ_ONLY calls only. A final failed read closes its marker
+with a failure (no usable result), allowing bounded recovery. Neither path promises
+exactly-once execution across a network failure. See [web-search.md](web-search.md).
 
 ## Durable local state
 
@@ -63,8 +65,8 @@ kernel field load with an empty ledger. Work reports include the capsule.
 
 ## DNA and learned landscape
 
-The seven engineering priors remain goal, protocol, evidence, verification,
-bounded recovery, resources, and authority. Core v2 explicitly includes partial
+The engineering priors are goal, protocol, evidence, verification, bounded recovery,
+resources, authority, and (v3) sources/uncertainty. Core v2 introduced partial
 completion and unknown-effect handling. The existing scoped experience landscape
 continues to learn only from returned tool results, under its existing support,
 expiry and manual-exclusion rules. Learned advice cannot modify kernel gates.

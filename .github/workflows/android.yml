@@ -69,7 +69,7 @@ jobs:
       - name: Validate Termux bridge
         run: |
           python -m py_compile termux/bridge.py
-          python -m unittest discover -s termux -p 'test_context_kernel.py' -v
+          python -m unittest discover -s termux -p 'test_*.py' -v
           python - <<'PY'
           import importlib.util
           import json

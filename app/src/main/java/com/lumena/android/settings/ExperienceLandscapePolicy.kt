@@ -67,7 +67,7 @@ object ExperienceLandscapePolicy {
     const val MAX_OBSERVATIONS = 1024
     private val promotableTools = setOf(
         "python.syntax_check", "python.tests", "file.read", "file.list", "file.search",
-        "git.status", "git.diff", "image.search", "http.get", "http.json",
+        "git.status", "git.diff", "image.search", "http.get", "http.json", "web.search", "web.read",
         "context.snapshot", "workspace.list", "ollama.status", "system.info", "process.status"
     )
 

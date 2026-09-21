@@ -132,11 +132,19 @@ object TaskIntentRouter {
                 intent = TaskIntent.PUBLIC_WEB,
                 confidence = 72,
                 recommendedTools = listOf(
+                    "web.search",
+                    "web.read",
                     "http.json",
                     "http.get",
                     "image.search"
                 ),
-                guidance = "Use structured HTTPS APIs when available; never claim fresh public data without a real fetch."
+                guidance = "Search with web.search; read relevant source URLs with web.read or documented http.json APIs. Cite fetched URLs, compare sources for current claims. Snippets/homepages do not prove popularity or profit. If evidence is missing, report partial; distinguish observed failures from hypotheses.",
+                preflight = if ("https://" in lower || "http://" in lower) null else IntentPreflight(
+                    tool = "web.search",
+                    args = mapOf("query" to goal.trim().replace(Regex("\\s+"), " ").take(400)),
+                    reason = "Find real source URLs before making current public claims.",
+                    mandatory = true
+                )
             )
         }
 

@@ -6,9 +6,10 @@ reasoning, generate new executable procedures, or change permissions.
 
 ## Initial project DNA
 
-`lumena-core-v1` is a seven-principle engineering seed: goal/constraints (G),
+`lumena-core-v3` is an eight-principle engineering seed: goal/constraints (G),
 one protocol action (P), execution evidence (E), same-target verification (V),
-bounded recovery (R), resource/context limits (M), and authority boundaries (A).
+bounded recovery (R), resource/context limits (M), authority boundaries (A), and
+sources/uncertainty (S). V1 introduced the first seven; v3 adds the source rule.
 Every short code is accompanied by its plain-language meaning in the agent
 prompt. These are project priors with zero fabricated observations, not claims
 of learned success. The dynamic context includes this seed before learned
