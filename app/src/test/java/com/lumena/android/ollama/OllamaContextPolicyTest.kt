@@ -58,6 +58,18 @@ class OllamaContextPolicyTest {
     }
 
     @Test
+    fun retryShrinksPromptBudgetEvenWhenHardwareAlreadyUsesSmallContext() {
+        val constrained = profile(available = 1.5, lowMemory = true)
+        val normal = OllamaContextPolicy.budget(constrained, retry = false)
+        val retry = OllamaContextPolicy.budget(constrained, retry = true)
+
+        assertEquals(normal.options.num_ctx, retry.options.num_ctx)
+        assertEquals(normal.options.num_predict, retry.options.num_predict)
+        assertTrue(retry.maxChars < normal.maxChars)
+        assertTrue(retry.maxPerMessage <= normal.maxPerMessage)
+    }
+
+    @Test
     fun adaptiveBudgetReservesPredictionAndSafetyTokens() {
         val budget = OllamaContextPolicy.budget(profile(), retry = false)
         val reserveTokens = maxOf(128, budget.options.num_ctx / 16)
