@@ -210,15 +210,6 @@ class WorkflowRunner(
                         )
                     }
 
-                    transition.partialReason?.let { reason ->
-                        return WorkflowOutcome.Finished(
-                            reason,
-                            current,
-                            state,
-                            images = collectedImages.toList()
-                        )
-                    }
-
                     transition.stopReason?.let { reason ->
                         return WorkflowOutcome.Failed(reason, current, state)
                     }
@@ -420,6 +411,15 @@ class WorkflowRunner(
                         stderr = result.stderr,
                         error = result.error
                     )
+
+                    transition.partialReason?.let { reason ->
+                        return WorkflowOutcome.Finished(
+                            reason,
+                            current,
+                            state,
+                            images = collectedImages.toList()
+                        )
+                    }
 
                     transition.stopReason?.let { reason ->
                         return WorkflowOutcome.Failed(reason, current, state)
