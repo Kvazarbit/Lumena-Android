@@ -2,16 +2,57 @@ name: Android CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, "feature/**" ]
   pull_request:
-    branches: [ main, 'feature/**' ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  native-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Build host CPU bridge and test JNI failure boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/sync_llama_cpp.sh
+          cmake -S third_party/llama.cpp -B /tmp/lumena-native-smoke \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_VULKAN=OFF \
+            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_APP=OFF
+          cmake --build /tmp/lumena-native-smoke --target llama -j 2
+          g++ -std=c++17 -fPIC -shared app/src/main/cpp/lumena_llama.cpp \
+            -I"$JAVA_HOME/include" -I"$JAVA_HOME/include/linux" \
+            -Ithird_party/llama.cpp/include -Ithird_party/llama.cpp/ggml/include \
+            /tmp/lumena-native-smoke/src/libllama.a \
+            /tmp/lumena-native-smoke/ggml/src/libggml.a \
+            /tmp/lumena-native-smoke/ggml/src/libggml-cpu.a \
+            /tmp/lumena-native-smoke/ggml/src/libggml-base.a \
+            -fopenmp -pthread -ldl -lm -o /tmp/lumena-native-smoke/liblumena_llama.so
+          mkfifo /tmp/lumena-native-smoke/model-pipe
+          java --add-opens=java.base/java.io=ALL-UNNAMED \
+            -Djava.library.path=/tmp/lumena-native-smoke \
+            app/src/testNative/java/LlamaNative.java /tmp/lumena-native-smoke/model-pipe
+
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       ANDROID_HOME: /usr/local/lib/android/sdk
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-java@v5
@@ -21,23 +62,243 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+      - name: Install Vulkan host build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslc spirv-headers libvulkan-dev
       - name: Validate Termux bridge
         run: |
           python -m py_compile termux/bridge.py
+          python -m unittest discover -s termux -p 'test_*.py' -v
+          python - <<'PY'
+          import importlib.util
+          import json
+          import os
+          from pathlib import Path
+
+          repo_root = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          os.environ["LUMENA_READONLY_ROOTS"] = str(repo_root)
+
+          spec = importlib.util.spec_from_file_location("lumena_bridge", "termux/bridge.py")
+          bridge = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(bridge)
+
+          assert bridge.system_info()["ok"] is True
+          assert bridge.file_list({})["ok"] is True
+
+          alias = f"@{repo_root.name}"
+          assert bridge.safe_read_path(alias, must_exist=True) == repo_root
+          assert bridge.file_list({"path": alias, "depth": "1", "limit": "20"})["ok"] is True
+          assert alias in bridge.workspace_listing()
+          assert bridge.execute_tool("git.status", {"cwd": alias})["ok"] is True
+          assert bridge.process_status({})["ok"] is True
+          assert bridge.context_snapshot({"refresh": "true"})["ok"] is True
+
+          batch = bridge.inspect_batch({
+              "requests": [
+                  {"tool": "health", "args": {}},
+                  {"tool": "system.time", "args": {}},
+                  {"tool": "git.status", "args": {"cwd": alias}},
+              ]
+          })
+          assert batch["ok"] is True
+
+          try:
+              bridge.inspect_batch({
+                  "requests": [{"tool": "file.write", "args": {"path": "x", "content": "bad"}}]
+              })
+          except ValueError:
+              pass
+          else:
+              raise AssertionError("inspect.batch must reject mutating tools")
+
+          try:
+              bridge.safe_path(str(repo_root), must_exist=True)
+          except ValueError:
+              pass
+          else:
+              raise AssertionError("Read-only repo root must not be writable through safe_path")
+
+          try:
+              bridge._validated_public_https_url("http://example.com")
+          except ValueError:
+              pass
+          else:
+              raise AssertionError("http.json must reject non-HTTPS URLs")
+
+          try:
+              bridge._validated_public_https_url("https://127.0.0.1/test")
+          except ValueError:
+              pass
+          else:
+              raise AssertionError("http.json must reject loopback destinations")
+
+          try:
+              bridge.file_search({"query": ""})
+          except ValueError:
+              pass
+          else:
+              raise AssertionError("file.search must reject an empty query")
+
+          try:
+              bridge.image_search({"query": ""})
+          except ValueError:
+              pass
+          else:
+              raise AssertionError("image.search must reject an empty query")
+
+          fake_payload = {
+              "query": {
+                  "pages": [{
+                      "title": "File:Portrait.jpg",
+                      "imageinfo": [{
+                          "thumburl": "https://upload.wikimedia.org/example-thumb.jpg",
+                          "url": "https://upload.wikimedia.org/example.jpg",
+                          "descriptionurl": "https://commons.wikimedia.org/wiki/File:Portrait.jpg",
+                          "mime": "image/jpeg",
+                          "width": 1200,
+                          "height": 800,
+                      }],
+                  }]
+              }
+          }
+
+          class FakeResponse:
+              def __enter__(self):
+                  return self
+
+              def __exit__(self, exc_type, exc, tb):
+                  return False
+
+              def read(self, _limit):
+                  import json
+                  return json.dumps(fake_payload).encode("utf-8")
+
+          class FakeOpener:
+              def open(self, _request, timeout=None):
+                  return FakeResponse()
+
+          old_opener = bridge.PUBLIC_HTTPS_OPENER
+          bridge.PUBLIC_HTTPS_OPENER = FakeOpener()
+          try:
+              image_result = bridge.image_search({
+                  "query": "woman portrait",
+                  "limit": "2",
+              })
+              assert image_result["ok"] is True
+              image_payload = json.loads(image_result["stdout"])
+              assert image_payload["display_ready"] is True
+              assert len(image_payload["images"]) == 1
+              assert image_payload["images"][0]["thumbnail_url"].startswith(
+                  "https://upload.wikimedia.org/"
+              )
+              assert image_payload["images"][0]["source_page"].startswith(
+                  "https://commons.wikimedia.org/"
+              )
+          finally:
+              bridge.PUBLIC_HTTPS_OPENER = old_opener
+
+          assert bridge._image_query_variants(
+              "micro bikini beach photography"
+          )[1] == "micro bikini beach"
+
+          openverse_payload = {
+              "results": [{
+                  "id": "abc-123",
+                  "title": "Beach portrait",
+                  "thumbnail": "https://api.openverse.org/v1/images/abc-123/thumb/",
+                  "filetype": "jpeg",
+                  "width": 1024,
+                  "height": 768,
+                  "license": "cc-by",
+                  "creator": "Example",
+              }]
+          }
+          empty_wikimedia = {"query": {"pages": []}}
+
+          class FallbackOpener:
+              def open(self, request, timeout=None):
+                  class Response:
+                      def __init__(self, payload):
+                          self.payload = payload
+
+                      def __enter__(self):
+                          return self
+
+                      def __exit__(self, exc_type, exc, tb):
+                          return False
+
+                      def read(self, _limit):
+                          return json.dumps(self.payload).encode("utf-8")
+
+                  url = request.full_url
+                  if "commons.wikimedia.org" in url:
+                      return Response(empty_wikimedia)
+                  if "api.openverse.org" in url:
+                      return Response(openverse_payload)
+                  raise AssertionError(f"unexpected image provider URL: {url}")
+
+          old_opener = bridge.PUBLIC_HTTPS_OPENER
+          bridge.PUBLIC_HTTPS_OPENER = FallbackOpener()
+          try:
+              fallback = bridge.image_search({
+                  "query": "micro bikini beach photography",
+                  "limit": "4",
+              })
+              assert fallback["ok"] is True
+              fallback_payload = json.loads(fallback["stdout"])
+              assert fallback_payload["display_ready"] is True
+              assert "Openverse" in fallback_payload["providers_used"]
+              assert "micro bikini beach" in fallback_payload["queries_tried"]
+              assert len(fallback_payload["images"]) == 1
+              assert fallback_payload["images"][0]["thumbnail_url"].startswith(
+                  "https://api.openverse.org/"
+              )
+              assert fallback_payload["images"][0]["source_page"].startswith(
+                  "https://openverse.org/image/"
+              )
+          finally:
+              bridge.PUBLIC_HTTPS_OPENER = old_opener
+          PY
           bash -n termux/install_bridge.sh
           bash -n termux/ollama_sidecar.sh
+          bash -n scripts/sync_llama_cpp.sh
+      - name: Sync pinned llama.cpp source
+        run: bash scripts/sync_llama_cpp.sh
       - name: Install Android SDK packages
         run: |
           SDKMANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
           test -x "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
       - name: Run agent core unit tests
-        run: gradle testDebugUnitTest
+        run: gradle --max-workers=2 testDebugUnitTest
       - name: Build debug APK
-        run: gradle assembleDebug
+        run: gradle --max-workers=2 assembleDebug
+      - name: Verify APK and embedded native library
+        run: |
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          unzip -l "$APK" | grep 'lib/arm64-v8a/liblumena_llama.so'
+          unzip -p "$APK" lib/arm64-v8a/liblumena_llama.so > /tmp/liblumena_llama.so
+          strings /tmp/liblumena_llama.so | grep -F 'llama.cpp embedded adaptive + vulkan'
+          strings /tmp/liblumena_llama.so | grep -F 'load_policy=cpu-mmap-no-extra-bufts'
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "$APK"
+          mkdir -p dist
+          cp "$APK" dist/Lumena-v0.12.3-arm64-debug.apk
+          (cd dist && sha256sum Lumena-v0.12.3-arm64-debug.apk > SHA256SUMS.txt)
+          printf 'App commit: %s\nllama.cpp commit: %s\n' "$(git rev-parse HEAD)" "$(git -C third_party/llama.cpp rev-parse HEAD)" > dist/BUILD-INFO.txt
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Lumena-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: Lumena-v0.12.3-arm64-debug
+          path: dist/
+          if-no-files-found: error
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: app/build/reports/tests/
+          if-no-files-found: ignore

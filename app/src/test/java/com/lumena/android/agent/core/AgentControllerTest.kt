@@ -16,7 +16,13 @@ class AgentControllerTest {
 
     @Test
     fun ordinaryReplyCanFinishBeforeToolWork() {
-        val state = controller.initial(task())
+        val conversational = TaskState(
+            id = "chat",
+            projectId = null,
+            goal = "Поясни різницю між RAM і SSD",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val state = controller.initial(conversational)
         val instruction = controller.interpret("{\"reply\":\"hello\"}", state)
         assertTrue(instruction is ControllerInstruction.Finish)
     }
@@ -54,6 +60,7 @@ class AgentControllerTest {
         var state = controller.initial(task()).copy(
             toolUsed = true,
             verificationRequired = true,
+            pendingPythonPaths = setOf("demo.py"),
             verificationReason = "verify python"
         )
         val call = AgentDecision.ToolCall(
@@ -75,6 +82,462 @@ class AgentControllerTest {
     }
 
     @Test
+    fun verificationIsBoundToEachChangedPathAndReopenedAfterAnotherWrite() {
+        fun apply(state: AgentControlState, tool: String, key: String, path: String, ok: Boolean = true) =
+            controller.afterTool(state, AgentDecision.ToolCall(tool, mapOf(key to path)),
+                ok, "", "", null).state
+
+        var state = apply(controller.initial(task()), "file.write", "path", "A.py")
+        state = apply(state, "file.patch", "path", "B.py")
+        state = apply(state, "python.syntax_check", "script", "unrelated.py")
+        state = apply(state, "python.tests", "cwd", ".")
+        assertTrue(state.pendingPythonPaths == setOf("A.py", "B.py"))
+        state = apply(state, "python.syntax_check", "script", "a.py")
+        assertTrue(state.pendingPythonPaths.contains("A.py"))
+        state = apply(state, "python.syntax_check", "script", "./A.py")
+        assertTrue(state.verificationRequired)
+        state = apply(state, "python.syntax_check", "script", "B.py", ok = false)
+        assertTrue(state.verificationRequired)
+        state = apply(state, "python.syntax_check", "script", "B.py")
+        assertFalse(state.verificationRequired)
+        state = apply(state, "file.patch", "path", "A.py")
+        assertTrue(state.verificationRequired)
+    }
+
+    @Test
+    fun visualReplyCannotBypassPendingCodeVerification() {
+        val state = controller.initial(task().copy(goal = "Find a photo of a cat")).copy(
+            toolUsed = true, visualEvidenceReady = true,
+            verificationRequired = true, pendingPythonPaths = setOf("demo.py")
+        )
+        assertTrue(controller.interpret("Here is the photo", state) is ControllerInstruction.AskModelAgain)
+    }
+
+    @Test
+    fun memoryAndNativeGenerationFailuresStopWithoutUnchangedRetry() {
+        for (message in listOf(
+            "Not enough free RAM to load this GGUF safely.",
+            "Embedded generation failed. llama_decode failed; partial output discarded."
+        )) {
+            assertTrue(controller.onModelFailure(controller.initial(task()), message) is ControllerInstruction.Stop)
+        }
+    }
+
+    @Test
+    fun successfulPythonRecoveryReservesVerificationSteps() {
+        val recoveredState = controller.initial(task()).copy(
+            pythonFailures = 1,
+            task = task().copy(
+                status = TaskStatus.WAITING_MODEL,
+                step = 3,
+                maxSteps = 4,
+                errors = listOf("ModuleNotFoundError: No module named requests")
+            )
+        )
+        val call = AgentDecision.ToolCall(
+            tool = "python.run",
+            args = mapOf("script" to "install_dependency.py")
+        )
+
+        val after = controller.afterTool(
+            recoveredState,
+            call,
+            ok = true,
+            stdout = "dependency installed",
+            stderr = "",
+            error = null
+        ).state
+
+        assertTrue(after.task.maxSteps >= 6)
+        assertTrue(after.task.canContinue)
+        assertTrue(after.pythonFailures == 0)
+    }
+
+    @Test
+    fun taskAllowsFinalModelTurnAtToolLimit() {
+        val atLimit = task().copy(
+            status = TaskStatus.WAITING_MODEL,
+            step = 4,
+            maxSteps = 4
+        )
+        assertTrue(atLimit.canContinue)
+
+        val state = controller.initial(atLimit).copy(toolUsed = true)
+        val done = controller.interpret("""{"done":true,"summary":"verified"}""", state)
+        assertTrue(done is ControllerInstruction.Finish)
+    }
+
+    @Test
+    fun extraToolAtLimitGetsOneConclusionTurnAfterVerifiedResult() {
+        val atLimit = controller.initial(task().copy(maxSteps = 5)).copy(
+            toolUsed = true,
+            task = task().copy(
+                status = TaskStatus.WAITING_MODEL,
+                step = 5,
+                maxSteps = 5,
+                lastTool = "python.run",
+                lastResult = "ok=true stdout=Cleanup script deleted"
+            )
+        )
+
+        val correction = controller.interpret(
+            """{"tool":"python.run","args":{"script":"last_step.py"},"reason":"cleanup again"}""",
+            atLimit
+        )
+        assertTrue(correction is ControllerInstruction.AskModelAgain)
+        correction as ControllerInstruction.AskModelAgain
+        assertTrue(correction.feedback.contains("was not executed"))
+        assertTrue(correction.feedback.contains("Do not request another tool"))
+
+        val done = controller.interpret(
+            """{"done":true,"summary":"Очищення виконано і перевірено."}""",
+            correction.state
+        )
+        assertTrue(done is ControllerInstruction.Finish)
+
+        val repeated = controller.interpret(
+            """{"tool":"python.run","args":{"script":"another_cleanup.py"}}""",
+            correction.state
+        )
+        assertTrue(repeated is ControllerInstruction.Stop)
+    }
+
+    @Test
+    fun pendingVerificationNeverGetsConclusionShortcutAtToolLimit() {
+        val atLimit = controller.initial(task().copy(maxSteps = 5)).copy(
+            toolUsed = true,
+            verificationRequired = true,
+            verificationReason = "verify demo.py",
+            pendingPythonPaths = setOf("demo.py"),
+            task = task().copy(status = TaskStatus.WAITING_MODEL, step = 5, maxSteps = 5)
+        )
+
+        val instruction = controller.interpret(
+            """{"tool":"python.syntax_check","args":{"script":"demo.py"}}""",
+            atLimit
+        )
+        assertTrue(instruction is ControllerInstruction.AskModelAgain)
+        val corrected = instruction.state
+        assertTrue(controller.interpret("""{"done":true,"summary":"ok"}""", corrected) is ControllerInstruction.AskModelAgain)
+        val partial = controller.interpret("""{"partial":true,"summary":"demo.py still needs verification"}""", corrected)
+        assertTrue(partial is ControllerInstruction.Finish)
+        assertTrue(partial.state.task.status == TaskStatus.PARTIAL)
+    }
+
+    @Test
+    fun verifiedExperienceIsInjectedIntoDynamicContext() {
+        val state = controller.initial(task())
+        val context = controller.dynamicContext(
+            state,
+            relevantMemory = listOf(
+                "NEGATIVE unresolved · python.run · target=script=demo.py · failure: missing dependency · seen=1x",
+                "POSITIVE verified · git.status · target=cwd=@Lumena-Android · success: clean · seen=2x"
+            )
+        )
+
+        assertTrue(context.contains("RELEVANT VERIFIED MEMORY"))
+        assertTrue(context.contains("NEGATIVE unresolved"))
+        assertTrue(context.contains("POSITIVE verified"))
+        assertTrue(context.contains("script=demo.py"))
+    }
+
+    @Test
+    fun failedWebSearchBecomesBoundedSemanticRecoveryInsteadOfTaskFailure() {
+        val webTask = TaskState(
+            id = "web-fail",
+            projectId = null,
+            goal = "Знайди останні новини в інтернеті",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val call = AgentDecision.ToolCall(
+            tool = "web.search",
+            args = mapOf("query" to "останні новини")
+        )
+        val initial = controller.initial(webTask)
+        val executing = initial.copy(
+            task = initial.task.copy(
+                status = TaskStatus.EXECUTING,
+                kernel = ContextKernel.before(initial.task.kernel, call)
+            )
+        )
+
+        val transition = controller.afterTool(
+            state = executing,
+            call = call,
+            ok = false,
+            stdout = """{"query":"останні новини","results":[],"attempts":[{"provider":"duckduckgo","error":"Upstream HTTP 202"}]}""",
+            stderr = "",
+            error = "Search unavailable. Do not invent current facts.",
+            errorCode = "SEARCH_EXHAUSTED",
+            failureClass = "DEPENDENCY_EXHAUSTED",
+            retryable = false,
+            dependency = "web.search"
+        )
+
+        assertTrue(transition.stopReason == null)
+        assertTrue(transition.partialReason == null)
+        assertTrue(transition.state.task.status == TaskStatus.WAITING_MODEL)
+        assertTrue(transition.state.task.lastTool == "web.search")
+        assertTrue(transition.state.task.kernel.inFlight == null)
+        assertTrue(transition.state.semanticRecoverySpent == 1)
+        assertTrue(transition.state.actionFamilyFailures["web.search"] == 1)
+        assertTrue(transition.state.recoveryHint.orEmpty().contains("provider", ignoreCase = true))
+    }
+
+    @Test
+    fun secondFailedSearchVariantDegradesPartialWithoutThirdLoop() {
+        val webTask = TaskState(
+            id = "web-two",
+            projectId = null,
+            goal = "Знайди останні новини в інтернеті",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val first = AgentDecision.ToolCall(
+            tool = "web.search",
+            args = mapOf("query" to "останні новини")
+        )
+        val initial = controller.initial(webTask)
+        val firstExecuting = initial.copy(
+            task = initial.task.copy(
+                status = TaskStatus.EXECUTING,
+                kernel = ContextKernel.before(initial.task.kernel, first)
+            )
+        )
+        val afterFirst = controller.afterTool(
+            state = firstExecuting,
+            call = first,
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "Search unavailable",
+            errorCode = "SEARCH_EXHAUSTED",
+            failureClass = "DEPENDENCY_EXHAUSTED"
+        ).state
+
+        val second = AgentDecision.ToolCall(
+            tool = "web.search",
+            args = mapOf("query" to "головні світові новини сьогодні")
+        )
+        val secondExecuting = afterFirst.copy(
+            task = afterFirst.task.copy(
+                status = TaskStatus.EXECUTING,
+                kernel = ContextKernel.before(afterFirst.task.kernel, second)
+            )
+        )
+        val afterSecond = controller.afterTool(
+            state = secondExecuting,
+            call = second,
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "Search unavailable",
+            errorCode = "SEARCH_EXHAUSTED",
+            failureClass = "DEPENDENCY_EXHAUSTED"
+        )
+
+        assertTrue(afterSecond.stopReason == null)
+        assertTrue(afterSecond.partialReason != null)
+        assertTrue(afterSecond.state.task.status == TaskStatus.PARTIAL)
+        assertTrue(afterSecond.state.semanticRecoverySpent == 2)
+        assertTrue(afterSecond.state.actionFamilyFailures["web.search"] == 2)
+    }
+
+    @Test
+    fun successfulWebSearchStillReturnsControlToModelForSourceReading() {
+        val webTask = TaskState(
+            id = "web-ok",
+            projectId = null,
+            goal = "Знайди новини в інтернеті",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val call = AgentDecision.ToolCall(
+            tool = "web.search",
+            args = mapOf("query" to "новини")
+        )
+        val initial = controller.initial(webTask)
+        val executing = initial.copy(
+            task = initial.task.copy(
+                status = TaskStatus.EXECUTING,
+                kernel = ContextKernel.before(initial.task.kernel, call)
+            )
+        )
+
+        val transition = controller.afterTool(
+            state = executing,
+            call = call,
+            ok = true,
+            stdout = """{"results":[{"url":"https://example.org","title":"Example"}]}""",
+            stderr = "",
+            error = null
+        )
+
+        assertTrue(transition.stopReason == null)
+        assertTrue(transition.state.task.status == TaskStatus.WAITING_MODEL)
+        assertTrue(transition.state.task.kernel.inFlight == null)
+    }
+
+    @Test
+    fun exhaustedContextErrorStopsInsteadOfStartingControllerRetryLoop() {
+        val instruction = controller.onModelFailure(
+            controller.initial(task()),
+            "Ollama stream error: context length exceeded; prompt has too many tokens"
+        )
+
+        assertTrue(instruction is ControllerInstruction.Stop)
+        assertTrue(instruction.state.task.status == TaskStatus.FAILED)
+        assertTrue(instruction.state.modelFailures == 1)
+    }
+
+    @Test
+    fun imageGoalCannotFinishBeforeImageSearch() {
+        val visualTask = TaskState(
+            id = "img",
+            projectId = null,
+            goal = "знайди фото жінки в інтернеті і покажи",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val state = controller.initial(visualTask)
+
+        val done = controller.interpret(
+            """{"done":true,"summary":"Ось посилання"}""",
+            state
+        )
+
+        assertTrue(done is ControllerInstruction.AskModelAgain)
+    }
+
+    @Test
+    fun successfulImageSearchSatisfiesVisualGoal() {
+        val visualTask = TaskState(
+            id = "img-ok",
+            projectId = null,
+            goal = "знайди фото жінки в інтернеті і покажи",
+            status = TaskStatus.WAITING_MODEL
+        )
+        var state = controller.initial(visualTask)
+        val call = AgentDecision.ToolCall(
+            tool = "image.search",
+            args = mapOf("query" to "woman portrait")
+        )
+
+        state = controller.afterTool(
+            state = state,
+            call = call,
+            ok = true,
+            stdout = """{"display_ready":true,"images":[{"thumbnail_url":"https://upload.wikimedia.org/example.jpg"}]}""",
+            stderr = "",
+            error = null
+        ).state
+
+        assertTrue(state.visualEvidenceReady)
+
+        val done = controller.interpret(
+            """{"done":true,"summary":"Знайшла фото нижче."}""",
+            state
+        )
+        assertTrue(done is ControllerInstruction.Finish)
+    }
+
+    @Test
+    fun plainReplyMayFinishAfterVerifiedVisualEvidence() {
+        val visualTask = TaskState(
+            id = "img-reply",
+            projectId = null,
+            goal = "знайди фото жінки в інтернеті і покажи",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val state = controller.initial(visualTask).copy(
+            toolUsed = true,
+            visualEvidenceReady = true
+        )
+
+        val instruction = controller.interpret(
+            """{"reply":"Ось знайдені фото."}""",
+            state
+        )
+
+        assertTrue(instruction is ControllerInstruction.Finish)
+    }
+
+    @Test
+    fun initialStateCarriesDeterministicIntentRecipe() {
+        val visualTask = TaskState(
+            id = "intent",
+            projectId = null,
+            goal = "знайди фото жінки і покажи",
+            status = TaskStatus.WAITING_MODEL
+        )
+
+        val state = controller.initial(visualTask)
+        val context = controller.dynamicContext(state)
+
+        assertTrue(state.intent == TaskIntent.VISUAL_SEARCH)
+        assertTrue(state.intentConfidence == 100)
+        assertTrue("image.search" in state.recommendedTools)
+        assertTrue(context.contains("TASK RECIPE"))
+        assertTrue(context.contains("intent=VISUAL_SEARCH"))
+        assertTrue(context.contains("recommended_tools=image.search"))
+    }
+
+    @Test
+    fun failedToolProducesRecoveryGuidanceInDynamicContext() {
+        val fileTask = TaskState(
+            id = "recover",
+            projectId = null,
+            goal = "знайди файл missing.txt і прочитай його",
+            status = TaskStatus.WAITING_MODEL
+        )
+        var state = controller.initial(fileTask)
+        val call = AgentDecision.ToolCall(
+            tool = "file.read",
+            args = mapOf("path" to "missing.txt")
+        )
+
+        state = controller.afterTool(
+            state = state,
+            call = call,
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "FileNotFoundError: No such file"
+        ).state
+
+        val context = controller.dynamicContext(state)
+
+        assertTrue(state.recoveryHint.orEmpty().contains("workspace.list"))
+        assertTrue(context.contains("RECOVERY GUIDANCE"))
+        assertTrue(context.contains("file.search"))
+    }
+
+    @Test
+    fun longEmbeddedLoadErrorIsNonRetryableBeforeTruncation() {
+        val state = controller.initial(
+            TaskState(
+                id = "load-fail",
+                projectId = null,
+                goal = "Answer using the selected local model",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        val hugeTail = buildString {
+            repeat(200) {
+                append("create_tensor: loading tensor blk.38.ffn_up.input_scale\n")
+            }
+        }
+        val instruction = controller.onModelFailure(
+            state,
+            "Embedded model load failed. GGUF metadata is readable, but the full model load failed before inference started.\n" +
+                hugeTail
+        )
+
+        assertTrue(instruction is ControllerInstruction.Stop)
+        assertFalse(instruction is ControllerInstruction.AskModelAgain)
+        val stopped = instruction as ControllerInstruction.Stop
+        assertTrue(stopped.reason.contains("Embedded model load failed"))
+        assertTrue(stopped.reason.contains("technical log omitted"))
+    }
+
+    @Test
     fun repeatedIdenticalCallsAreStopped() {
         var state = controller.initial(task())
         val raw = """{"tool":"workspace.list","args":{},"reason":"inspect"}"""
@@ -89,9 +552,90 @@ class AgentControllerTest {
     }
 
     @Test
+    fun proseWrappedToolJsonIsCorrectedInsteadOfShownAsReply() {
+        val state = controller.initial(task())
+        val raw = """
+            I will verify the loaded model now.
+
+            {"plan":["verify"],"tool":"ollama.status","args":{},"reason":"Check loaded model"}
+        """.trimIndent()
+
+        val instruction = controller.interpret(raw, state)
+
+        assertTrue(instruction is ControllerInstruction.AskModelAgain)
+    }
+
+    @Test
     fun proseCannotFinishAfterToolWork() {
         val state = controller.initial(task()).copy(toolUsed = true)
         val instruction = controller.interpret("Looks good, done!", state)
         assertTrue(instruction is ControllerInstruction.AskModelAgain)
     }
+    @Test
+    fun failedNonWebToolCannotEraseExistingModelFailureBudget() {
+        val initial = controller.initial(task()).copy(modelFailures = 2)
+        val transition = controller.afterTool(
+            state = initial,
+            call = AgentDecision.ToolCall(
+                tool = "file.read",
+                args = mapOf("path" to "missing.txt")
+            ),
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "FileNotFoundError"
+        )
+
+        assertTrue(transition.stopReason == null)
+        assertTrue(transition.state.modelFailures == 2)
+
+        val nextFailure = controller.onModelFailure(
+            transition.state,
+            "temporary model transport failure"
+        )
+        assertTrue(nextFailure is ControllerInstruction.Stop)
+    }
+
+    @Test
+    fun toolResultDoesNotOwnModelRuntimeFailureCounter() {
+        val initial = controller.initial(task()).copy(modelFailures = 2)
+        val transition = controller.afterTool(
+            state = initial,
+            call = AgentDecision.ToolCall(
+                tool = "workspace.list",
+                args = emptyMap()
+            ),
+            ok = true,
+            stdout = "workspace ok",
+            stderr = "",
+            error = null
+        )
+
+        assertTrue(transition.stopReason == null)
+        assertTrue(transition.state.modelFailures == 2)
+
+        val modelRecovered = controller.interpret(
+            """{"tool":"workspace.list","args":{},"reason":"model generated a valid next action"}""",
+            initial
+        )
+        assertTrue(modelRecovered is ControllerInstruction.Execute)
+        modelRecovered as ControllerInstruction.Execute
+        assertTrue(modelRecovered.state.modelFailures == 0)
+    }
+
+    @Test
+    fun alternateOllamaContextPressureMessagesRemainNonRetryableAtControllerLayer() {
+        for (message in listOf(
+            "Ollama stream error: requested tokens exceed model capacity",
+            "Ollama stream error: input exceeds the context limit",
+            "Ollama stream error: invalid num_ctx for request"
+        )) {
+            val instruction = controller.onModelFailure(
+                controller.initial(task()),
+                message
+            )
+            assertTrue(instruction is ControllerInstruction.Stop)
+        }
+    }
+
 }

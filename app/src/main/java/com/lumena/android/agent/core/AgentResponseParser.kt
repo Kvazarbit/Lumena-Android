@@ -17,6 +17,7 @@ class AgentResponseParser {
             Any::class.java
         )
     )
+    private val anyAdapter = moshi.adapter(Any::class.java)
 
     fun parse(raw: String): AgentDecision {
         val text = raw.trim()
@@ -26,6 +27,10 @@ class AgentResponseParser {
         val obj = runCatching { mapAdapter.fromJson(candidate) }.getOrNull()
             ?: return AgentDecision.Reply(text)
 
+        if (obj["partial"] == true) {
+            return AgentDecision.Partial(obj["summary"]?.toString()?.trim().orEmpty()
+                .ifBlank { "Task incomplete; inspect the recorded results before continuing." })
+        }
         if (obj["done"] == true) {
             val summary = obj["summary"]?.toString()?.trim().orEmpty()
             return AgentDecision.Done(summary.ifBlank { "Task complete." })
@@ -37,17 +42,27 @@ class AgentResponseParser {
 
         // Lumena JSON: {"tool":"file.read","args":{...}}
         // Hermes/OpenAI-style content fallback: {"name":"file.read","arguments":{...}}
-        val tool = (obj["tool"] ?: obj["name"])?.toString()?.trim().orEmpty()
+        // Some small models emit {"web.search":{...}}. Normalize only a single
+        // registered tool with object arguments; controller validation still applies.
+        val shorthand = obj.entries.singleOrNull()?.takeIf {
+            ToolRegistry.get(it.key) != null && it.value is Map<*, *>
+        }
+        val tool = (obj["tool"] ?: obj["name"] ?: shorthand?.key)?.toString()?.trim().orEmpty()
         if (tool.isBlank()) return AgentDecision.Reply(text)
 
-        val rawArgs = when (val value = obj["args"] ?: obj["arguments"]) {
+        val rawArgs = when (val value = obj["args"] ?: obj["arguments"] ?: shorthand?.value) {
             is Map<*, *> -> value
             is String -> runCatching { mapAdapter.fromJson(value) }.getOrNull() ?: emptyMap<String, Any?>()
             else -> emptyMap<String, Any?>()
         }
         val args = buildMap {
             rawArgs.forEach { (key, value) ->
-                if (key != null && value != null) put(key.toString(), value.toString())
+                if (key == null || value == null) return@forEach
+                val rendered = when (value) {
+                    is Map<*, *>, is List<*> -> anyAdapter.toJson(value)
+                    else -> value.toString()
+                }
+                put(key.toString(), rendered)
             }
         }
         val reason = obj["reason"]?.toString()?.trim().orEmpty()

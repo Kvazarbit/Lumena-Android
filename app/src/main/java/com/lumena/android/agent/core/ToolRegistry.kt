@@ -23,12 +23,24 @@ data class ToolValidation(
 object ToolRegistry {
     private val specs = listOf(
         ToolSpec("health", ToolRisk.READ_ONLY, description = "Check the local Termux bridge."),
-        ToolSpec("workspace.list", ToolRisk.READ_ONLY, description = "List projects and files in the workspace root."),
-        ToolSpec("file.read", ToolRisk.READ_ONLY, setOf("path"), "Read a text file inside the workspace."),
-        ToolSpec("git.status", ToolRisk.READ_ONLY, setOf("cwd"), "Inspect repository status."),
-        ToolSpec("git.diff", ToolRisk.READ_ONLY, setOf("cwd"), "Inspect repository diff."),
-        ToolSpec("git.log", ToolRisk.READ_ONLY, setOf("cwd"), "Inspect recent Git commits."),
-        ToolSpec("ollama.status", ToolRisk.READ_ONLY, description = "Inspect local Ollama status and models."),
+        ToolSpec("system.time", ToolRisk.READ_ONLY, description = "Read the phone's current local date, time and timezone."),
+        ToolSpec("system.info", ToolRisk.READ_ONLY, description = "Inspect CPU, memory, storage and Termux/Android environment."),
+        ToolSpec("http.json", ToolRisk.READ_ONLY, setOf("url"), "Fetch a public HTTPS JSON API with SSRF, redirect, timeout and size guards."),
+        ToolSpec("http.get", ToolRisk.READ_ONLY, setOf("url"), "Fetch public HTTPS text/HTML with SSRF, redirect, timeout and size guards."),
+        ToolSpec("web.search", ToolRisk.READ_ONLY, setOf("query"), "Search the web for source URLs and snippets. Optional limit=1..8, time_range=day/week/month/year. Read selected URLs before claiming facts."),
+        ToolSpec("web.read", ToolRisk.READ_ONLY, setOf("url"), "Read public HTTPS page text without scripts/navigation, following up to 3 validated redirects. Optional max_chars=500..12000."),
+        ToolSpec("image.search", ToolRisk.READ_ONLY, setOf("query"), "Search images through multiple public providers with query fallback and return safe display-ready previews plus source pages."),
+        ToolSpec("context.snapshot", ToolRisk.READ_ONLY, description = "Return a cached compact snapshot of system, workspace and known repository state."),
+        ToolSpec("inspect.batch", ToolRisk.READ_ONLY, setOf("requests"), "Run up to 8 independent read-only inspections in one call."),
+        ToolSpec("process.status", ToolRisk.READ_ONLY, description = "Inspect bridge-started process health. Optional arg: requestId."),
+        ToolSpec("file.list", ToolRisk.READ_ONLY, description = "List a directory in an allowed read root. Optional path; use @Lumena-Android for the app repo."),
+        ToolSpec("file.search", ToolRisk.READ_ONLY, setOf("query"), "Search file names and text in allowed read roots. Optional path; @Lumena-Android is read-only."),
+        ToolSpec("workspace.list", ToolRisk.READ_ONLY, description = "List writable workspace contents and discover explicit read-only roots such as @Lumena-Android."),
+        ToolSpec("file.read", ToolRisk.READ_ONLY, setOf("path"), "Read a text file from the workspace or an explicit read-only root."),
+        ToolSpec("git.status", ToolRisk.READ_ONLY, setOf("cwd"), "Inspect repository status without optional locks; cwd may be @Lumena-Android."),
+        ToolSpec("git.diff", ToolRisk.READ_ONLY, setOf("cwd"), "Inspect repository diff with external diff/textconv disabled; cwd may be @Lumena-Android."),
+        ToolSpec("git.log", ToolRisk.READ_ONLY, setOf("cwd"), "Inspect recent Git commits; cwd may be @Lumena-Android."),
+        ToolSpec("ollama.status", ToolRisk.READ_ONLY, description = "Inspect Ollama server state, installed models, and currently loaded models."),
 
         ToolSpec("project.create", ToolRisk.MUTATING, setOf("name"), "Create a workspace project."),
         ToolSpec("dir.create", ToolRisk.MUTATING, setOf("path"), "Create a directory inside the workspace."),
@@ -37,10 +49,11 @@ object ToolRegistry {
         ToolSpec("git.add", ToolRisk.MUTATING, setOf("cwd", "paths"), "Stage workspace files."),
         ToolSpec("git.commit", ToolRisk.MUTATING, setOf("cwd", "message"), "Commit staged changes."),
 
-        ToolSpec("python.run", ToolRisk.EXECUTABLE, setOf("script"), "Run an existing Python script inside the workspace."),
-        ToolSpec("python.syntax_check", ToolRisk.EXECUTABLE, setOf("script"), "Compile-check a Python script without running its logic."),
+        ToolSpec("python.run", ToolRisk.EXECUTABLE, setOf("script"), "Run an existing .py file inside the workspace. The script arg is a file path only, never Python source code."),
+        ToolSpec("python.syntax_check", ToolRisk.EXECUTABLE, setOf("script"), "Compile-check an existing .py file. The script arg is a file path only, never Python source code."),
         ToolSpec("python.tests", ToolRisk.EXECUTABLE, setOf("cwd"), "Run project tests through the controlled Python runner."),
         ToolSpec("ollama.start", ToolRisk.EXECUTABLE, description = "Start the same-phone Ollama sidecar."),
+        ToolSpec("ollama.generate", ToolRisk.EXECUTABLE, setOf("model", "prompt"), "Run one bounded inference request through the same-phone Ollama API without creating scripts or installing Python packages."),
         ToolSpec("ollama.pull", ToolRisk.EXECUTABLE, setOf("model"), "Download an Ollama model after approval.")
     ).associateBy { it.name }
 
@@ -49,8 +62,20 @@ object ToolRegistry {
         "git_diff" to "git.diff",
         "git_log" to "git.log",
         "file_read" to "file.read",
+        "file_list" to "file.list",
+        "file_search" to "file.search",
+        "http_json" to "http.json",
+        "http_get" to "http.get",
+        "web_search" to "web.search",
+        "web_read" to "web.read",
+        "image_search" to "image.search",
+        "context_snapshot" to "context.snapshot",
+        "inspect_batch" to "inspect.batch",
+        "process_status" to "process.status",
+        "system_info" to "system.info",
         "file_write" to "file.write",
-        "python_run" to "python.run"
+        "python_run" to "python.run",
+        "ollama_generate" to "ollama.generate"
     )
 
     fun all(): List<ToolSpec> = specs.values.sortedBy { it.name }
@@ -78,8 +103,29 @@ object ToolRegistry {
         }
 
         val oversized = call.args.entries.firstOrNull { (key, value) ->
-            val limit = if (key == "content") 256_000 else 16_000
+            val limit = when (key) {
+                "content" -> 256_000
+                "requests" -> 64_000
+                else -> 16_000
+            }
             value.length > limit
+        }
+
+        if (canonical in setOf("python.run", "python.syntax_check")) {
+            val script = call.args["script"].orEmpty().trim()
+            val pathLike = script.length in 1..512 &&
+                script.endsWith(".py", ignoreCase = true) &&
+                '\n' !in script &&
+                '\r' !in script &&
+                '\u0000' !in script
+            if (!pathLike) {
+                return ToolValidation(
+                    allowed = false,
+                    canonicalTool = canonical,
+                    requiresConfirmation = true,
+                    error = "python script arg must be a path to an existing .py file, not inline Python source. Use file.write first if code must be created."
+                )
+            }
         }
         if (oversized != null) {
             return ToolValidation(
@@ -97,13 +143,20 @@ object ToolRegistry {
         )
     }
 
-    fun renderForPrompt(allowed: Set<String>? = null): String {
+    fun renderForPrompt(
+        allowed: Set<String>? = null,
+        compact: Boolean = false
+    ): String {
         return all()
             .filter { allowed == null || it.name in allowed }
             .joinToString("\n") { spec ->
                 val args = if (spec.requiredArgs.isEmpty()) "{}"
                 else spec.requiredArgs.joinToString(prefix = "{", postfix = "}") { "\"$it\":\"...\"" }
-                "- ${spec.name} $args — ${spec.description}"
+                if (compact) {
+                    "- ${spec.name} $args"
+                } else {
+                    "- ${spec.name} $args — ${spec.description}"
+                }
             }
     }
 }

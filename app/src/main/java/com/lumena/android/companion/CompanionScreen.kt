@@ -35,6 +35,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.LumenaAccessibilityService
+import com.lumena.android.agent.core.ToolRegistry
+import com.lumena.android.agent.core.ToolRisk
 import com.lumena.android.agent.local.TermuxBridgeClient
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
@@ -51,6 +53,7 @@ fun CompanionScreen() {
     var bridgeUrl by rememberSaveable { mutableStateOf(initial.bridgeUrl) }
     var token by rememberSaveable { mutableStateOf(initial.bridgeToken) }
     var autoReturn by rememberSaveable { mutableStateOf(initial.companionAutoReturn) }
+    var safeAuto by rememberSaveable { mutableStateOf(initial.companionSafeAuto) }
     var detected by remember { mutableStateOf<CompanionCommand?>(null) }
     var handledFingerprint by remember { mutableStateOf<String?>(null) }
     var lastResult by remember { mutableStateOf("") }
@@ -62,58 +65,72 @@ fun CompanionScreen() {
         LumenaPreferences.saveBridgeToken(context, token)
     }
 
-    fun refreshCommand(force: Boolean = false) {
-        val snapshot = LumenaAccessibilityService.lastChatGptSnapshot
-        val command = CompanionProtocol.parse(snapshot)
-        when {
-            command == null -> status = if (snapshot == null) {
-                "No ChatGPT snapshot yet. Open the official ChatGPT app once."
-            } else {
-                "ChatGPT captured, but no LUMENA_TOOL block is visible yet."
-            }
-            !force && command.fingerprint == handledFingerprint ->
-                status = "Last tool request was already handled. Tap Rescan to run it again."
-            else -> {
-                detected = command
-                status = "Tool request detected from official ChatGPT. Review it before running."
-            }
-        }
-    }
-
-    fun openChatGptWith(text: String, send: Boolean) {
+    fun openChatGptWith(
+        text: String,
+        send: Boolean,
+        onFinished: ((Boolean) -> Unit)? = null
+    ) {
         val service = LumenaAccessibilityService.instance
         if (service == null) {
             status = "Enable Lumena Accessibility service first."
+            onFinished?.invoke(false)
             context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             return
         }
         val launch = context.packageManager.getLaunchIntentForPackage(LumenaAccessibilityService.CHATGPT_PACKAGE)
         if (launch == null) {
             status = "Official ChatGPT app was not found as ${LumenaAccessibilityService.CHATGPT_PACKAGE}."
+            onFinished?.invoke(false)
             return
         }
-        service.scheduleChatGptInsert(text, send = send)
+        service.scheduleChatGptInsert(
+            text = text,
+            send = send,
+            onFinished = onFinished
+        )
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(launch)
         status = if (send) "Opening ChatGPT and sending…" else "Opening ChatGPT and inserting text…"
     }
 
-    fun runDetected() {
-        val command = detected ?: return
+    fun planFor(command: CompanionCommand) =
+        ToolGate.plan(command.decision, externalSource = true)
+
+    fun isSafeReadOnly(command: CompanionCommand): Boolean {
+        val plan = planFor(command)
+        if (!plan.allowed) return false
+        return ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
+    }
+
+    fun executeCommand(command: CompanionCommand, automatic: Boolean) {
+        if (busy || command.fingerprint == handledFingerprint) return
         if (token.isBlank()) {
             status = "Paste the Termux bridge token first."
             return
         }
-        val plan = ToolGate.plan(command.decision)
+
+        val plan = planFor(command)
         if (!plan.allowed) {
-            status = "Blocked unknown tool: ${plan.request.tool}"
+            status = "Blocked tool request: ${plan.reason}"
             return
         }
+
+        val readOnly = ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
+        if (automatic && (!safeAuto || !readOnly)) {
+            status = "Approval required for ${plan.request.tool}."
+            return
+        }
+
         persistConnection()
         busy = true
-        status = "Running ${plan.request.tool}…"
+        status = if (automatic) {
+            "Safe Auto · running ${plan.request.tool}…"
+        } else {
+            "Running ${plan.request.tool}…"
+        }
+
         scope.launch {
-            val result = TermuxBridgeClient(bridgeUrl, token).execute(plan.request)
+            val result = TermuxBridgeClient(bridgeUrl, token, context).execute(plan.request)
             val formatted = CompanionProtocol.formatResult(plan.request.tool, result)
             lastResult = formatted
             handledFingerprint = command.fingerprint
@@ -126,25 +143,75 @@ fun CompanionScreen() {
                     "${plan.request.tool} returned an error. Returning the real error to ChatGPT…"
                 }
                 delay(250)
-                openChatGptWith(formatted, send = true)
+                openChatGptWith(
+                    formatted,
+                    send = true,
+                    onFinished = { sent ->
+                        status = if (sent) {
+                            "${plan.request.tool} result sent to ChatGPT."
+                        } else {
+                            "${plan.request.tool} finished, but ChatGPT Send was not confirmed. Result is ready below."
+                        }
+                    }
+                )
             } else {
                 status = if (result.ok) {
-                    "${plan.request.tool} completed. Review the result before returning it to ChatGPT."
+                    "${plan.request.tool} completed. Result is ready below."
                 } else {
-                    "${plan.request.tool} returned an error. The real error can still be sent back to ChatGPT."
+                    "${plan.request.tool} returned an error. The real error is shown below."
                 }
             }
         }
     }
 
-    LaunchedEffect(Unit) {
+    fun acceptDetected(command: CompanionCommand, force: Boolean = false) {
+        if (!force && command.fingerprint == handledFingerprint) {
+            status = "Last tool request was already handled."
+            return
+        }
+
+        detected = command
+        val plan = planFor(command)
+        when {
+            !plan.allowed -> status = "Blocked tool request: ${plan.reason}"
+            safeAuto && isSafeReadOnly(command) && !busy -> {
+                status = "Safe read-only tool detected."
+                executeCommand(command, automatic = true)
+            }
+            else -> status = "Tool request detected. Review it before running."
+        }
+    }
+
+    fun refreshCommand(force: Boolean = false) {
+        val snapshot = LumenaAccessibilityService.lastChatGptSnapshot
+        val command = CompanionProtocol.parse(snapshot)
+        if (command == null) {
+            status = if (snapshot == null) {
+                "No ChatGPT snapshot yet. Open the official ChatGPT app once."
+            } else {
+                "ChatGPT captured, but no LUMENA_TOOL block is visible yet."
+            }
+            return
+        }
+        if (force && command.fingerprint == handledFingerprint) handledFingerprint = null
+        acceptDetected(command, force = force)
+    }
+
+    fun runDetected() {
+        detected?.let { executeCommand(it, automatic = false) }
+    }
+
+    LaunchedEffect(safeAuto, token, bridgeUrl) {
         while (true) {
             val command = CompanionProtocol.parse(LumenaAccessibilityService.lastChatGptSnapshot)
-            if (command != null && command.fingerprint != handledFingerprint && command.fingerprint != detected?.fingerprint) {
-                detected = command
-                status = "New LUMENA_TOOL request detected."
+            if (
+                command != null &&
+                command.fingerprint != handledFingerprint &&
+                !busy
+            ) {
+                acceptDetected(command)
             }
-            delay(1000)
+            delay(700)
         }
     }
 
@@ -202,8 +269,9 @@ fun CompanionScreen() {
                 OutlinedTextField(
                     value = token,
                     onValueChange = {
-                        token = it
-                        LumenaPreferences.saveBridgeToken(context, it)
+                        val clean = LumenaPreferences.normalizeBridgeToken(it)
+                        token = clean
+                        LumenaPreferences.saveBridgeToken(context, clean)
                     },
                     label = { Text("Bridge token") },
                     singleLine = true,
@@ -217,7 +285,7 @@ fun CompanionScreen() {
                             persistConnection()
                             busy = true
                             scope.launch {
-                                val result = if (token.isBlank()) null else TermuxBridgeClient(bridgeUrl, token).execute(
+                                val result = if (token.isBlank()) null else TermuxBridgeClient(bridgeUrl, token, context).execute(
                                     ToolRequest("health")
                                 )
                                 status = when {
@@ -241,24 +309,51 @@ fun CompanionScreen() {
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth().padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Auto-return result", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "After your Run once approval, Lumena sends the real LUMENA_RESULT back to the same ChatGPT chat automatically. New tool calls still require your approval.",
-                        style = MaterialTheme.typography.bodySmall
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Safe Auto", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Automatically runs only read-only tools, including context.snapshot, inspect.batch, process.status, http.json/http.get, image.search, system and file/Git inspection.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Switch(
+                        checked = safeAuto,
+                        onCheckedChange = {
+                            safeAuto = it
+                            LumenaPreferences.saveCompanionSafeAuto(context, it)
+                        }
                     )
                 }
-                Switch(
-                    checked = autoReturn,
-                    onCheckedChange = {
-                        autoReturn = it
-                        LumenaPreferences.saveCompanionAutoReturn(context, it)
+
+                HorizontalDivider()
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Auto-return result", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "After an approved or Safe Auto tool finishes, Lumena sends the real LUMENA_RESULT back to ChatGPT automatically.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
-                )
+                    Switch(
+                        checked = autoReturn,
+                        onCheckedChange = {
+                            autoReturn = it
+                            LumenaPreferences.saveCompanionAutoReturn(context, it)
+                        }
+                    )
+                }
             }
         }
 
@@ -267,18 +362,33 @@ fun CompanionScreen() {
         Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
         detected?.let { command ->
-            val plan = ToolGate.plan(command.decision)
+            val plan = planFor(command)
+            val readOnly = plan.allowed &&
+                ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
+            val autoEligible = safeAuto && readOnly
+
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(command.decision.request.tool, style = MaterialTheme.typography.titleMedium)
-                    Text(command.decision.reason)
-                    Text("Args: ${command.decision.request.args}", style = MaterialTheme.typography.bodySmall)
+                    Text(plan.request.tool, style = MaterialTheme.typography.titleMedium)
+                    Text(plan.reason)
+                    Text("Args: ${plan.request.args}", style = MaterialTheme.typography.bodySmall)
                     Text(
-                        if (plan.allowed) "Allowed by tool registry · explicit approval required" else "BLOCKED: unknown tool",
+                        when {
+                            !plan.allowed -> "BLOCKED by tool registry"
+                            autoEligible -> "READ-ONLY · Safe Auto eligible"
+                            else -> "Approval required · this tool can change state or execute code"
+                        },
                         style = MaterialTheme.typography.bodySmall
                     )
-                    Button(enabled = !busy && plan.allowed, onClick = { runDetected() }) {
-                        Text(if (busy) "Working…" else "Run once")
+                    if (!autoEligible || command.fingerprint == handledFingerprint) {
+                        Button(
+                            enabled = !busy && plan.allowed,
+                            onClick = { runDetected() }
+                        ) {
+                            Text(if (busy) "Working…" else "Run once")
+                        }
+                    } else if (busy) {
+                        Text("Running automatically…", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -286,10 +396,7 @@ fun CompanionScreen() {
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { refreshCommand(force = false) }) { Text("Scan ChatGPT") }
-            TextButton(onClick = {
-                handledFingerprint = null
-                refreshCommand(force = true)
-            }) { Text("Rescan") }
+            TextButton(onClick = { refreshCommand(force = true) }) { Text("Rescan") }
         }
 
         if (lastResult.isNotBlank()) {
@@ -314,10 +421,13 @@ fun CompanionScreen() {
 
         Spacer(Modifier.height(12.dp))
         Text(
-            if (autoReturn) {
-                "Security: every external LUMENA_TOOL still requires your Run once tap. Auto-return only sends the real result after an approved tool finishes. No unrestricted shell tool is exposed."
-            } else {
-                "Security: commands read from ChatGPT are never auto-executed. Every external LUMENA_TOOL request requires your Run once tap. No unrestricted shell tool is exposed."
+            when {
+                safeAuto && autoReturn ->
+                    "Security: only READ_ONLY tools may auto-run. Mutating and executable tools still require Run once. Results return automatically. No unrestricted shell tool is exposed."
+                safeAuto ->
+                    "Security: only READ_ONLY tools may auto-run. Mutating and executable tools still require Run once. Results stay in Lumena until you send them."
+                else ->
+                    "Security: Safe Auto is off. Every external LUMENA_TOOL requires Run once. No unrestricted shell tool is exposed."
             },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant

@@ -12,8 +12,17 @@ data class ToolResult(
     val exitCode: Int? = null,
     val stdout: String = "",
     val stderr: String = "",
-    val error: String? = null
+    val error: String? = null,
+    val outcomeUnknown: Boolean = false,
+    val errorCode: String? = null,
+    val failureClass: String? = null,
+    val retryable: Boolean? = null,
+    val dependency: String? = null
 )
+
+interface ToolExecutor {
+    suspend fun execute(toolRequest: ToolRequest): ToolResult
+}
 
 data class PlannerDecision(
     val request: ToolRequest,

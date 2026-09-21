@@ -29,6 +29,12 @@ class AgentRunCoordinator {
         private set
     var startedAtMs by mutableLongStateOf(0L)
         private set
+    var liveModelText by mutableStateOf("")
+        private set
+    var modelTurn by mutableLongStateOf(0L)
+        private set
+    var liveToolTelemetry by mutableStateOf("")
+        private set
 
     val progress = mutableStateListOf<String>()
 
@@ -45,6 +51,9 @@ class AgentRunCoordinator {
         startedAtMs = System.currentTimeMillis()
         stage = "Starting…"
         if (resetProgress) progress.clear()
+        liveModelText = ""
+        modelTurn = 0L
+        liveToolTelemetry = ""
         addProgress(token, "Starting task")
 
         job = scope.launch {
@@ -70,6 +79,22 @@ class AgentRunCoordinator {
             progress += message
             while (progress.size > 40) progress.removeAt(0)
         }
+    }
+
+    fun beginModelTurn(runToken: Long) {
+        if (!isCurrent(runToken)) return
+        modelTurn += 1
+        liveModelText = ""
+    }
+
+    fun updateModelText(runToken: Long, text: String) {
+        if (!isCurrent(runToken)) return
+        liveModelText = if (text.length <= 16_000) text else text.takeLast(16_000)
+    }
+
+    fun updateToolTelemetry(runToken: Long, text: String) {
+        if (!isCurrent(runToken)) return
+        liveToolTelemetry = if (text.length <= 8_000) text else text.takeLast(8_000)
     }
 
     fun pauseForApproval(runToken: Long) {
@@ -105,6 +130,9 @@ class AgentRunCoordinator {
         taskId = null
         stage = "Idle"
         startedAtMs = 0L
+        liveModelText = ""
+        modelTurn = 0L
+        liveToolTelemetry = ""
         progress.clear()
     }
 }

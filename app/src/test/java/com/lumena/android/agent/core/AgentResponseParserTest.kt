@@ -7,6 +7,20 @@ import org.junit.Test
 class AgentResponseParserTest {
     private val parser = AgentResponseParser()
 
+    @Test fun singleRegisteredToolKeyIsNormalized() {
+        val call = parser.parse("""{"web.search":{"query":"news"}}""") as AgentDecision.ToolCall
+        assertEquals("web.search", call.tool)
+        assertEquals("news", call.args["query"])
+    }
+
+    @Test fun ambiguousOrUnknownShorthandIsNotExecuted() {
+        listOf("""{"web.search":{},"file.read":{}}""",
+            """{"unknown.run":{}}""", """{"web.search":"news"}""",
+            """{"web.search":{},"reason":"example"}""").forEach {
+            assertTrue(parser.parse(it) is AgentDecision.Reply)
+        }
+    }
+
     @Test
     fun plainTextBecomesReply() {
         val parsed = parser.parse("Hello there")
@@ -24,6 +38,20 @@ class AgentResponseParserTest {
         assertEquals("README.md", parsed.args["path"])
         assertEquals("Inspect project", parsed.reason)
         assertEquals(listOf("inspect", "verify"), parsed.plan)
+    }
+
+    @Test
+    fun nestedBatchArgsStayValidJson() {
+        val parsed = parser.parse(
+            """{"tool":"inspect.batch","args":{"requests":[{"tool":"file.read","args":{"path":"README.md"}},{"tool":"system.info","args":{}}]},"reason":"Inspect in one round trip"}"""
+        )
+        assertTrue(parsed is AgentDecision.ToolCall)
+        parsed as AgentDecision.ToolCall
+        val requests = parsed.args["requests"].orEmpty()
+        assertTrue(requests.startsWith("["))
+        assertTrue(requests.contains("\"tool\":\"file.read\""))
+        assertTrue(requests.contains("\"path\":\"README.md\""))
+        assertTrue(requests.contains("\"tool\":\"system.info\""))
     }
 
     @Test

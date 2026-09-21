@@ -2,6 +2,17 @@
 
 Android companion / local-agent client built with Kotlin + Jetpack Compose.
 
+## Build 22: evidence-based web research
+
+Bridge 0.18 adds `web.search` and `web.read`: source discovery, bounded readable
+text, provider fallback, safe redirects, and one read-only local transport retry.
+Core DNA v3 distinguishes sourced facts from hypotheses. Update both APK and Bridge.
+
+* [Search setup and limitations](docs/web-search.md)
+* [Детальний план контекстної ОС та конституції досвіду](docs/cognitive-exoskeleton-roadmap.uk.md)
+* [Current context kernel](docs/context-kernel.md)
+* [Current learned landscape](docs/experience-landscape.md)
+
 ## v0.7.3 local-agent architecture
 
 `User -> Local chat -> bounded Ollama context -> one-step agent decision -> ToolGate -> localhost Termux bridge -> tool result -> local model -> next step`
@@ -46,3 +57,17 @@ The bridge binds only to loopback and requires a bearer token.
 ## Build
 
 Pull requests run agent-core unit tests before `assembleDebug`. A debug APK artifact is uploaded only after tests and Android build succeed.
+
+
+## v0.12 embedded llama.cpp
+
+Lumena can run the local agent through either Ollama or an in-process llama.cpp backend.
+
+Before building the embedded backend:
+
+```bash
+bash scripts/sync_llama_cpp.sh
+./gradlew assembleDebug
+```
+
+The native runtime is packaged for arm64-v8a. GGUF model files are intentionally external to the APK; select a local GGUF path from the Model panel. Ollama remains an optional fallback.

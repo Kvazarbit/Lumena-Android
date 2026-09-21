@@ -1,5 +1,8 @@
 package com.lumena.android.agent.local
 
+import android.content.Context
+import com.lumena.android.settings.LumenaPreferences
+import com.lumena.android.agent.core.BridgeTransportPolicy
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -18,14 +21,21 @@ import kotlin.coroutines.resume
 
 class TermuxBridgeClient(
     baseUrl: String,
-    private val token: String
-) {
+    token: String,
+    private val context: Context? = null
+) : ToolExecutor {
+    private val token = LumenaPreferences.normalizeBridgeToken(token)
     private val base: HttpUrl = normalizeLoopbackBaseUrl(baseUrl)
         ?: throw IllegalArgumentException("Bridge URL must use localhost/127.0.0.1 over http")
     private val endpoint = base.newBuilder().addPathSegment("tool").build()
     private val cancelEndpoint = base.newBuilder().addPathSegment("cancel").build()
 
     private val client = OkHttpClient.Builder()
+        // Tool POSTs can mutate state. A lost response must never cause an
+        // implicit transport replay or a redirect to another endpoint.
+        .retryOnConnectionFailure(false)
+        .followRedirects(false)
+        .followSslRedirects(false)
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.MINUTES)
         .writeTimeout(30, TimeUnit.SECONDS)
@@ -39,11 +49,51 @@ class TermuxBridgeClient(
     private val resultAdapter = moshi.adapter(ToolResult::class.java)
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
-    suspend fun execute(toolRequest: ToolRequest): ToolResult = suspendCancellableCoroutine { continuation ->
+    override suspend fun execute(toolRequest: ToolRequest): ToolResult {
+        context?.let { appContext ->
+            val started = TermuxBridgeAutoStarter.ensureRunning(appContext, base)
+            if (started.isFailure) {
+                val error = started.exceptionOrNull()
+                return ToolResult(
+                    ok = false,
+                    error = error?.message ?: "Could not start the Termux bridge",
+                    errorCode = "BRIDGE_START_FAILED",
+                    failureClass = "AUTH_OR_CONFIG",
+                    retryable = false,
+                    dependency = "termux_bridge"
+                )
+            }
+        }
+        val first = executeOnce(toolRequest)
+        return if (first.transportFailure && BridgeTransportPolicy.canRetry(toolRequest.tool)) {
+            executeOnce(toolRequest).result
+        } else first.result
+    }
+
+    private data class Attempt(val result: ToolResult, val transportFailure: Boolean = false)
+
+    private fun transportFailure(tool: String, message: String): Attempt {
+        val unknown = BridgeTransportPolicy.outcomeUnknown(tool)
+        return Attempt(
+            ToolResult(
+                ok = false,
+                error = "Bridge transport: $message",
+                outcomeUnknown = unknown,
+                errorCode = "BRIDGE_TRANSPORT",
+                failureClass = if (unknown) "UNKNOWN_EFFECT" else "TRANSIENT_TRANSPORT",
+                retryable = !unknown,
+                dependency = "termux_bridge"
+            ),
+            transportFailure = true
+        )
+    }
+
+    private suspend fun executeOnce(toolRequest: ToolRequest): Attempt = suspendCancellableCoroutine { continuation ->
         val json = requestAdapter.toJson(toolRequest)
         val request = Request.Builder()
             .url(endpoint)
             .header("Authorization", "Bearer $token")
+            .header("Connection", "close")
             .post(json.toRequestBody(jsonMediaType))
             .build()
         val call = client.newCall(request)
@@ -57,7 +107,7 @@ class TermuxBridgeClient(
             override fun onFailure(call: Call, e: IOException) {
                 if (continuation.isActive) {
                     continuation.resume(
-                        ToolResult(ok = false, error = "${e::class.simpleName}: ${e.message}")
+                        transportFailure(toolRequest.tool, "${e::class.simpleName}: ${e.message}")
                     )
                 }
             }
@@ -67,13 +117,17 @@ class TermuxBridgeClient(
                     response.use {
                         val body = it.body?.string().orEmpty()
                         val parsed = body.takeIf { value -> value.isNotBlank() }?.let(resultAdapter::fromJson)
-                        parsed ?: ToolResult(
+                        Attempt(parsed ?: ToolResult(
                             ok = false,
-                            error = "Bridge returned HTTP ${it.code} without a readable result."
-                        )
+                            error = "Bridge returned HTTP ${it.code} without a readable result.",
+                            outcomeUnknown = BridgeTransportPolicy.outcomeUnknown(toolRequest.tool)
+                        ))
                     }
-                } catch (t: Throwable) {
-                    ToolResult(ok = false, error = "${t::class.simpleName}: ${t.message}")
+                } catch (e: IOException) {
+                    transportFailure(toolRequest.tool, "${e::class.simpleName}: ${e.message}")
+                } catch (e: Exception) {
+                    Attempt(ToolResult(ok = false, error = "Bridge result unreadable: ${e.message}",
+                        outcomeUnknown = BridgeTransportPolicy.outcomeUnknown(toolRequest.tool)))
                 }
                 if (continuation.isActive) continuation.resume(result)
             }

@@ -1,8 +1,11 @@
 package com.lumena.android
 
+import android.app.ActivityManager
+import android.app.ApplicationExitInfo
 import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -46,8 +49,12 @@ import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.LumenaAccessibilityService
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.local.AgentPanel
+import com.lumena.android.agent.local.TermuxBridgeClient
+import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.runtime.AgentRunCoordinator
 import com.lumena.android.companion.CompanionScreen
+import com.lumena.android.llama.EmbeddedLlamaClient
+import com.lumena.android.llama.EmbeddedLlamaRuntime
 import com.lumena.android.settings.HistoryTreeStore
 import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.settings.LumenaPreferences
@@ -84,6 +91,44 @@ class MainActivity : ComponentActivity() {
     private fun openAccessibilitySettings() = startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
     private fun openAppDetails() = startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply { data = Uri.parse("package:$packageName") })
 
+    private fun recentExitDiagnostics(): String {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return "Process exit diagnostics require Android 11+."
+        }
+        val am = getSystemService(ActivityManager::class.java)
+        val exits = am.getHistoricalProcessExitReasons(packageName, 0, 5)
+        if (exits.isEmpty()) return "No recent process-exit records."
+
+        return exits.joinToString("\n\n") { info ->
+            val reason = when (info.reason) {
+                ApplicationExitInfo.REASON_EXIT_SELF -> "exit-self"
+                ApplicationExitInfo.REASON_SIGNALED -> "signal"
+                ApplicationExitInfo.REASON_LOW_MEMORY -> "low-memory"
+                ApplicationExitInfo.REASON_CRASH -> "java-crash"
+                ApplicationExitInfo.REASON_CRASH_NATIVE -> "native-crash"
+                ApplicationExitInfo.REASON_ANR -> "ANR"
+                ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "initialization-failure"
+                ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "permission-change"
+                ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "excessive-resource-usage"
+                ApplicationExitInfo.REASON_USER_REQUESTED -> "user-requested"
+                ApplicationExitInfo.REASON_USER_STOPPED -> "user-stopped"
+                ApplicationExitInfo.REASON_DEPENDENCY_DIED -> "dependency-died"
+                ApplicationExitInfo.REASON_OTHER -> "other"
+                else -> "unknown(${info.reason})"
+            }
+            buildString {
+                append("reason=").append(reason)
+                append(" status=").append(info.status)
+                append(" timestamp=").append(java.text.DateFormat.getDateTimeInstance().format(java.util.Date(info.timestamp)))
+                info.description?.takeIf { it.isNotBlank() }?.let {
+                    append("\ndescription=").append(it)
+                }
+                append("\npss=").append(info.pss).append(" KB")
+                append(" rss=").append(info.rss).append(" KB")
+            }
+        }
+    }
+
     private fun cancelPersistedTask(reason: String) {
         val snapshot = LocalSessionStore.load(this)
         val task = snapshot.task ?: return
@@ -101,18 +146,49 @@ class MainActivity : ComponentActivity() {
         var agentOpen by remember { mutableStateOf(false) }
         var historyState by remember { mutableStateOf(HistoryTreeStore.load(this@MainActivity)) }
         var liveSession by remember { mutableStateOf(LocalSessionStore.load(this@MainActivity)) }
-        var model by remember { mutableStateOf(LumenaPreferences.load(this@MainActivity).selectedModel) }
+
+        fun currentModelLabel(): String {
+            val settings = LumenaPreferences.load(this@MainActivity)
+            return if (settings.inferenceBackend == "embedded") {
+                val actual = EmbeddedLlamaRuntime.backendLabel()
+                if (actual == "not loaded yet") "Embedded GGUF" else "Embedded GGUF · $actual"
+            } else {
+                settings.selectedModel.ifBlank { "Ollama" }
+            }
+        }
+
+        var model by remember { mutableStateOf(currentModelLabel()) }
+
+        LaunchedEffect(refreshToken) {
+            val bridgeSettings = LumenaPreferences.load(this@MainActivity)
+            if (bridgeSettings.bridgeToken.isNotBlank()) {
+                TermuxBridgeClient(
+                    bridgeSettings.bridgeUrl,
+                    bridgeSettings.bridgeToken,
+                    this@MainActivity
+                ).execute(ToolRequest("health"))
+            }
+        }
 
         fun reloadHistory() { historyState = HistoryTreeStore.load(this@MainActivity) }
-        fun stopBeforeSwitch(reason: String) { coordinator.cancel(reason); cancelPersistedTask(reason) }
+        fun stopBeforeSwitch(reason: String) {
+            EmbeddedLlamaClient.cancelActiveGeneration()
+            coordinator.cancel(reason)
+            cancelPersistedTask(reason)
+        }
         fun closeRight() { agentOpen = false }
         fun openLeft() { agentOpen = false; reloadHistory(); scope.launch { leftDrawer.open() } }
-        fun openRight() { scope.launch { leftDrawer.close() }; liveSession = LocalSessionStore.load(this@MainActivity); model = LumenaPreferences.load(this@MainActivity).selectedModel; agentOpen = true }
+        fun openRight() {
+            scope.launch { leftDrawer.close() }
+            liveSession = LocalSessionStore.load(this@MainActivity)
+            model = currentModelLabel()
+            agentOpen = true
+        }
 
         LaunchedEffect(tab, agentOpen, coordinator.active) {
             while (tab == 1) {
                 liveSession = LocalSessionStore.load(this@MainActivity)
-                model = LumenaPreferences.load(this@MainActivity).selectedModel
+                model = currentModelLabel()
                 delay(600)
             }
         }
@@ -157,29 +233,13 @@ class MainActivity : ComponentActivity() {
                 when (tab) {
                     0 -> Column(Modifier.fillMaxSize().padding(inner)) { CompanionScreen() }
                     1 -> Box(Modifier.fillMaxSize().padding(inner)) {
-                        Column(Modifier.fillMaxSize()) {
-                            Row(
-                                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                TextButton(onClick = ::openLeft) { Text("☰") }
-                                val task = liveSession.task
-                                Text(
-                                    when {
-                                        coordinator.active && task != null -> "● ${task.step}/${task.maxSteps} · ${coordinator.stage}"
-                                        model.isNotBlank() -> "Lumena · $model"
-                                        else -> "Lumena"
-                                    },
-                                    style = MaterialTheme.typography.titleSmall
-                                )
-                                TextButton(onClick = ::openRight) { Text("☷") }
-                            }
-                            Box(Modifier.weight(1f)) {
-                                key(historyState.activeBranchId) {
-                                    WorkflowChatScreen(agentWorkScope = agentWorkScope, runCoordinator = coordinator)
-                                }
-                            }
+                        key(historyState.activeBranchId) {
+                            WorkflowChatScreen(
+                                agentWorkScope = agentWorkScope,
+                                runCoordinator = coordinator,
+                                onOpenHistory = ::openLeft,
+                                onOpenAgent = ::openRight
+                            )
                         }
                         if (agentOpen) {
                             Surface(
@@ -192,7 +252,12 @@ class MainActivity : ComponentActivity() {
                                     coordinator = coordinator,
                                     model = model,
                                     pendingApproval = liveSession.pending != null,
-                                    onStop = { coordinator.cancel("Stopped from Agent panel"); cancelPersistedTask("Stopped from Agent panel"); liveSession = LocalSessionStore.load(this@MainActivity) },
+                                    onStop = {
+                                        EmbeddedLlamaClient.cancelActiveGeneration()
+                                        coordinator.cancel("Stopped from Agent panel")
+                                        cancelPersistedTask("Stopped from Agent panel")
+                                        liveSession = LocalSessionStore.load(this@MainActivity)
+                                    },
                                     onClose = ::closeRight
                                 )
                             }
@@ -207,6 +272,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun ToolsScreen(refreshToken: Int, modifier: Modifier = Modifier) {
         var snapshotText by remember { mutableStateOf("No snapshot yet") }
+        var exitDiagnostics by remember { mutableStateOf(recentExitDiagnostics()) }
         var enabled by remember { mutableStateOf(false) }
         var rawServices by remember { mutableStateOf("") }
         LaunchedEffect(refreshToken) {
@@ -227,6 +293,10 @@ class MainActivity : ComponentActivity() {
             }) { Text("Read current screen") }
             HorizontalDivider()
             Text("Diagnostics", style = MaterialTheme.typography.titleMedium)
+            OutlinedButton(onClick = { exitDiagnostics = recentExitDiagnostics() }) {
+                Text("Refresh last app exits")
+            }
+            Text(exitDiagnostics, style = MaterialTheme.typography.bodySmall)
             Text("Expected service: ${serviceComponent().flattenToString()}")
             Text("System says enabled: $enabled")
             Text(if (rawServices.isBlank()) "Enabled services list: empty" else "Enabled services: $rawServices", style = MaterialTheme.typography.bodySmall)

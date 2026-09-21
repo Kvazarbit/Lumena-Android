@@ -4,6 +4,13 @@ import com.lumena.android.agent.core.AgentDecision
 import com.lumena.android.agent.core.ToolRegistry
 
 object ToolGate {
+    fun approvalKey(request: ToolRequest): String = buildString {
+        append(ToolRegistry.canonicalize(request.tool))
+        request.args.toSortedMap().forEach { (key, value) ->
+            append('|').append(key).append('=').append(value.trim())
+        }
+    }
+
     fun plan(
         decision: PlannerDecision,
         externalSource: Boolean = false

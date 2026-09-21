@@ -49,16 +49,18 @@ fun HistoryTreeDrawer(
 ) {
     val context = LocalContext.current
     var query by remember { mutableStateOf("") }
+    var createOpen by remember { mutableStateOf(false) }
+    var moreOpen by remember { mutableStateOf(false) }
     var newTask by remember { mutableStateOf("") }
     var newTopic by remember { mutableStateOf("") }
     var rename by remember { mutableStateOf("") }
     var copiedNotice by remember { mutableStateOf("") }
+
     val active = state.branches.firstOrNull { it.id == state.activeBranchId }
     val filtered = remember(state, query) {
         if (query.isBlank()) state.branches
         else state.branches.filter { branch ->
-            listOf(branch.topic, branch.taskTitle, branch.title)
-                .any { it.contains(query, ignoreCase = true) }
+            listOf(branch.topic, branch.taskTitle, branch.title).any { it.contains(query, ignoreCase = true) }
         }
     }
 
@@ -69,57 +71,119 @@ fun HistoryTreeDrawer(
     }
 
     Column(
-        modifier = Modifier
-            .width(330.dp)
-            .fillMaxHeight()
-            .padding(16.dp),
+        modifier = Modifier.width(340.dp).fillMaxHeight().padding(horizontal = 14.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column {
-                Text("Chats & work", style = MaterialTheme.typography.headlineSmall)
-                Text("Choose a conversation, start new work, or continue from an earlier point.", style = MaterialTheme.typography.bodySmall)
+                Text("Chats", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    active?.title ?: "Choose a conversation",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             TextButton(onClick = onClose) { Text("Close") }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { createOpen = !createOpen }) { Text("＋ New") }
+            OutlinedButton(onClick = onForkActive, enabled = active != null) { Text("Continue") }
+            TextButton(onClick = { moreOpen = !moreOpen }, enabled = active != null) { Text("⋮") }
         }
 
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
-            label = { Text("Search chats") },
+            placeholder = { Text("Search chats") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onForkActive, enabled = active != null) {
-                Text("Continue from selected point")
+        if (createOpen) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (active != null) {
+                        Text("New task here", style = MaterialTheme.typography.titleSmall)
+                        OutlinedTextField(
+                            value = newTask,
+                            onValueChange = { newTask = it },
+                            placeholder = { Text("What do you want to do?") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedButton(
+                            enabled = newTask.isNotBlank(),
+                            onClick = {
+                                onCreateTask(newTask.trim())
+                                newTask = ""
+                                createOpen = false
+                            }
+                        ) { Text("Start task") }
+                    }
+
+                    Text("New topic", style = MaterialTheme.typography.titleSmall)
+                    OutlinedTextField(
+                        value = newTopic,
+                        onValueChange = { newTopic = it },
+                        placeholder = { Text("Topic name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedButton(
+                        enabled = newTopic.isNotBlank(),
+                        onClick = {
+                            onCreateTopic(newTopic.trim())
+                            newTopic = ""
+                            createOpen = false
+                        }
+                    ) { Text("Start topic") }
+                }
             }
         }
 
-        if (active != null) {
-            Text(
-                "Open now: ${active.topic} / ${active.taskTitle} / ${active.title}",
-                style = MaterialTheme.typography.bodySmall
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = {
-                    copyToClipboard("Lumena compact report", WorkReportFormatter.compact(active))
-                }) {
-                    Text("Copy summary")
+        if (moreOpen && active != null) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Current chat", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "${active.topic} / ${active.taskTitle}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        TextButton(onClick = {
+                            copyToClipboard("Lumena compact report", WorkReportFormatter.compact(active))
+                        }) { Text("Copy summary") }
+                        TextButton(onClick = {
+                            copyToClipboard("Lumena full report", WorkReportFormatter.full(active))
+                        }) { Text("Full report") }
+                    }
+                    OutlinedTextField(
+                        value = rename,
+                        onValueChange = { rename = it },
+                        placeholder = { Text("Rename chat") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    TextButton(
+                        enabled = rename.isNotBlank(),
+                        onClick = {
+                            onRenameActive(rename.trim())
+                            rename = ""
+                        }
+                    ) { Text("Rename") }
+
+                    if (copiedNotice.isNotBlank()) {
+                        Text(copiedNotice, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    }
                 }
-                OutlinedButton(onClick = {
-                    copyToClipboard("Lumena full report", WorkReportFormatter.full(active))
-                }) {
-                    Text("Copy full report")
-                }
-            }
-            if (copiedNotice.isNotBlank()) {
-                Text(
-                    copiedNotice,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
             }
         }
 
@@ -137,7 +201,7 @@ fun HistoryTreeDrawer(
                 item(key = "topic:$topic") {
                     Text(
                         topic,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.SemiBold,
                         style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
                     )
@@ -146,13 +210,12 @@ fun HistoryTreeDrawer(
                 topicBranches.groupBy { it.taskTitle }.forEach { (task, taskBranches) ->
                     item(key = "task:$topic:$task") {
                         Text(
-                            "↳ $task",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
+                            task,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(start = 8.dp, top = 4.dp)
                         )
                     }
-
                     val ordered = orderBranches(taskBranches)
                     items(ordered, key = { it.id }) { branch ->
                         BranchRow(
@@ -163,61 +226,6 @@ fun HistoryTreeDrawer(
                         )
                     }
                 }
-            }
-        }
-
-        HorizontalDivider()
-
-        if (active != null) {
-            Text("Start another task here", style = MaterialTheme.typography.titleSmall)
-            OutlinedTextField(
-                value = newTask,
-                onValueChange = { newTask = it },
-                label = { Text("What do you want to do?") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            OutlinedButton(
-                enabled = newTask.isNotBlank(),
-                onClick = {
-                    onCreateTask(newTask.trim())
-                    newTask = ""
-                }
-            ) { Text("Start task") }
-        }
-
-        Text("Start a new topic", style = MaterialTheme.typography.titleSmall)
-        OutlinedTextField(
-            value = newTopic,
-            onValueChange = { newTopic = it },
-            label = { Text("Topic name") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedButton(
-            enabled = newTopic.isNotBlank(),
-            onClick = {
-                onCreateTopic(newTopic.trim())
-                newTopic = ""
-            }
-        ) { Text("Start topic") }
-
-        if (active != null) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = rename,
-                    onValueChange = { rename = it },
-                    label = { Text("Rename this chat") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-                TextButton(
-                    enabled = rename.isNotBlank(),
-                    onClick = {
-                        onRenameActive(rename.trim())
-                        rename = ""
-                    }
-                ) { Text("Rename") }
             }
         }
     }
@@ -233,11 +241,12 @@ private fun BranchRow(
     val status = branch.session.task?.status
     val prefix = when (status) {
         TaskStatus.DONE -> "✓"
+        TaskStatus.PARTIAL -> "◐"
         TaskStatus.FAILED -> "!"
         TaskStatus.CANCELLED -> "■"
         TaskStatus.WAITING_CONFIRMATION -> "?"
         TaskStatus.EXECUTING, TaskStatus.WAITING_MODEL, TaskStatus.PLANNING, TaskStatus.VERIFYING -> "●"
-        else -> "○"
+        else -> ""
     }
     val time = remember(branch.updatedAt) {
         DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(branch.updatedAt))
@@ -246,19 +255,22 @@ private fun BranchRow(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = (16 + depth * 14).dp)
+            .padding(start = (8 + depth * 12).dp)
             .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(
             containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer
-            else MaterialTheme.colorScheme.surfaceVariant
+            else MaterialTheme.colorScheme.surface
         )
     ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
             Text(
-                "$prefix ${if (depth > 0) "↳ " else ""}${branch.title}",
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                buildString {
+                    if (prefix.isNotBlank()) append(prefix).append(' ')
+                    append(branch.title)
+                },
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
             )
-            Text(time, style = MaterialTheme.typography.labelSmall)
+            Text(time, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -281,15 +293,12 @@ private fun orderBranches(branches: List<HistoryBranch>): List<HistoryBranch> {
     val visited = mutableSetOf<String>()
 
     fun visit(parentId: String?) {
-        children[parentId]
-            .orEmpty()
-            .sortedBy { it.createdAt }
-            .forEach { child ->
-                if (visited.add(child.id)) {
-                    out += child
-                    visit(child.id)
-                }
+        children[parentId].orEmpty().sortedBy { it.createdAt }.forEach { child ->
+            if (visited.add(child.id)) {
+                out += child
+                visit(child.id)
             }
+        }
     }
 
     visit(null)

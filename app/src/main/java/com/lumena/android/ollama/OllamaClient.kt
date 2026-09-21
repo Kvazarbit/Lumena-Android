@@ -1,9 +1,13 @@
 package com.lumena.android.ollama
 
+import com.lumena.android.llama.LlamaRuntimeProfile
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Call
@@ -41,8 +45,33 @@ data class OllamaChatRequest(
 
 data class OllamaChatResponse(
     val message: OllamaMessage? = null,
-    val done: Boolean? = null
+    val done: Boolean? = null,
+    val error: String? = null
 )
+
+internal fun ollamaChunkError(chunk: OllamaChatResponse): String? =
+    chunk.error?.trim()?.takeIf { it.isNotEmpty() }
+
+internal fun shouldRetryOllamaWithSmallerContext(error: Throwable): Boolean {
+    if (error is SocketTimeoutException) return false
+    val lower = error.message.orEmpty().lowercase()
+    return listOf(
+        "context length",
+        "context window",
+        "prompt too long",
+        "too many tokens",
+        "input is too long",
+        "maximum context",
+        "requested tokens exceed",
+        "exceeds the context",
+        "num_ctx"
+    ).any(lower::contains)
+}
+
+internal fun isOllamaTransportTimeout(error: Throwable): Boolean =
+    error is SocketTimeoutException ||
+        error.message.orEmpty().contains("timeout", ignoreCase = true) ||
+        error.message.orEmpty().contains("timed out", ignoreCase = true)
 
 data class OllamaModel(
     val name: String
@@ -52,7 +81,24 @@ data class OllamaTagsResponse(
     val models: List<OllamaModel> = emptyList()
 )
 
-class OllamaClient(baseUrl: String) {
+interface ChatModelClient {
+    suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String>
+
+    suspend fun chatStreaming(
+        model: String,
+        messages: List<OllamaMessage>,
+        onPartial: (String) -> Unit
+    ): Result<String> {
+        val result = chat(model, messages)
+        result.getOrNull()?.let(onPartial)
+        return result
+    }
+}
+
+class OllamaClient(
+    baseUrl: String,
+    private val runtimeProfile: LlamaRuntimeProfile? = null
+) : ChatModelClient {
     private val base = normalizeLoopbackBaseUrl(baseUrl)
         ?: throw IllegalArgumentException("Ollama URL must use localhost/127.0.0.1 over http")
 
@@ -89,20 +135,35 @@ class OllamaClient(baseUrl: String) {
      * Agent chat is bounded and cancellable. Cancelling the owning coroutine immediately
      * cancels the active OkHttp/Ollama request, which is what the Local STOP button uses.
      */
-    suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String> = withContext(Dispatchers.IO) {
+    override suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String> =
+        chatStreaming(model, messages) { }
+
+    override suspend fun chatStreaming(
+        model: String,
+        messages: List<OllamaMessage>,
+        onPartial: (String) -> Unit
+    ): Result<String> = withContext(Dispatchers.IO) {
         try {
             require(model.isNotBlank()) { "Choose an Ollama model first" }
+            val normalBudget = OllamaContextPolicy.budget(runtimeProfile, retry = false)
             val text = try {
-                executeChat(
+                executeStreamingChat(
                     model = model,
-                    messages = compactMessages(messages, maxChars = 14_000, maxPerMessage = 5_000),
-                    options = OllamaOptions(num_ctx = 4096, num_predict = 768, temperature = 0.15)
+                    messages = OllamaContextPolicy.compact(messages, normalBudget),
+                    options = normalBudget.options,
+                    onPartial = onPartial
                 )
-            } catch (timeout: SocketTimeoutException) {
-                executeChat(
+            } catch (first: Throwable) {
+                if (first is CancellationException) throw first
+                if (!shouldRetryOllamaWithSmallerContext(first)) throw first
+
+                onPartial("")
+                val retryBudget = OllamaContextPolicy.budget(runtimeProfile, retry = true)
+                executeStreamingChat(
                     model = model,
-                    messages = compactMessages(messages, maxChars = 8_000, maxPerMessage = 3_000),
-                    options = OllamaOptions(num_ctx = 3072, num_predict = 512, temperature = 0.1)
+                    messages = OllamaContextPolicy.compact(messages, retryBudget),
+                    options = retryBudget.options,
+                    onPartial = onPartial
                 )
             }
             Result.success(text)
@@ -110,6 +171,63 @@ class OllamaClient(baseUrl: String) {
             throw cancelled
         } catch (t: Throwable) {
             Result.failure(t)
+        }
+    }
+
+    private suspend fun executeStreamingChat(
+        model: String,
+        messages: List<OllamaMessage>,
+        options: OllamaOptions,
+        onPartial: (String) -> Unit
+    ): String {
+        val payload = requestAdapter.toJson(
+            OllamaChatRequest(
+                model = model,
+                messages = messages,
+                stream = true,
+                options = options
+            )
+        )
+        val request = Request.Builder()
+            .url(base.newBuilder().addPathSegments("api/chat").build())
+            .post(payload.toRequestBody(jsonType))
+            .build()
+        val call = client.newCall(request)
+        val context = currentCoroutineContext()
+        val cancelHandle = context[Job]?.invokeOnCompletion { cause ->
+            if (cause is CancellationException) call.cancel()
+        }
+
+        try {
+            call.execute().use { response ->
+                if (!response.isSuccessful) {
+                    val body = response.body?.string().orEmpty()
+                    error("Ollama HTTP ${response.code}: $body")
+                }
+                val source = response.body?.source() ?: error("Ollama returned no response body")
+                val accumulated = StringBuilder()
+                while (true) {
+                    context.ensureActive()
+                    val line = source.readUtf8Line() ?: break
+                    if (line.isBlank()) continue
+                    val chunk = responseAdapter.fromJson(line) ?: continue
+                    ollamaChunkError(chunk)?.let { message ->
+                        error("Ollama stream error: $message")
+                    }
+                    chunk.message?.content?.let { piece ->
+                        if (piece.isNotEmpty()) {
+                            accumulated.append(piece)
+                            onPartial(accumulated.toString())
+                        }
+                    }
+                    if (chunk.done == true) break
+                }
+                val text = accumulated.toString()
+                check(text.isNotBlank()) { "Ollama returned no message" }
+                return text
+            }
+        } finally {
+            cancelHandle?.dispose()
         }
     }
 
@@ -142,7 +260,12 @@ class OllamaClient(baseUrl: String) {
                     response.use {
                         val body = it.body?.string().orEmpty()
                         if (!it.isSuccessful) error("Ollama HTTP ${it.code}: $body")
-                        val text = responseAdapter.fromJson(body)?.message?.content
+                        val parsed = responseAdapter.fromJson(body)
+                            ?: error("Ollama returned unreadable response")
+                        ollamaChunkError(parsed)?.let { message ->
+                            error("Ollama response error: $message")
+                        }
+                        val text = parsed.message?.content
                             ?.takeIf { value -> value.isNotBlank() }
                             ?: error("Ollama returned no message")
                         if (continuation.isActive) continuation.resume(text)
@@ -154,30 +277,6 @@ class OllamaClient(baseUrl: String) {
         })
     }
 
-    private fun compactMessages(
-        messages: List<OllamaMessage>,
-        maxChars: Int,
-        maxPerMessage: Int
-    ): List<OllamaMessage> {
-        if (messages.isEmpty()) return messages
-        val system = messages.firstOrNull { it.role == "system" }
-        val nonSystem = messages.filterNot { it.role == "system" }
-
-        var used = system?.content?.length?.coerceAtMost(maxPerMessage) ?: 0
-        val recent = ArrayList<OllamaMessage>()
-        for (message in nonSystem.asReversed()) {
-            val clipped = message.content.takeLast(maxPerMessage)
-            if (recent.isNotEmpty() && used + clipped.length > maxChars) break
-            recent += message.copy(content = clipped)
-            used += clipped.length
-        }
-        recent.reverse()
-
-        return buildList {
-            system?.let { add(it.copy(content = it.content.take(maxPerMessage))) }
-            addAll(recent)
-        }
-    }
 
     private fun normalizeLoopbackBaseUrl(raw: String) = raw.trim().trimEnd('/')
         .toHttpUrlOrNull()

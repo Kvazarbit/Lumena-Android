@@ -7,13 +7,21 @@ plugins {
 android {
     namespace = "com.lumena.android"
     compileSdk = 35
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "com.lumena.android"
         minSdk = 28
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.10.0"
+        versionCode = 27
+        versionName = "0.12.3"
+        ndk { abiFilters += listOf("arm64-v8a") }
+        externalNativeBuild {
+            cmake {
+                cppFlags += listOf("-O3")
+                arguments += "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
+            }
+        }
     }
 
     compileOptions {
@@ -23,6 +31,12 @@ android {
 
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
 
