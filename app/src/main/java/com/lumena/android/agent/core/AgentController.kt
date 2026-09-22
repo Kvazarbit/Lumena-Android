@@ -60,7 +60,8 @@ sealed interface ControllerInstruction {
 data class ToolTransition(
     val state: AgentControlState,
     val stopReason: String? = null,
-    val partialReason: String? = null
+    val partialReason: String? = null,
+    val failureEvent: FailureEvent? = null
 )
 
 class AgentController(
@@ -88,8 +89,12 @@ class AgentController(
     }
 
     fun onModelFailure(state: AgentControlState, message: String): ControllerInstruction {
-        val compactMessage = compactFailureMessage(message)
         val failures = state.modelFailures + 1
+        val event = FailureEvents.fromModel(
+            message = message,
+            attempt = failures
+        )
+        val compactMessage = compactFailureMessage(event.evidence)
         val next = state.copy(
             modelFailures = failures,
             task = state.task.copy(
@@ -98,45 +103,14 @@ class AgentController(
             )
         )
 
-        // Classify against the FULL error before truncating it for UI/state.
-        // Long native llama.cpp logs can otherwise push the actual load-error
-        // prefix out of compactMessage and cause pointless retries.
-        val fullLower = message.lowercase()
-        val nonRetryable = listOf(
-            "embedded model load failed",
-            "not enough free ram to load this gguf safely",
-            "embedded generation failed",
-            "could not load this gguf model",
-            "gguf model not found",
-            "invalid android file descriptor",
-            "metadata could not be parsed",
-            "full model load failed",
-            "allocation/mmap failed",
-            "tensor layout is not accepted",
-            // OllamaClient already retries these once with a smaller context.
-            // A second automatic controller retry would just spend another model turn.
-            "context length",
-            "context window",
-            "prompt too long",
-            "too many tokens",
-            "input is too long",
-            "maximum context",
-            "requested tokens exceed",
-            "exceeds the context",
-            "num_ctx",
-            "unauthorized",
-            "http 401",
-            "bridge token is required"
-        ).any(fullLower::contains)
-
         return when {
-            nonRetryable ->
+            event.retryable == false ->
                 ControllerInstruction.Stop(compactMessage, fail(next, compactMessage))
             failures > budget.maxModelRetries ->
                 ControllerInstruction.Stop("Model retry limit reached: $compactMessage", fail(next, compactMessage))
             else ->
                 ControllerInstruction.AskModelAgain(
-                    feedback = "The previous model call failed: ${compactMessage.take(600)}. Retry the SAME task from the verified state. Do not invent results.",
+                    feedback = "The previous model call failed [${event.failureClass}]: ${compactMessage.take(600)}. Retry the SAME task from the verified state. Do not invent results.",
                     state = next
                 )
         }
@@ -159,12 +133,17 @@ class AgentController(
             is NormalizationResult.PlainText ->
                 interpretDecision(AgentDecision.Reply(normalized.text), state)
 
-            is NormalizationResult.Failure ->
+            is NormalizationResult.Failure -> {
+                val event = FailureEvents.fromProtocol(
+                    failure = normalized,
+                    attempt = state.protocolRetries + 1
+                )
                 protocolRetry(
                     state,
-                    "Protocol ${normalized.kind}: ${normalized.reason}. " +
+                    "Protocol ${normalized.kind} [${event.failureClass}]: ${event.evidence}. " +
                         "Return exactly one valid tool/done/partial/reply JSON object."
                 )
+            }
         }
     }
 
@@ -214,9 +193,19 @@ class AgentController(
 
         val validation = ToolRegistry.validate(decision)
         if (!validation.allowed || validation.canonicalTool == null) {
+            val event = FailureEvents.policyDenied(
+                reason = validation.error ?: "Unknown tool ${decision.tool}",
+                actionFamily = ToolRegistry.canonicalize(decision.tool),
+                effectClass = ToolRegistry.get(decision.tool)?.risk?.let {
+                    if (it == ToolRisk.READ_ONLY) EffectClass.READ_ONLY
+                    else EffectClass.MUTATING_OR_EXECUTABLE
+                } ?: EffectClass.NONE,
+                attempt = state.protocolRetries + 1,
+                dependency = "tool-registry"
+            )
             return protocolRetry(
                 state,
-                validation.error ?: "Unknown tool ${decision.tool}"
+                "${event.failureClass}: ${event.evidence}"
             )
         }
 
@@ -463,14 +452,30 @@ class AgentController(
         retryable: Boolean? = null,
         dependency: String? = null
     ): ToolTransition {
-        if (outcomeUnknown) {
-            val reason = "Tool outcome unknown after transport failure. Inspect current state before replaying ${call.tool}."
-            return ToolTransition(fail(state, reason), reason)
-        }
-
         val canonicalTool = ToolRegistry.canonicalize(call.tool)
         val signature = signature(call)
         val actionFamily = RecoveryPolicy.actionFamily(call)
+
+        if (outcomeUnknown) {
+            val event = FailureEvents.fromToolOutcome(
+                call = call,
+                errorCode = errorCode,
+                suppliedClass = failureClass,
+                error = error,
+                stderr = stderr,
+                stdout = stdout,
+                retryable = retryable,
+                dependency = dependency,
+                outcomeUnknown = true,
+                attempt = (state.actionFamilyFailures[actionFamily] ?: 0) + 1
+            )
+            val reason = "Tool outcome unknown after transport failure. Inspect current state before replaying ${call.tool}."
+            return ToolTransition(
+                state = fail(state, reason),
+                stopReason = reason,
+                failureEvent = event
+            )
+        }
         var pythonFailures = state.pythonFailures
         val repeatedFailures = state.repeatedToolFailures.toMutableMap()
         val familyFailures = state.actionFamilyFailures.toMutableMap()
@@ -480,6 +485,7 @@ class AgentController(
             ok && (state.repeatedToolFailures[signature] ?: 0) > 0
         val recovered = recoveredFromPythonFailure || recoveredFromRepeatedToolFailure
 
+        var failureEvent: FailureEvent? = null
         if (ok) {
             repeatedFailures.remove(signature)
             if (call.tool.startsWith("python.")) pythonFailures = 0
@@ -487,17 +493,37 @@ class AgentController(
             val count = (repeatedFailures[signature] ?: 0) + 1
             repeatedFailures[signature] = count
             familyFailures[actionFamily] = (familyFailures[actionFamily] ?: 0) + 1
+            failureEvent = FailureEvents.fromToolOutcome(
+                call = call,
+                errorCode = errorCode,
+                suppliedClass = failureClass,
+                error = error,
+                stderr = stderr,
+                stdout = stdout,
+                retryable = retryable,
+                dependency = dependency,
+                outcomeUnknown = false,
+                attempt = familyFailures[actionFamily] ?: 1
+            )
             if (count > budget.maxIdenticalToolFailures) {
                 val reason = "Identical tool failure repeated $count times: ${call.tool}"
-                return ToolTransition(fail(state.copy(task = state.task.copy(kernel = ContextKernel.record(
-                    state.task.kernel, call, false, error ?: stderr))), reason), reason)
+                return ToolTransition(
+                    state = fail(state.copy(task = state.task.copy(kernel = ContextKernel.record(
+                        state.task.kernel, call, false, error ?: stderr))), reason),
+                    stopReason = reason,
+                    failureEvent = failureEvent
+                )
             }
             if (call.tool.startsWith("python.")) {
                 pythonFailures++
                 if (pythonFailures > budget.maxPythonFailures) {
                     val reason = "Python failure budget exceeded (${budget.maxPythonFailures})"
-                    return ToolTransition(fail(state.copy(task = state.task.copy(kernel = ContextKernel.record(
-                        state.task.kernel, call, false, error ?: stderr))), reason), reason)
+                    return ToolTransition(
+                        state = fail(state.copy(task = state.task.copy(kernel = ContextKernel.record(
+                            state.task.kernel, call, false, error ?: stderr))), reason),
+                        stopReason = reason,
+                        failureEvent = failureEvent
+                    )
                 }
             }
         }
@@ -589,21 +615,15 @@ class AgentController(
 
         if (ok) return ToolTransition(state = nextState.copy(recoveryHint = null))
 
-        val classified = RecoveryPolicy.classifyToolFailure(
-            tool = canonicalTool,
-            errorCode = errorCode,
-            suppliedClass = failureClass,
-            error = error,
-            stderr = stderr,
-            stdout = stdout,
-            outcomeUnknown = outcomeUnknown
-        )
+        val event = requireNotNull(failureEvent) {
+            "Failed tool transition must carry a FailureEvent"
+        }
         val familyCount = familyFailures[actionFamily] ?: 0
         val decision = RecoveryPolicy.decide(
             RecoveryContext(
-                failureClass = classified,
-                effectClass = RecoveryPolicy.effectClass(canonicalTool),
-                actionFamily = actionFamily,
+                failureClass = event.failureClass,
+                effectClass = event.effectClass,
+                actionFamily = event.actionFamily ?: actionFamily,
                 familyFailures = familyCount,
                 semanticRecoverySpent = semanticSpent,
                 maxFamilyFailures = budget.maxActionFamilyFailures,
@@ -621,10 +641,16 @@ class AgentController(
 
         return when (decision) {
             is RecoveryDecision.RetryVariant ->
-                ToolTransition(nextState.copy(recoveryHint = combinedHint(decision.guidance)))
+                ToolTransition(
+                    state = nextState.copy(recoveryHint = combinedHint(decision.guidance)),
+                    failureEvent = event
+                )
 
             is RecoveryDecision.TryAlternative ->
-                ToolTransition(nextState.copy(recoveryHint = combinedHint(decision.guidance)))
+                ToolTransition(
+                    state = nextState.copy(recoveryHint = combinedHint(decision.guidance)),
+                    failureEvent = event
+                )
 
             is RecoveryDecision.DegradePartial -> {
                 val report = buildString {
@@ -641,13 +667,18 @@ class AgentController(
                             lastResult = report
                         )
                     ),
-                    partialReason = report
+                    partialReason = report,
+                    failureEvent = event
                 )
             }
 
             is RecoveryDecision.Stop -> {
                 val reason = decision.reason
-                ToolTransition(fail(nextState.copy(recoveryHint = null), reason), stopReason = reason)
+                ToolTransition(
+                    state = fail(nextState.copy(recoveryHint = null), reason),
+                    stopReason = reason,
+                    failureEvent = event
+                )
             }
         }
     }
