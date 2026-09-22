@@ -10,13 +10,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -44,6 +47,87 @@ import com.lumena.android.settings.LumenaPreferences
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+private const val ONE_888_LABEL = "One_888"
+
+private enum class CompanionStage(val label: String) {
+    WAITING("Waiting for ChatGPT"),
+    APPROVAL("Waiting approval"),
+    RUNNING("Running"),
+    RESULT("Result ready")
+}
+
+@Composable
+private fun StatusCard(
+    title: String,
+    detail: String,
+    enabled: Boolean? = null,
+    onToggle: ((Boolean) -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (enabled != null && onToggle != null) {
+                Switch(checked = enabled, onCheckedChange = onToggle)
+            } else {
+                Text(
+                    "●",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StageStrip(active: CompanionStage) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        CompanionStage.values().forEach { stage ->
+            Card(
+                modifier = Modifier.weight(1f),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (stage == active) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    }
+                )
+            ) {
+                Text(
+                    text = stage.label,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (stage == active) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CompanionScreen() {
     val context = LocalContext.current
@@ -54,11 +138,17 @@ fun CompanionScreen() {
     var token by rememberSaveable { mutableStateOf(initial.bridgeToken) }
     var autoReturn by rememberSaveable { mutableStateOf(initial.companionAutoReturn) }
     var safeAuto by rememberSaveable { mutableStateOf(initial.companionSafeAuto) }
+    var setupOpen by rememberSaveable { mutableStateOf(false) }
+    var lastResultOpen by rememberSaveable { mutableStateOf(false) }
+
     var detected by remember { mutableStateOf<CompanionCommand?>(null) }
     var handledFingerprint by remember { mutableStateOf<String?>(null) }
     var lastResult by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("Waiting for ChatGPT…") }
     var busy by remember { mutableStateOf(false) }
+    var bridgeSummary by remember {
+        mutableStateOf(if (token.isBlank()) "Not configured" else "Configured")
+    }
 
     fun persistConnection() {
         LumenaPreferences.saveBridgeUrl(context, bridgeUrl)
@@ -77,12 +167,17 @@ fun CompanionScreen() {
             context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             return
         }
-        val launch = context.packageManager.getLaunchIntentForPackage(LumenaAccessibilityService.CHATGPT_PACKAGE)
+
+        val launch = context.packageManager.getLaunchIntentForPackage(
+            LumenaAccessibilityService.CHATGPT_PACKAGE
+        )
         if (launch == null) {
-            status = "Official ChatGPT app was not found as ${LumenaAccessibilityService.CHATGPT_PACKAGE}."
+            status = "Official ChatGPT app was not found as " +
+                LumenaAccessibilityService.CHATGPT_PACKAGE + "."
             onFinished?.invoke(false)
             return
         }
+
         service.scheduleChatGptInsert(
             text = text,
             send = send,
@@ -90,7 +185,11 @@ fun CompanionScreen() {
         )
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(launch)
-        status = if (send) "Opening ChatGPT and sending…" else "Opening ChatGPT and inserting text…"
+        status = if (send) {
+            "Opening ChatGPT and sending…"
+        } else {
+            "Opening ChatGPT and inserting text…"
+        }
     }
 
     fun planFor(command: CompanionCommand) =
@@ -102,6 +201,41 @@ fun CompanionScreen() {
         return ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
     }
 
+    fun updateBridgeSummary(raw: String, ok: Boolean) {
+        val version = Regex("""(?m)^version=([^\s]+)""")
+            .find(raw)
+            ?.groupValues
+            ?.getOrNull(1)
+        bridgeSummary = when {
+            ok && version != null -> "OK · v" + version
+            ok -> "OK"
+            else -> "Error"
+        }
+    }
+
+    fun testBridge() {
+        persistConnection()
+        if (token.isBlank()) {
+            bridgeSummary = "Token required"
+            status = "Paste the bridge token first."
+            return
+        }
+
+        busy = true
+        scope.launch {
+            val result = TermuxBridgeClient(bridgeUrl, token, context).execute(
+                ToolRequest("health")
+            )
+            updateBridgeSummary(result.stdout, result.ok)
+            status = if (result.ok) {
+                result.stdout.trim().ifBlank { "Bridge OK" }
+            } else {
+                result.error ?: "Bridge error"
+            }
+            busy = false
+        }
+    }
+
     fun executeCommand(command: CompanionCommand, automatic: Boolean) {
         if (busy || command.fingerprint == handledFingerprint) return
         if (token.isBlank()) {
@@ -111,36 +245,45 @@ fun CompanionScreen() {
 
         val plan = planFor(command)
         if (!plan.allowed) {
-            status = "Blocked tool request: ${plan.reason}"
+            status = "Blocked tool request: " + plan.reason
             return
         }
 
         val readOnly = ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
         if (automatic && (!safeAuto || !readOnly)) {
-            status = "Approval required for ${plan.request.tool}."
+            status = "Approval required for " + plan.request.tool + "."
             return
         }
 
         persistConnection()
         busy = true
         status = if (automatic) {
-            "Safe Auto · running ${plan.request.tool}…"
+            "Safe Auto · running " + plan.request.tool + "…"
         } else {
-            "Running ${plan.request.tool}…"
+            "Running " + plan.request.tool + "…"
         }
 
         scope.launch {
-            val result = TermuxBridgeClient(bridgeUrl, token, context).execute(plan.request)
-            val formatted = CompanionProtocol.formatResult(plan.request.tool, result)
+            val result = TermuxBridgeClient(
+                bridgeUrl,
+                token,
+                context
+            ).execute(plan.request)
+
+            val formatted = CompanionProtocol.formatResult(
+                plan.request.tool,
+                result
+            )
             lastResult = formatted
+            lastResultOpen = false
             handledFingerprint = command.fingerprint
             busy = false
 
             if (autoReturn) {
                 status = if (result.ok) {
-                    "${plan.request.tool} completed. Returning the real result to ChatGPT…"
+                    plan.request.tool + " completed. Returning the real result to ChatGPT…"
                 } else {
-                    "${plan.request.tool} returned an error. Returning the real error to ChatGPT…"
+                    plan.request.tool + " returned an error. Returning the real error to ChatGPT…"
                 }
                 delay(250)
                 openChatGptWith(
@@ -148,17 +291,17 @@ fun CompanionScreen() {
                     send = true,
                     onFinished = { sent ->
                         status = if (sent) {
-                            "${plan.request.tool} result sent to ChatGPT."
+                            plan.request.tool + " result sent to ChatGPT."
                         } else {
-                            "${plan.request.tool} finished, but ChatGPT Send was not confirmed. Result is ready below."
+                            plan.request.tool + " finished, but ChatGPT Send was not confirmed. Result is ready below."
                         }
                     }
                 )
             } else {
                 status = if (result.ok) {
-                    "${plan.request.tool} completed. Result is ready below."
+                    plan.request.tool + " completed. Result is ready below."
                 } else {
-                    "${plan.request.tool} returned an error. The real error is shown below."
+                    plan.request.tool + " returned an error. The real error is shown below."
                 }
             }
         }
@@ -173,7 +316,7 @@ fun CompanionScreen() {
         detected = command
         val plan = planFor(command)
         when {
-            !plan.allowed -> status = "Blocked tool request: ${plan.reason}"
+            !plan.allowed -> status = "Blocked tool request: " + plan.reason
             safeAuto && isSafeReadOnly(command) && !busy -> {
                 status = "Safe read-only tool detected."
                 executeCommand(command, automatic = true)
@@ -193,7 +336,9 @@ fun CompanionScreen() {
             }
             return
         }
-        if (force && command.fingerprint == handledFingerprint) handledFingerprint = null
+        if (force && command.fingerprint == handledFingerprint) {
+            handledFingerprint = null
+        }
         acceptDetected(command, force = force)
     }
 
@@ -201,9 +346,30 @@ fun CompanionScreen() {
         detected?.let { executeCommand(it, automatic = false) }
     }
 
+    fun rejectDetected() {
+        detected?.let { command ->
+            handledFingerprint = command.fingerprint
+            detected = null
+            status = "Tool request rejected."
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (token.isNotBlank()) {
+            val result = TermuxBridgeClient(
+                bridgeUrl,
+                token,
+                context
+            ).execute(ToolRequest("health"))
+            updateBridgeSummary(result.stdout, result.ok)
+        }
+    }
+
     LaunchedEffect(safeAuto, token, bridgeUrl) {
         while (true) {
-            val command = CompanionProtocol.parse(LumenaAccessibilityService.lastChatGptSnapshot)
+            val command = CompanionProtocol.parse(
+                LumenaAccessibilityService.lastChatGptSnapshot
+            )
             if (
                 command != null &&
                 command.fingerprint != handledFingerprint &&
@@ -215,6 +381,15 @@ fun CompanionScreen() {
         }
     }
 
+    val chatGptConnected = LumenaAccessibilityService.instance != null
+    val stage = when {
+        busy -> CompanionStage.RUNNING
+        detected != null && detected?.fingerprint != handledFingerprint ->
+            CompanionStage.APPROVAL
+        lastResult.isNotBlank() -> CompanionStage.RESULT
+        else -> CompanionStage.WAITING
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -222,215 +397,450 @@ fun CompanionScreen() {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text("Lumena Companion", style = MaterialTheme.typography.headlineMedium)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Lumena Companion",
+                    style = MaterialTheme.typography.headlineMedium
+                )
+                Text(
+                    ONE_888_LABEL + " · focused companion UI",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            OutlinedButton(onClick = { setupOpen = true }) {
+                Text("+", style = MaterialTheme.typography.headlineSmall)
+            }
+        }
+
         Text(
-            "Official ChatGPT stays the main conversation. Lumena only bridges approved local tools to Termux/Python/Git.",
-            style = MaterialTheme.typography.bodyMedium
+            "ChatGPT stays the main conversation. Lumena bridges approved local tools to Termux/Python/Git.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            modifier = Modifier.fillMaxWidth()
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("1 · Connect this ChatGPT chat", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "This inserts the LUMENA_TOOL protocol into the current official ChatGPT conversation. You still control whether it is sent.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { openChatGptWith(CompanionProtocol.handshakeText, send = false) }) {
-                        Text("Insert protocol")
-                    }
-                    OutlinedButton(onClick = { openChatGptWith(CompanionProtocol.handshakeText, send = true) }) {
-                        Text("Insert + send")
-                    }
-                }
-            }
+            StatusCard(
+                title = "ChatGPT",
+                detail = if (chatGptConnected) "connected" else "open ChatGPT once",
+                modifier = Modifier.weight(1f)
+            )
+            StatusCard(
+                title = "Bridge",
+                detail = bridgeSummary,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            StatusCard(
+                title = "Safe Auto",
+                detail = if (safeAuto) "ON" else "OFF",
+                enabled = safeAuto,
+                onToggle = {
+                    safeAuto = it
+                    LumenaPreferences.saveCompanionSafeAuto(context, it)
+                },
+                modifier = Modifier.weight(1f)
+            )
+            StatusCard(
+                title = "Auto-return",
+                detail = if (autoReturn) "ON" else "OFF",
+                enabled = autoReturn,
+                onToggle = {
+                    autoReturn = it
+                    LumenaPreferences.saveCompanionAutoReturn(context, it)
+                },
+                modifier = Modifier.weight(1f)
+            )
         }
 
         Card(modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("2 · Local bridge", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "Bridge settings are shared automatically with Local and Tools.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                OutlinedTextField(
-                    value = bridgeUrl,
-                    onValueChange = {
-                        bridgeUrl = it
-                        LumenaPreferences.saveBridgeUrl(context, it)
-                    },
-                    label = { Text("Bridge URL") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = token,
-                    onValueChange = {
-                        val clean = LumenaPreferences.normalizeBridgeToken(it)
-                        token = clean
-                        LumenaPreferences.saveBridgeToken(context, clean)
-                    },
-                    label = { Text("Bridge token") },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        enabled = !busy,
-                        onClick = {
-                            persistConnection()
-                            busy = true
-                            scope.launch {
-                                val result = if (token.isBlank()) null else TermuxBridgeClient(bridgeUrl, token, context).execute(
-                                    ToolRequest("health")
-                                )
-                                status = when {
-                                    token.isBlank() -> "Paste the bridge token first."
-                                    result == null -> "Bridge test failed."
-                                    result.ok -> result.stdout.trim().ifBlank { "Bridge OK" }
-                                    else -> result.error ?: "Bridge error"
-                                }
-                                busy = false
-                            }
-                        }
-                    ) { Text("Test bridge") }
-                    TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) {
-                        Text("Accessibility")
-                    }
-                }
-            }
-        }
-
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            modifier = Modifier.fillMaxWidth()
-        ) {
             Column(
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                modifier = Modifier.fillMaxWidth().padding(14.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Safe Auto", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "Automatically runs only read-only tools, including context.snapshot, inspect.batch, process.status, http.json/http.get, image.search, system and file/Git inspection.",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                    Switch(
-                        checked = safeAuto,
-                        onCheckedChange = {
-                            safeAuto = it
-                            LumenaPreferences.saveCompanionSafeAuto(context, it)
+                Text(
+                    "Current request",
+                    style = MaterialTheme.typography.titleLarge
+                )
+                Text(
+                    status,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                val command = detected
+                if (command != null) {
+                    val plan = planFor(command)
+                    val readOnly = plan.allowed &&
+                        ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
+                    val autoEligible = safeAuto && readOnly
+
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                plan.request.tool,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                when {
+                                    !plan.allowed -> "Blocked by tool registry"
+                                    busy -> "Running"
+                                    autoEligible -> "Safe Auto eligible"
+                                    else -> "Approval required"
+                                },
+                                color = if (!plan.allowed) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.primary
+                                },
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                            Text(plan.reason)
+                            if (plan.request.args.isNotEmpty()) {
+                                Text(
+                                    "Args: " + plan.request.args,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    enabled = !busy && plan.allowed,
+                                    onClick = { runDetected() },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(if (busy) "Working…" else "Run once")
+                                }
+                                OutlinedButton(
+                                    enabled = !busy,
+                                    onClick = { rejectDetected() },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Reject")
+                                }
+                            }
                         }
-                    )
-                }
-
-                HorizontalDivider()
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Auto-return result", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "After an approved or Safe Auto tool finishes, Lumena sends the real LUMENA_RESULT back to ChatGPT automatically.",
-                            style = MaterialTheme.typography.bodySmall
-                        )
                     }
-                    Switch(
-                        checked = autoReturn,
-                        onCheckedChange = {
-                            autoReturn = it
-                            LumenaPreferences.saveCompanionAutoReturn(context, it)
-                        }
-                    )
-                }
-            }
-        }
-
-        HorizontalDivider()
-        Text("3 · Tool request", style = MaterialTheme.typography.titleLarge)
-        Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant)
-
-        detected?.let { command ->
-            val plan = planFor(command)
-            val readOnly = plan.allowed &&
-                ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
-            val autoEligible = safeAuto && readOnly
-
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(plan.request.tool, style = MaterialTheme.typography.titleMedium)
-                    Text(plan.reason)
-                    Text("Args: ${plan.request.args}", style = MaterialTheme.typography.bodySmall)
+                } else {
                     Text(
-                        when {
-                            !plan.allowed -> "BLOCKED by tool registry"
-                            autoEligible -> "READ-ONLY · Safe Auto eligible"
-                            else -> "Approval required · this tool can change state or execute code"
-                        },
+                        "No tool is pending. Scan the visible ChatGPT conversation for a LUMENA_TOOL request.",
                         style = MaterialTheme.typography.bodySmall
                     )
-                    if (!autoEligible || command.fingerprint == handledFingerprint) {
-                        Button(
-                            enabled = !busy && plan.allowed,
-                            onClick = { runDetected() }
-                        ) {
-                            Text(if (busy) "Working…" else "Run once")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { refreshCommand(force = false) }) {
+                            Text("Scan ChatGPT")
                         }
-                    } else if (busy) {
-                        Text("Running automatically…", style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { refreshCommand(force = true) }) {
+                            Text("Rescan")
+                        }
                     }
                 }
-            }
-        }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { refreshCommand(force = false) }) { Text("Scan ChatGPT") }
-            TextButton(onClick = { refreshCommand(force = true) }) { Text("Rescan") }
+                StageStrip(stage)
+            }
         }
 
         if (lastResult.isNotBlank()) {
-            HorizontalDivider()
-            Text("4 · Real local result", style = MaterialTheme.typography.titleLarge)
+            val lastTool = Regex("""(?m)^tool=(.+)$""")
+                .find(lastResult)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?: "tool"
+
             Card(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    lastResult,
-                    modifier = Modifier.padding(12.dp),
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { openChatGptWith(lastResult, send = false) }) {
-                    Text("Insert result")
-                }
-                OutlinedButton(onClick = { openChatGptWith(lastResult, send = true) }) {
-                    Text("Insert + send")
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Last result",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Text(
+                                lastTool + " · result ready",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(
+                            onClick = { lastResultOpen = !lastResultOpen }
+                        ) {
+                            Text(if (lastResultOpen) "▲" else "▼")
+                        }
+                    }
+
+                    Text(
+                        if (lastResultOpen) {
+                            lastResult.take(6000)
+                        } else {
+                            lastResult.lineSequence().take(4).joinToString("\n")
+                        },
+                        style = MaterialTheme.typography.bodySmall
+                    )
+
+                    if (lastResultOpen) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = {
+                                    openChatGptWith(lastResult, send = false)
+                                }
+                            ) {
+                                Text("Insert result")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    openChatGptWith(lastResult, send = true)
+                                }
+                            ) {
+                                Text("Insert + send")
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        Spacer(Modifier.height(12.dp))
         Text(
-            when {
-                safeAuto && autoReturn ->
-                    "Security: only READ_ONLY tools may auto-run. Mutating and executable tools still require Run once. Results return automatically. No unrestricted shell tool is exposed."
-                safeAuto ->
-                    "Security: only READ_ONLY tools may auto-run. Mutating and executable tools still require Run once. Results stay in Lumena until you send them."
-                else ->
-                    "Security: Safe Auto is off. Every external LUMENA_TOOL requires Run once. No unrestricted shell tool is exposed."
-            },
+            "Setup & diagnostics are in +",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        Spacer(Modifier.height(12.dp))
+    }
+
+    if (setupOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { setupOpen = false }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 18.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "Setup & diagnostics",
+                    style = MaterialTheme.typography.headlineSmall
+                )
+                Text(
+                    ONE_888_LABEL,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "Connect this ChatGPT chat",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            "Insert the LUMENA_TOOL protocol into the current official ChatGPT conversation.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = {
+                                    openChatGptWith(
+                                        CompanionProtocol.handshakeText,
+                                        send = false
+                                    )
+                                }
+                            ) {
+                                Text("Insert protocol")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    openChatGptWith(
+                                        CompanionProtocol.handshakeText,
+                                        send = true
+                                    )
+                                }
+                            ) {
+                                Text("Insert + send")
+                            }
+                        }
+                    }
+                }
+
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "Local bridge",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        OutlinedTextField(
+                            value = bridgeUrl,
+                            onValueChange = {
+                                bridgeUrl = it
+                                LumenaPreferences.saveBridgeUrl(context, it)
+                            },
+                            label = { Text("Bridge URL") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = token,
+                            onValueChange = {
+                                val clean = LumenaPreferences.normalizeBridgeToken(it)
+                                token = clean
+                                LumenaPreferences.saveBridgeToken(context, clean)
+                            },
+                            label = { Text("Bridge token") },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                enabled = !busy,
+                                onClick = { testBridge() }
+                            ) {
+                                Text("Test bridge")
+                            }
+                            TextButton(
+                                onClick = {
+                                    context.startActivity(
+                                        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                    )
+                                }
+                            ) {
+                                Text("Accessibility")
+                            }
+                        }
+                        Text(
+                            "Bridge status: " + bridgeSummary,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "Safe Auto",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                Text(
+                                    "Automatically runs only registry-marked read-only tools.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            Switch(
+                                checked = safeAuto,
+                                onCheckedChange = {
+                                    safeAuto = it
+                                    LumenaPreferences.saveCompanionSafeAuto(context, it)
+                                }
+                            )
+                        }
+
+                        HorizontalDivider()
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "Auto-return result",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                Text(
+                                    "Return the real LUMENA_RESULT to ChatGPT after a tool finishes.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            Switch(
+                                checked = autoReturn,
+                                onCheckedChange = {
+                                    autoReturn = it
+                                    LumenaPreferences.saveCompanionAutoReturn(context, it)
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            setupOpen = false
+                            refreshCommand(force = false)
+                        }
+                    ) {
+                        Text("Scan ChatGPT")
+                    }
+                    TextButton(
+                        onClick = {
+                            setupOpen = false
+                            refreshCommand(force = true)
+                        }
+                    ) {
+                        Text("Rescan")
+                    }
+                }
+
+                Text(
+                    "Security: only READ_ONLY tools may auto-run. Mutating and executable tools still require Run once. No unrestricted shell tool is exposed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(24.dp))
+            }
+        }
     }
 }
