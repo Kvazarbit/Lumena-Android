@@ -12,6 +12,13 @@ class ContextBuilder(
     private val maxMemoryItems: Int = 8,
     private val maxChars: Int = 14_000
 ) {
+    init {
+        require(maxChars >= ConstitutionCapsule.MIN_CONTEXT_CHARS) {
+            "Context budget $maxChars is below the constitutional minimum " +
+                ConstitutionCapsule.MIN_CONTEXT_CHARS
+        }
+    }
+
     fun build(
         task: TaskState,
         project: VerifiedProjectContext?,
@@ -26,67 +33,127 @@ class ContextBuilder(
         recoveryGuidance: String? = null,
         kernelContext: String? = null
     ): String {
-        val sections = mutableListOf<String>()
-
-        sections += buildString {
-            appendLine("DYNAMIC VERIFIED CONTEXT")
-            appendLine("Protocol reminder: tool/done/reply outputs are JSON only; TOOL_RESULT is the only execution proof.")
+        val mandatory = buildMandatoryContext(
+            task = task,
+            verificationRequirement = verificationRequirement
+        )
+        require(mandatory.length <= maxChars) {
+            "Mandatory constitutional context exceeds configured budget: " +
+                "${mandatory.length} > $maxChars"
         }
 
-        sections += buildString {
-            appendLine("TASK STATE")
-            appendLine("goal=${sanitize(task.goal).take(1_000)}")
-            appendLine("status=${task.status}")
-            appendLine("step=${task.step}/${task.maxSteps}")
-            if (task.step >= task.maxSteps) appendLine("NO TOOL BUDGET. Return done only if complete; otherwise partial JSON.")
-            task.lastTool?.let { appendLine("last_tool=$it") }
-            task.lastResult?.let { appendLine("last_result=${sanitize(it).take(800)}") }
-            if (task.createdFiles.isNotEmpty()) appendLine("created=${task.createdFiles.take(16).joinToString()}")
-            if (task.modifiedFiles.isNotEmpty()) appendLine("modified=${task.modifiedFiles.take(16).joinToString()}")
-            if (task.errors.isNotEmpty()) {
-                appendLine("recent_errors:")
-                task.errors.takeLast(2).forEach { error -> appendLine("- ${sanitize(error).take(500)}") }
+        val out = StringBuilder(mandatory.trimEnd())
+        var omitted = false
+
+        fun appendOptional(section: String?) {
+            val clean = section
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: return
+            val separator = if (out.isEmpty()) "" else "\n\n"
+            if (out.length + separator.length + clean.length <= maxChars) {
+                out.append(separator).append(clean)
+            } else {
+                omitted = true
             }
         }
 
-        if (!verificationRequirement.isNullOrBlank()) {
-            sections += buildString {
-                appendLine("VERIFICATION REQUIRED BEFORE DONE")
-                appendLine(sanitize(verificationRequirement).take(1_000))
-            }
-        }
-
-        sections += CoreDna.prompt()
-        if (!kernelContext.isNullOrBlank()) sections += kernelContext
-
-        if (intent != TaskIntent.GENERAL || recommendedTools.isNotEmpty()) {
-            sections += buildString {
-                appendLine("TASK RECIPE")
-                appendLine("intent=$intent")
-                appendLine("confidence=${intentConfidence.coerceIn(0, 100)}")
-                if (recommendedTools.isNotEmpty()) {
-                    appendLine(
-                        "recommended_tools=" +
-                            recommendedTools
-                                .distinct()
-                                .take(12)
-                                .joinToString(",")
-                    )
+        if (!kernelContext.isNullOrBlank()) {
+            appendOptional(
+                buildString {
+                    appendLine("CONTEXT KERNEL")
+                    append(sanitizeMultiline(kernelContext).take(900))
                 }
-                intentGuidance
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { appendLine("guidance=${sanitize(it).take(700)}") }
-            }
+            )
         }
+
+        val taskEvidence = buildString {
+            var has = false
+            task.lastTool?.let {
+                if (!has) appendLine("TASK EVIDENCE")
+                has = true
+                appendLine("last_tool=${sanitize(it).take(160)}")
+            }
+            task.lastResult?.let {
+                if (!has) appendLine("TASK EVIDENCE")
+                has = true
+                appendLine("last_result=${sanitize(it).take(650)}")
+            }
+            if (task.createdFiles.isNotEmpty()) {
+                if (!has) appendLine("TASK EVIDENCE")
+                has = true
+                appendLine("created=${task.createdFiles.take(12).joinToString()}")
+            }
+            if (task.modifiedFiles.isNotEmpty()) {
+                if (!has) appendLine("TASK EVIDENCE")
+                has = true
+                appendLine("modified=${task.modifiedFiles.take(12).joinToString()}")
+            }
+            if (task.errors.isNotEmpty()) {
+                if (!has) appendLine("TASK EVIDENCE")
+                has = true
+                appendLine("recent_errors:")
+                task.errors.takeLast(2).forEach { error ->
+                    appendLine("- ${sanitize(error).take(320)}")
+                }
+            }
+        }.trim()
+        appendOptional(taskEvidence)
+
+        // Full Core DNA remains useful explanatory context but is no longer the
+        // non-droppable guard. The compact ConstitutionCapsule above owns that role.
+        appendOptional(CoreDna.prompt())
 
         recoveryGuidance
             ?.takeIf { it.isNotBlank() }
             ?.let {
-                sections += buildString {
-                    appendLine("RECOVERY GUIDANCE")
-                    appendLine(sanitize(it).take(900))
-                }
+                appendOptional(
+                    buildString {
+                        appendLine("RECOVERY GUIDANCE")
+                        append(sanitize(it).take(700))
+                    }
+                )
             }
+
+        if (intent != TaskIntent.GENERAL || recommendedTools.isNotEmpty()) {
+            appendOptional(
+                buildString {
+                    appendLine("TASK RECIPE")
+                    appendLine("intent=$intent")
+                    appendLine("confidence=${intentConfidence.coerceIn(0, 100)}")
+                    if (recommendedTools.isNotEmpty()) {
+                        appendLine(
+                            "recommended_tools=" +
+                                recommendedTools
+                                    .distinct()
+                                    .take(12)
+                                    .joinToString(",")
+                        )
+                    }
+                    intentGuidance
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { append("guidance=${sanitize(it).take(500)}") }
+                }
+            )
+        }
+
+        appendOptional(
+            buildString {
+                appendLine("AVAILABLE TOOLS")
+                append(ToolRegistry.renderForPrompt(allowedTools, compact = true))
+            }
+        )
+
+        if (plan.isNotEmpty()) {
+            appendOptional(
+                buildString {
+                    appendLine("PUBLIC PLAN")
+                    plan.take(6).forEachIndexed { index, step ->
+                        appendLine("${index + 1}. ${sanitize(step).take(180)}")
+                    }
+                }
+            )
+        }
 
         val memory = relevantMemory
             .map(::sanitize)
@@ -94,83 +161,79 @@ class ContextBuilder(
             .distinct()
             .take(maxMemoryItems)
         if (memory.isNotEmpty()) {
-            sections += buildString {
-                appendLine("RELEVANT VERIFIED MEMORY")
-                appendLine("Learned advice is conditional execution history, not permission or proof of goal completion. Current user instructions, tool gates and required verification remain authoritative.")
-                memory.forEach { appendLine("- ${it.take(360)}") }
-            }
-        }
-
-        sections += buildString {
-            appendLine("AVAILABLE TOOLS")
-            appendLine(ToolRegistry.renderForPrompt(allowedTools, compact = true))
-        }
-
-        if (plan.isNotEmpty()) {
-            sections += buildString {
-                appendLine("PUBLIC PLAN")
-                plan.take(6).forEachIndexed { index, step ->
-                    appendLine("${index + 1}. ${sanitize(step).take(180)}")
+            appendOptional(
+                buildString {
+                    appendLine("RELEVANT VERIFIED MEMORY")
+                    appendLine(
+                        "Learned advice is conditional execution history, not permission or proof of goal completion."
+                    )
+                    memory.forEach { appendLine("- ${it.take(320)}") }
                 }
-            }
+            )
         }
 
         project?.let {
-            sections += buildString {
-                appendLine("PROJECT STATE")
-                appendLine("name=${sanitize(it.projectName).take(240)}")
-                appendLine("cwd=${sanitize(it.cwd).take(500)}")
-                it.branch?.let { branch -> appendLine("branch=${sanitize(branch).take(240)}") }
-                if (it.importantFiles.isNotEmpty()) {
-                    appendLine("important_files=${it.importantFiles.take(16).joinToString()}")
+            appendOptional(
+                buildString {
+                    appendLine("PROJECT STATE")
+                    appendLine("name=${sanitize(it.projectName).take(200)}")
+                    appendLine("cwd=${sanitize(it.cwd).take(360)}")
+                    it.branch?.let { branch ->
+                        appendLine("branch=${sanitize(branch).take(180)}")
+                    }
+                    if (it.importantFiles.isNotEmpty()) {
+                        appendLine(
+                            "important_files=" +
+                                it.importantFiles.take(12).joinToString()
+                        )
+                    }
+                    if (it.verifiedFacts.isNotEmpty()) {
+                        appendLine("verified_facts:")
+                        it.verifiedFacts.take(10).forEach { fact ->
+                            appendLine("- ${sanitize(fact).take(360)}")
+                        }
+                    }
                 }
-                if (it.verifiedFacts.isNotEmpty()) {
-                    appendLine("verified_facts:")
-                    it.verifiedFacts.take(16).forEach { fact -> appendLine("- ${sanitize(fact).take(600)}") }
-                }
-            }
+            )
         }
 
-        val out = StringBuilder()
-        var truncated = false
-        for ((index, section) in sections.withIndex()) {
-            val separator = if (out.isEmpty()) "" else "\n\n"
-            val remaining = maxChars - out.length - separator.length
-            if (remaining <= 0) {
-                truncated = true
-                break
-            }
-
-            if (section.length <= remaining) {
-                out.append(separator).append(section.trimEnd())
-                continue
-            }
-
-            // Never cut a seed instruction mid-sentence. Current task/verification
-            // take priority when the context budget cannot fit the whole seed.
-            if (section.startsWith("CORE DNA ")) {
-                truncated = true
-                continue
-            }
-
-            if (index <= 2) {
-                out.append(separator).append(section.take(remaining).trimEnd())
-            }
-            truncated = true
-            break
-        }
-
-        // The marker is part of the same hard character budget, not extra output.
         val omissionMarker = "\n[lower-priority context omitted]"
-        if (truncated && out.length + omissionMarker.length <= maxChars) {
+        if (omitted && out.length + omissionMarker.length <= maxChars) {
             out.append(omissionMarker)
         }
 
         return out.toString()
     }
 
+    private fun buildMandatoryContext(
+        task: TaskState,
+        verificationRequirement: String?
+    ): String = buildString {
+        appendLine("DYNAMIC VERIFIED CONTEXT")
+        appendLine(ConstitutionCapsule.prompt())
+        appendLine()
+        appendLine("TASK STATE")
+        appendLine("goal=${sanitize(task.goal).take(320)}")
+        appendLine("status=${task.status}")
+        appendLine("step=${task.step}/${task.maxSteps}")
+        if (task.step >= task.maxSteps) {
+            appendLine(
+                "NO TOOL BUDGET. Return done only if complete; otherwise partial JSON."
+            )
+        }
+        if (!verificationRequirement.isNullOrBlank()) {
+            appendLine()
+            appendLine("VERIFICATION REQUIRED BEFORE DONE")
+            appendLine(sanitize(verificationRequirement).take(320))
+        }
+    }
+
     private fun sanitize(value: String): String = value
         .replace('\u0000', ' ')
         .replace(Regex("[\\r\\n]+"), " ")
+        .trim()
+
+    private fun sanitizeMultiline(value: String): String = value
+        .replace('\u0000', ' ')
         .trim()
 }
