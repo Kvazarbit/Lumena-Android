@@ -269,11 +269,26 @@ object ExperienceMemoryStore {
             maxChars = 3_200,
             maxUnits = limit
         )
-        if (packet.lines.isNotEmpty()) {
+        val local = if (packet.lines.isNotEmpty()) {
             packet.lines
         } else {
             ExperienceMemoryIndex.relevant(state, query, limit)
         }
+
+        // Imported portable experience is source-device evidence only. It is
+        // deliberately appended after locally verified memory and is always
+        // labelled as requiring local revalidation. It cannot activate rules,
+        // grant permissions, or replace TOOL_RESULT evidence on this device.
+        val remaining = (limit.coerceIn(1, 16) - local.size).coerceAtLeast(0)
+        val portable = if (remaining > 0) {
+            PortableKernelStore.advice(app, query, remaining)
+        } else {
+            emptyList()
+        }
+
+        (local + portable)
+            .distinct()
+            .take(limit.coerceIn(1, 16))
     }
 
     fun stats(context: Context): ExperienceMemoryStats = synchronized(lock) {
