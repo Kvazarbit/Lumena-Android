@@ -8,6 +8,7 @@ import java.io.RandomAccessFile;
 class LlamaNative {
     static { System.loadLibrary("lumena_llama"); }
     native String nativeVersion();
+    native String nativeTemplateFallbackForArchitecture(String architecture);
     native String nativeProbeModelFd(int fd);
     native long nativeLoadModelFd(int fd, int gpuLayers);
     native String nativeLastError();
@@ -21,6 +22,9 @@ class LlamaNative {
     public static void main(String[] args) throws Exception {
         LlamaNative bridge = new LlamaNative();
         require(bridge.nativeVersion().contains("llama.cpp"));
+        require(bridge.nativeTemplateFallbackForArchitecture("gemma4").equals("gemma"));
+        require(bridge.nativeTemplateFallbackForArchitecture("gemma").equals("gemma"));
+        require(bridge.nativeTemplateFallbackForArchitecture("llama").isEmpty());
         try {
             bridge.nativeGenerate(0, "hello", 512, 16, 0.1f, 1, 32);
             throw new AssertionError("Missing model must throw, not return empty success");
@@ -37,6 +41,6 @@ class LlamaNative {
             require(bridge.nativeLoadModelFd(fd, 0) == 0);
             require(bridge.nativeLastError().contains("not seekable"));
         }
-        System.out.println("JNI smoke passed: explicit generation failure, invalid FD, non-seekable FD");
+        System.out.println("JNI smoke passed: Gemma template fallback, explicit generation failure, invalid FD, non-seekable FD");
     }
 }
