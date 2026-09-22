@@ -20,7 +20,7 @@ class FailureEventTest {
         assertEquals(FailureClass.INVALID_INPUT, event.failureClass)
         assertEquals(EffectClass.NONE, event.effectClass)
         assertEquals("model-protocol", event.dependency)
-        assertEquals(null, event.actionFamily)
+        assertTrue(event.actionFamily == null)
         assertTrue(event.retryable == true)
         assertFalse(event.outcomeUnknown)
     }
