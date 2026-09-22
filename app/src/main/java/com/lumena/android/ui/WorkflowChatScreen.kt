@@ -90,6 +90,7 @@ import com.lumena.android.agent.core.FollowUpGoal
 import com.lumena.android.agent.core.ReflexRuntimeAdvice
 import com.lumena.android.settings.ContextGenomeStats
 import com.lumena.android.settings.ContextGenomeStore
+import com.lumena.android.settings.ConstitutionGenomeStore
 import com.lumena.android.settings.ExperienceMemoryStore
 import com.lumena.android.settings.ExperienceLandscapeStore
 import com.lumena.android.settings.CoordinatorExperienceStore
@@ -449,6 +450,13 @@ fun WorkflowChatScreen(
                     )
                     .distinct()
                     .take(8)
+            },
+            constitutionProvider = { task ->
+                ConstitutionGenomeStore.relevant(
+                    context = context,
+                    task = task,
+                    limit = 6
+                )
             },
             reflexAdviceProvider = { event, candidates, task ->
                 try {
