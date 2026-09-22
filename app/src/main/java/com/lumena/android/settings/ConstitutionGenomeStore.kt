@@ -144,15 +144,15 @@ object ConstitutionGenomeRuntime {
 
         return when (rule.authority) {
             ConstitutionAuthority.HARD_GUARD ->
-                "HARD DNA [${rule.id}] · §statement · WHY: §why"
+                "HARD DNA [${rule.id}] · $statement · WHY: $why"
 
             ConstitutionAuthority.USER_CONSTRAINT ->
-                "USER CONSTRAINT [${rule.id}] · §statement · WHY: §why"
+                "USER CONSTRAINT [${rule.id}] · $statement · WHY: $why"
 
             ConstitutionAuthority.ADVISORY ->
                 "LEARNED CONSTITUTION [${rule.id}] " +
                     "(verified local evidence=${rule.evidenceRefs.count { it.promotionEligible() }}; " +
-                    "advisory, not permission) · §statement · WHY: §why"
+                    "advisory, not permission) · $statement · WHY: $why"
         }.take(900)
     }
 }
