@@ -5,6 +5,10 @@ import com.lumena.android.agent.core.AgentController
 import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.AgentDecision
 import com.lumena.android.agent.core.ControllerInstruction
+import com.lumena.android.agent.core.FailureEvent
+import com.lumena.android.agent.core.ReflexCandidateSet
+import com.lumena.android.agent.core.ReflexKernel
+import com.lumena.android.agent.core.ReflexRuntimeAdvice
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.core.ToolRegistry
@@ -61,6 +65,11 @@ class WorkflowRunner(
     private val model: String,
     private val controller: AgentController = AgentController(),
     private val relevantMemoryProvider: (TaskState) -> List<String> = { emptyList() },
+    private val reflexAdviceProvider: (
+        FailureEvent,
+        ReflexCandidateSet,
+        TaskState
+    ) -> ReflexRuntimeAdvice? = { _, _, _ -> null },
     private val onToolExperience: (TaskState, ToolRequest, ToolResult, Long) -> Unit = { _, _, _, _ -> },
     private val checkpoint: suspend (AgentControlState) -> Unit = {}
 ) {
@@ -181,7 +190,11 @@ class WorkflowRunner(
                         retryable = result.retryable,
                         dependency = result.dependency
                     )
-                    state = transition.state.copy(preflightCompleted = true)
+                    state = applyReflexAdvice(
+                        transition = transition,
+                        baseState = transition.state.copy(preflightCompleted = true),
+                        onProgress = onProgress
+                    )
                     publish(state, onState)
                     onProgress(
                         toolResultTrace(
@@ -400,7 +413,11 @@ class WorkflowRunner(
                         retryable = result.retryable,
                         dependency = result.dependency
                     )
-                    state = transition.state
+                    state = applyReflexAdvice(
+                        transition = transition,
+                        baseState = transition.state,
+                        onProgress = onProgress
+                    )
                     publish(state, onState)
                     onProgress(toolResultTrace(planned.request.tool, result.stdout, result.stderr, result.error, result.ok))
 
@@ -682,6 +699,98 @@ class WorkflowRunner(
             add(OllamaMessage("system", mergedSystem))
             addAll(history.filterNot { it.role == "system" })
         }
+    }
+
+    private fun applyReflexAdvice(
+        transition: com.lumena.android.agent.core.ToolTransition,
+        baseState: AgentControlState,
+        onProgress: (String) -> Unit
+    ): AgentControlState {
+        if (
+            transition.stopReason != null ||
+            transition.partialReason != null
+        ) {
+            return baseState
+        }
+
+        val event = transition.failureEvent ?: return baseState
+        val candidates = transition.reflexCandidates ?: return baseState
+
+        val advice = try {
+            reflexAdviceProvider(
+                event,
+                candidates,
+                baseState.task
+            )
+        } catch (failure: Exception) {
+            onProgress(
+                "REFLEX ADVICE · unavailable (" +
+                    (failure::class.simpleName ?: "error") +
+                    ")"
+            )
+            null
+        } ?: return baseState
+
+        if (advice.option !in candidates.allowed) {
+            onProgress(
+                "REFLEX ADVICE · rejected outside constitutional candidates"
+            )
+            return baseState
+        }
+
+        val gate = ReflexKernel.shouldUseReflex(
+            candidates = candidates,
+            confidence = advice.confidence,
+            threshold = 0.75,
+            evidenceCount = advice.evidenceCount
+        )
+        if (!gate.value) {
+            onProgress(
+                "REFLEX ADVICE · insufficient verified support · evidence=" +
+                    advice.evidenceCount
+            )
+            return baseState
+        }
+
+        val strengthPercent =
+            (advice.confidence.coerceIn(0.0, 1.0) * 100.0)
+                .toInt()
+
+        val reflexHint = buildString {
+            append("REFLEX ADVICE (advisory only; not permission): ")
+            append("option=")
+            append(advice.option.name)
+            append("; strength=")
+            append(strengthPercent)
+            append("%; evidence=")
+            append(advice.evidenceCount)
+            append("; calibrated=")
+            append(advice.calibrated)
+            append(". The model must choose the next action through the normal ")
+            append("protocol; ToolRegistry, ToolGate and confirmation remain authoritative.")
+        }.take(900)
+
+        val mergedHint = listOf(
+            baseState.recoveryHint,
+            reflexHint
+        )
+            .filterNotNull()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .joinToString(" ")
+            .take(2_000)
+
+        onProgress(
+            "REFLEX ADVICE · " + advice.option.name +
+                " · strength=" + strengthPercent + "%" +
+                " · evidence=" + advice.evidenceCount +
+                " · advisory only"
+        )
+
+        return baseState.copy(
+            recoveryHint = mergedHint
+        )
     }
 
     private suspend fun publish(state: AgentControlState, onState: (AgentControlState) -> Unit) {
