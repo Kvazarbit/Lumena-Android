@@ -59,10 +59,11 @@ class WebToolsTest(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(1, result["exitCode"])
-        self.assertEqual(1, provider.call_count)
+        self.assertEqual(3, provider.call_count)
         payload = json.loads(result["stdout"])
         self.assertEqual([], payload["results"])
-        self.assertEqual("duckduckgo", payload["attempts"][0]["provider"])
+        self.assertEqual(["duckduckgo-lite", "bing-rss", "duckduckgo"],
+                         [attempt["provider"] for attempt in payload["attempts"]])
         self.assertIn("HTTP 202", payload["attempts"][0]["error"])
         self.assertIn("Search unavailable", result["error"])
         self.assertEqual("SEARCH_EXHAUSTED", result["errorCode"])
@@ -90,9 +91,55 @@ class WebToolsTest(unittest.TestCase):
                              [{"url": "https://example.org/page", "title": "Found", "snippet": "source"}]]) as provider:
             result = self.b.web_search({"query": "actual query"})
         data = self.payload(result)
-        self.assertEqual("duckduckgo", data["provider"])
+        self.assertEqual("duckduckgo-lite", data["provider"])
         self.assertNotIn("test-secret", result["stdout"])
         self.assertEqual(2, provider.call_count)
+
+    def test_keyless_provider_chain_survives_duck_challenge_with_bing_rss(self):
+        with patch.object(
+                self.b,
+                "_search_provider",
+                side_effect=[
+                    ValueError("human verification page detected"),
+                    [{"url": "https://example.org/news", "title": "News", "snippet": "Evidence"}],
+                ],
+        ) as provider:
+            data = self.payload(self.b.web_search({"query": "current news"}))
+
+        self.assertEqual("bing-rss", data["provider"])
+        self.assertEqual(2, provider.call_count)
+        self.assertEqual("duckduckgo-lite", data["attempts"][0]["provider"])
+
+    def test_bing_rss_is_keyless_and_parses_results(self):
+        body = """<?xml version="1.0"?><rss><channel>
+        <item><title>Example result</title><link>https://example.org/article</link>
+        <description>Useful snippet</description><pubDate>Tue, 22 Sep 2026 10:00:00 GMT</pubDate></item>
+        </channel></rss>"""
+        with patch.object(
+                self.b,
+                "_web_fetch",
+                return_value=("https://www.bing.com/search", "application/rss+xml", body),
+        ) as fetch:
+            results = self.b._search_provider("bing-rss", "test query", 3, "", "", "")
+
+        self.assertEqual("Example result", results[0]["title"])
+        self.assertEqual("https://example.org/article", results[0]["url"])
+        self.assertEqual("Useful snippet", results[0]["snippet"])
+        self.assertIn("format=rss", fetch.call_args.args[0])
+        self.assertIn("q=test+query", fetch.call_args.args[0])
+
+    def test_duckduckgo_lite_parser_accepts_lite_markup(self):
+        html = """<a class="result-link" href="https://example.org/lite">Lite result</a>
+        <td class="result-snippet">Lite snippet</td>"""
+        with patch.object(
+                self.b,
+                "_web_fetch",
+                return_value=("https://lite.duckduckgo.com/lite/", "text/html", html),
+        ):
+            results = self.b._search_provider("duckduckgo-lite", "test query", 3, "", "", "")
+
+        self.assertEqual("Lite result", results[0]["title"])
+        self.assertEqual("Lite snippet", results[0]["snippet"])
 
     def test_documented_api_adapters_send_filters_and_parse_results(self):
         body = json.dumps({"web": {"results": [{"title": "Docs", "url": "https://example.org/doc", "description": "Description"}]}})
