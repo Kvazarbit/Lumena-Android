@@ -31,7 +31,9 @@ class AgentResponseParser {
         // {"action":"reply","result":"..."}, {"action":"done","result":"..."},
         // {"action":"partial","result":"..."}, or {"action":"tool",...}.
         // Normalize only explicitly known actions; never execute an unknown action.
-        when (obj["action"]?.toString()?.trim()?.lowercase()) {
+        val action = obj["action"]?.toString()?.trim()?.lowercase()
+        val actionTool = action?.takeIf { ToolRegistry.get(it) != null }
+        when (action) {
             "reply" -> {
                 val value = (obj["reply"] ?: obj["result"] ?: obj["content"])
                     ?.toString()?.trim().orEmpty()
@@ -51,7 +53,7 @@ class AgentResponseParser {
             }
             "tool" -> Unit
             null, "" -> Unit
-            else -> return AgentDecision.Reply(text)
+            else -> if (actionTool == null) return AgentDecision.Reply(text)
         }
 
         if (obj["partial"] == true) {
@@ -74,10 +76,13 @@ class AgentResponseParser {
         val shorthand = obj.entries.singleOrNull()?.takeIf {
             ToolRegistry.get(it.key) != null && it.value is Map<*, *>
         }
-        val tool = (obj["tool"] ?: obj["name"] ?: shorthand?.key)?.toString()?.trim().orEmpty()
+        val tool = (obj["tool"] ?: obj["name"] ?: actionTool ?: shorthand?.key)
+            ?.toString()?.trim().orEmpty()
         if (tool.isBlank()) return AgentDecision.Reply(text)
 
-        val rawArgs = when (val value = obj["args"] ?: obj["arguments"] ?: shorthand?.value) {
+        val rawArgs = when (val value =
+            obj["args"] ?: obj["arguments"] ?: obj["parameters"] ?: obj["input"] ?: shorthand?.value
+        ) {
             is Map<*, *> -> value
             is String -> runCatching { mapAdapter.fromJson(value) }.getOrNull() ?: emptyMap<String, Any?>()
             else -> emptyMap<String, Any?>()
