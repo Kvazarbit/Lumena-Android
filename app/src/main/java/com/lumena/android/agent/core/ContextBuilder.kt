@@ -100,10 +100,6 @@ class ContextBuilder(
         }.trim()
         appendOptional(taskEvidence)
 
-        // Full Core DNA remains useful explanatory context but is no longer the
-        // non-droppable guard. The compact ConstitutionCapsule above owns that role.
-        appendOptional(CoreDna.prompt())
-
         recoveryGuidance
             ?.takeIf { it.isNotBlank() }
             ?.let {
@@ -154,6 +150,11 @@ class ContextBuilder(
                 }
             )
         }
+
+        // Full Core DNA remains useful explanatory context but is no longer the
+        // non-droppable guard. Keep it below current recovery/tool/task state,
+        // but before learned memory when budget allows.
+        appendOptional(CoreDna.prompt())
 
         val memory = relevantMemory
             .map(::sanitize)
