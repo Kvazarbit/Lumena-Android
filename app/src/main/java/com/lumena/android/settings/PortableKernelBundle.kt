@@ -129,6 +129,7 @@ object PortableKernelPolicy {
         val localPortableExamples = localExecutionExamples
             .asSequence()
             .filter { it.tools.isNotEmpty() }
+            .filter { it.evidenceIds.isNotEmpty() }
             .filter { it.tools.all { tool -> ToolRegistry.get(tool) != null } }
             .map { example ->
                 PortableExecutionExampleSeed(
@@ -364,11 +365,16 @@ object PortableKernelPolicy {
     private fun PortableKernelPayload?.orEmptyExperience(): List<PortableExperienceSeed> =
         this?.positiveExperience.orEmpty()
 
-    private fun tokenize(value: String): Set<String> = value
-        .lowercase()
-        .split(Regex("[^\\p{L}\\p{N}._:@/-]+"))
-        .filter { it.length >= 2 }
-        .toSet()
+    private fun tokenize(value: String): Set<String> {
+        val lower = value.lowercase()
+        val compound = lower
+            .split(Regex("[^\\p{L}\\p{N}._:@/=-]+"))
+            .filter { it.length >= 2 }
+        val components = lower
+            .split(Regex("[^\\p{L}\\p{N}]+"))
+            .filter { it.length >= 2 }
+        return (compound + components).toSet()
+    }
 
     private fun sanitize(value: String, maxChars: Int): String = value
         .replace('\u0000', ' ')
