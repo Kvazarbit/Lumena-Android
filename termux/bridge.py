@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.20
+Lumena Termux Bridge v0.21
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -499,7 +499,7 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.20",
+            "User-Agent": "LumenaBridge/0.21",
             "Cache-Control": "no-cache",
         },
     )
@@ -553,7 +553,7 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "text/html,text/plain,application/json,application/xml,text/xml,application/xhtml+xml;q=0.9,*/*;q=0.1",
-            "User-Agent": "LumenaBridge/0.20",
+            "User-Agent": "LumenaBridge/0.21",
             "Cache-Control": "no-cache",
         },
     )
@@ -618,7 +618,7 @@ def _web_fetch(url: str, *, headers: dict[str, str] | None = None, redirects: in
             raise ValueError("Redirect loop")
         visited.add(url)
         request = urllib.request.Request(url, headers={
-            "User-Agent": "LumenaBridge/0.20", "Accept-Encoding": "identity",
+            "User-Agent": "LumenaBridge/0.21", "Accept-Encoding": "identity",
             "Accept": "text/html,application/json,text/plain;q=0.9", **(headers or {}),
         })
         try:
@@ -978,7 +978,7 @@ def _wikimedia_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.20 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.21 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -1050,7 +1050,7 @@ def _openverse_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.20 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.21 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -1787,7 +1787,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"Lumena bridge OK\n"
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + root.name for root in READONLY_ROOTS if root.exists()) or '(none)'}\n"
-                f"version=0.20\n"
+                f"version=0.21\n"
             ),
             "stderr": "",
             "error": None,
@@ -2054,7 +2054,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.20"
+    server_version = "LumenaBridge/0.21"
     protocol_version = "HTTP/1.1"
 
     def setup(self) -> None:
@@ -2097,12 +2097,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.20"})
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.21"})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
     def do_POST(self) -> None:
-        if self.path not in {"/tool", "/cancel"}:
+        if self.path not in {"/tool", "/cancel", "/shutdown"}:
             self._json(404, {"ok": False, "error": "Not found"})
             return
         if not self._authorized():
@@ -2114,6 +2114,23 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/cancel":
                 request_id = str(payload.get("requestId", "")).strip()
                 self._json(200, cancel_request(request_id))
+                return
+
+            if self.path == "/shutdown":
+                with ACTIVE_LOCK:
+                    active = len(ACTIVE_PROCESSES)
+                if active:
+                    self._json(409, {
+                        "ok": False,
+                        "error": f"Bridge has {active} active subprocess(es); stop the running tool first.",
+                    })
+                    return
+                self._json(200, {
+                    "ok": True,
+                    "service": "lumena-termux-bridge",
+                    "stopping": True,
+                })
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return
 
             tool = str(payload.get("tool", "")).strip()
@@ -2149,7 +2166,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Lumena Termux Bridge v0.20")
+    print("Lumena Termux Bridge v0.21")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")
