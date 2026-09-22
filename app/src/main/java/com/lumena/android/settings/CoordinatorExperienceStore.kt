@@ -384,6 +384,31 @@ object CoordinatorExperienceStore {
         CoordinatorExperiencePolicy.examples(load(context), query, limit)
     }
 
+    fun examplesForTask(
+        context: Context,
+        sessionId: String,
+        taskId: String?,
+        limit: Int = 32
+    ): List<CoordinatorExecutionExample> = synchronized(lock) {
+        val safeSessionId = stableId(sessionId)
+        val safeTaskId = taskId
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::stableId)
+        val sourceHash = CoordinatorExperiencePolicy.hash(
+            safeSessionId + "|" + (safeTaskId ?: safeSessionId)
+        ).take(16)
+
+        CoordinatorExperiencePolicy.examples(
+            state = load(context),
+            query = "",
+            limit = 64
+        )
+            .asSequence()
+            .filter { it.sourceSessionHash == sourceHash }
+            .take(limit.coerceIn(1, 64))
+            .toList()
+    }
+
     fun clear(context: Context) = synchronized(lock) {
         val file = atomicFile(context).baseFile
         if (file.exists()) file.delete()
