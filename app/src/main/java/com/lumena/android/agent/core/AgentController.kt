@@ -60,7 +60,8 @@ sealed interface ControllerInstruction {
 data class ToolTransition(
     val state: AgentControlState,
     val stopReason: String? = null,
-    val partialReason: String? = null
+    val partialReason: String? = null,
+    val failureEvent: FailureEvent? = null
 )
 
 class AgentController(
@@ -88,8 +89,12 @@ class AgentController(
     }
 
     fun onModelFailure(state: AgentControlState, message: String): ControllerInstruction {
-        val compactMessage = compactFailureMessage(message)
         val failures = state.modelFailures + 1
+        val event = FailureEvents.fromModel(
+            message = message,
+            attempt = failures
+        )
+        val compactMessage = compactFailureMessage(event.evidence)
         val next = state.copy(
             modelFailures = failures,
             task = state.task.copy(
@@ -98,45 +103,14 @@ class AgentController(
             )
         )
 
-        // Classify against the FULL error before truncating it for UI/state.
-        // Long native llama.cpp logs can otherwise push the actual load-error
-        // prefix out of compactMessage and cause pointless retries.
-        val fullLower = message.lowercase()
-        val nonRetryable = listOf(
-            "embedded model load failed",
-            "not enough free ram to load this gguf safely",
-            "embedded generation failed",
-            "could not load this gguf model",
-            "gguf model not found",
-            "invalid android file descriptor",
-            "metadata could not be parsed",
-            "full model load failed",
-            "allocation/mmap failed",
-            "tensor layout is not accepted",
-            // OllamaClient already retries these once with a smaller context.
-            // A second automatic controller retry would just spend another model turn.
-            "context length",
-            "context window",
-            "prompt too long",
-            "too many tokens",
-            "input is too long",
-            "maximum context",
-            "requested tokens exceed",
-            "exceeds the context",
-            "num_ctx",
-            "unauthorized",
-            "http 401",
-            "bridge token is required"
-        ).any(fullLower::contains)
-
         return when {
-            nonRetryable ->
+            event.retryable == false ->
                 ControllerInstruction.Stop(compactMessage, fail(next, compactMessage))
             failures > budget.maxModelRetries ->
                 ControllerInstruction.Stop("Model retry limit reached: $compactMessage", fail(next, compactMessage))
             else ->
                 ControllerInstruction.AskModelAgain(
-                    feedback = "The previous model call failed: ${compactMessage.take(600)}. Retry the SAME task from the verified state. Do not invent results.",
+                    feedback = "The previous model call failed [${event.failureClass}]: ${compactMessage.take(600)}. Retry the SAME task from the verified state. Do not invent results.",
                     state = next
                 )
         }
@@ -159,12 +133,17 @@ class AgentController(
             is NormalizationResult.PlainText ->
                 interpretDecision(AgentDecision.Reply(normalized.text), state)
 
-            is NormalizationResult.Failure ->
+            is NormalizationResult.Failure -> {
+                val event = FailureEvents.fromProtocol(
+                    failure = normalized,
+                    attempt = state.protocolRetries + 1
+                )
                 protocolRetry(
                     state,
-                    "Protocol ${normalized.kind}: ${normalized.reason}. " +
+                    "Protocol ${normalized.kind} [${event.failureClass}]: ${event.evidence}. " +
                         "Return exactly one valid tool/done/partial/reply JSON object."
                 )
+            }
         }
     }
 
@@ -214,9 +193,19 @@ class AgentController(
 
         val validation = ToolRegistry.validate(decision)
         if (!validation.allowed || validation.canonicalTool == null) {
+            val event = FailureEvents.policyDenied(
+                reason = validation.error ?: "Unknown tool ${decision.tool}",
+                actionFamily = ToolRegistry.canonicalize(decision.tool),
+                effectClass = ToolRegistry.get(decision.tool)?.risk?.let {
+                    if (it == ToolRisk.READ_ONLY) EffectClass.READ_ONLY
+                    else EffectClass.MUTATING_OR_EXECUTABLE
+                } ?: EffectClass.NONE,
+                attempt = state.protocolRetries + 1,
+                dependency = "tool-registry"
+            )
             return protocolRetry(
                 state,
-                validation.error ?: "Unknown tool ${decision.tool}"
+                "${event.failureClass}: ${event.evidence}"
             )
         }
 
