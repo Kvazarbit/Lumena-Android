@@ -220,4 +220,111 @@ class CoordinatorExperiencePolicyTest {
         )
     }
 
+    @Test
+    fun distilledRecoveryExampleSurvivesRawEventCompaction() {
+        var state = CoordinatorEpisodeState()
+        state = CoordinatorExperiencePolicy.record(
+            state,
+            event(
+                id = "fail",
+                session = "project",
+                tool = "file.read",
+                target = "path=missing.txt",
+                ok = false,
+                at = 100,
+                surprise = 0.9
+            ).copy(taskId = "repair-file")
+        )
+        state = CoordinatorExperiencePolicy.record(
+            state,
+            event(
+                id = "discover",
+                session = "project",
+                tool = "workspace.list",
+                target = "",
+                ok = true,
+                at = 200,
+                surprise = 0.8
+            ).copy(taskId = "repair-file")
+        )
+        state = CoordinatorExperiencePolicy.record(
+            state,
+            event(
+                id = "resolved",
+                session = "project",
+                tool = "file.read",
+                target = "path=missing.txt",
+                ok = true,
+                at = 300,
+                surprise = 1.0
+            ).copy(taskId = "repair-file")
+        )
+
+        assertTrue(
+            state.learnedExamples.any {
+                it.kind == CoordinatorExampleKind.RECOVERY
+            }
+        )
+
+        val compacted = state.copy(events = emptyList())
+        val recovered = CoordinatorExperiencePolicy.examples(
+            state = compacted,
+            query = "missing file workspace",
+            limit = 4
+        )
+
+        assertTrue(
+            recovered.any {
+                it.kind == CoordinatorExampleKind.RECOVERY &&
+                    it.tools == listOf(
+                        "file.read",
+                        "workspace.list",
+                        "file.read"
+                    )
+            }
+        )
+    }
+
+    @Test
+    fun learnedPlaybookProjectionIsBounded() {
+        val learned = (1..(CoordinatorExperiencePolicy.MAX_LEARNED_EXAMPLES + 20))
+            .map { index ->
+                CoordinatorExecutionExample(
+                    id = "example-$index",
+                    kind = CoordinatorExampleKind.VERIFIED_SEQUENCE,
+                    sourceSessionHash = CoordinatorExperiencePolicy
+                        .hash("session-$index")
+                        .take(16),
+                    tools = listOf("workspace.list", "file.read"),
+                    targets = listOf("", "path=$index"),
+                    evidenceIds = listOf("e-$index"),
+                    updatedAt = index.toLong(),
+                    surprise = 0.4,
+                    text = "fixture $index"
+                )
+            }
+
+        val state = CoordinatorExperiencePolicy.record(
+            CoordinatorEpisodeState(
+                learnedExamples = learned.take(
+                    CoordinatorExperiencePolicy.MAX_LEARNED_EXAMPLES
+                )
+            ),
+            event(
+                id = "new-event",
+                session = "new-session",
+                tool = "workspace.list",
+                target = "",
+                ok = true,
+                at = 10_000,
+                surprise = 0.8
+            )
+        )
+
+        assertTrue(
+            state.learnedExamples.size <=
+                CoordinatorExperiencePolicy.MAX_LEARNED_EXAMPLES
+        )
+    }
+
 }
