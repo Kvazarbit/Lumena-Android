@@ -1905,6 +1905,25 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         if not path.is_file():
             raise ValueError("Requested path is not a file")
         data = path.read_text(encoding="utf-8", errors="replace")
+
+        start_raw = args.get("start_line")
+        end_raw = args.get("end_line")
+        if start_raw is not None or end_raw is not None:
+            try:
+                start_line = int(start_raw) if start_raw is not None else 1
+                end_line = int(end_raw) if end_raw is not None else None
+            except (TypeError, ValueError) as exc:
+                raise ValueError("file.read start_line/end_line must be integers") from exc
+
+            if start_line < 1:
+                raise ValueError("file.read start_line must be >= 1")
+            if end_line is not None and end_line < start_line:
+                raise ValueError("file.read end_line must be >= start_line")
+
+            lines = data.splitlines(keepends=True)
+            selected_end = len(lines) if end_line is None else min(end_line, len(lines))
+            data = "".join(lines[start_line - 1:selected_end]) if start_line <= len(lines) else ""
+
         return {"ok": True, "exitCode": 0, "stdout": clamp(data), "stderr": "", "error": None}
 
     if tool == "project.create":
