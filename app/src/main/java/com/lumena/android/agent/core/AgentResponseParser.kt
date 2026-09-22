@@ -27,6 +27,35 @@ class AgentResponseParser {
         val obj = runCatching { mapAdapter.fromJson(candidate) }.getOrNull()
             ?: return AgentDecision.Reply(text)
 
+        // Compatibility envelope used by several local instruct models:
+        // {"action":"reply","result":"..."}, {"action":"done","result":"..."},
+        // {"action":"partial","result":"..."}, or {"action":"tool",...}.
+        // Normalize only explicitly known actions; never execute an unknown action.
+        val action = obj["action"]?.toString()?.trim()?.lowercase()
+        val actionTool = action?.takeIf { ToolRegistry.get(it) != null }
+        when (action) {
+            "reply" -> {
+                val value = (obj["reply"] ?: obj["result"] ?: obj["content"])
+                    ?.toString()?.trim().orEmpty()
+                if (value.isNotBlank()) return AgentDecision.Reply(value)
+            }
+            "done" -> {
+                val value = (obj["summary"] ?: obj["result"] ?: obj["reply"])
+                    ?.toString()?.trim().orEmpty()
+                return AgentDecision.Done(value.ifBlank { "Task complete." })
+            }
+            "partial" -> {
+                val value = (obj["summary"] ?: obj["result"] ?: obj["reply"])
+                    ?.toString()?.trim().orEmpty()
+                return AgentDecision.Partial(
+                    value.ifBlank { "Task incomplete; inspect the recorded results before continuing." }
+                )
+            }
+            "tool" -> Unit
+            null, "" -> Unit
+            else -> if (actionTool == null) return AgentDecision.Reply(text)
+        }
+
         if (obj["partial"] == true) {
             return AgentDecision.Partial(obj["summary"]?.toString()?.trim().orEmpty()
                 .ifBlank { "Task incomplete; inspect the recorded results before continuing." })
@@ -47,10 +76,13 @@ class AgentResponseParser {
         val shorthand = obj.entries.singleOrNull()?.takeIf {
             ToolRegistry.get(it.key) != null && it.value is Map<*, *>
         }
-        val tool = (obj["tool"] ?: obj["name"] ?: shorthand?.key)?.toString()?.trim().orEmpty()
+        val tool = (obj["tool"] ?: obj["name"] ?: actionTool ?: shorthand?.key)
+            ?.toString()?.trim().orEmpty()
         if (tool.isBlank()) return AgentDecision.Reply(text)
 
-        val rawArgs = when (val value = obj["args"] ?: obj["arguments"] ?: shorthand?.value) {
+        val rawArgs = when (val value =
+            obj["args"] ?: obj["arguments"] ?: obj["parameters"] ?: obj["input"] ?: shorthand?.value
+        ) {
             is Map<*, *> -> value
             is String -> runCatching { mapAdapter.fromJson(value) }.getOrNull() ?: emptyMap<String, Any?>()
             else -> emptyMap<String, Any?>()

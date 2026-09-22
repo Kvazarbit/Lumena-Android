@@ -83,6 +83,27 @@ llama_model_params probe_model_params() {
     return params;
 }
 
+std::string model_architecture(llama_model * model) {
+    if (!model) return {};
+    char arch[256] = {0};
+    const int n = llama_model_meta_val_str(
+        model,
+        "general.architecture",
+        arch,
+        sizeof(arch)
+    );
+    return n >= 0 ? std::string(arch) : std::string();
+}
+
+std::string fallback_chat_template_for_architecture(const std::string & architecture) {
+    // Gemma-family text chat uses the stable <start_of_turn>/<end_of_turn>
+    // framing supported by llama.cpp's built-in "gemma" preset. Some community
+    // GGUFs embed a richer Jinja template that this pinned llama.cpp cannot
+    // interpret even though the model architecture itself is supported.
+    if (architecture.rfind("gemma", 0) == 0) return "gemma";
+    return {};
+}
+
 std::string model_probe_summary(llama_model * model) {
     if (!model) {
         return std::string("ERROR\n") + last_log_copy();
@@ -136,6 +157,14 @@ jstring generation_failure(JNIEnv * env, const char * message) {
     if (exception) env->ThrowNew(exception, diagnostic.c_str());
     return nullptr;
 }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_lumena_android_llama_LlamaNative_nativeTemplateFallbackForArchitecture(
+        JNIEnv * env, jobject, jstring architectureValue) {
+    const std::string architecture = jstr(env, architectureValue);
+    const std::string fallback = fallback_chat_template_for_architecture(architecture);
+    return env->NewStringUTF(fallback.c_str());
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -349,8 +378,20 @@ Java_com_lumena_android_llama_LlamaNative_nativeApplyChatTemplate(
         chat.push_back(msg);
     }
 
-    const char * tmpl = llama_model_chat_template(model, nullptr);
-    if (!tmpl || !tmpl[0]) {
+    const std::string architecture = model_architecture(model);
+    const std::string fallback = fallback_chat_template_for_architecture(architecture);
+    const char * model_template = llama_model_chat_template(model, nullptr);
+    std::string selected_template =
+        (model_template && model_template[0]) ? std::string(model_template) : std::string();
+
+    if (selected_template.empty() && !fallback.empty()) {
+        selected_template = fallback;
+        append_log(
+            ("GGUF model has no usable default chat template; using built-in " +
+             fallback + " fallback for architecture=" + architecture + ".\n").c_str()
+        );
+    }
+    if (selected_template.empty()) {
         append_log("GGUF model has no default chat template.\n");
         return env->NewStringUTF("");
     }
@@ -360,30 +401,35 @@ Java_com_lumena_android_llama_LlamaNative_nativeApplyChatTemplate(
     for (const auto & content : contents) initial += content.size() * 2;
     std::vector<char> buffer(std::max<size_t>(initial, 4096));
 
-    int32_t needed = llama_chat_apply_template(
-        tmpl,
-        chat.data(),
-        chat.size(),
-        addAssistant == JNI_TRUE,
-        buffer.data(),
-        (int32_t) buffer.size()
-    );
-
-    if (needed < 0) {
-        append_log("llama_chat_apply_template failed for this GGUF template.\n");
-        return env->NewStringUTF("");
-    }
-
-    if ((size_t) needed >= buffer.size()) {
-        buffer.resize((size_t) needed + 1);
-        needed = llama_chat_apply_template(
-            tmpl,
+    auto apply_selected = [&](const std::string & tmpl) {
+        return llama_chat_apply_template(
+            tmpl.c_str(),
             chat.data(),
             chat.size(),
             addAssistant == JNI_TRUE,
             buffer.data(),
             (int32_t) buffer.size()
         );
+    };
+
+    int32_t needed = apply_selected(selected_template);
+    if (needed < 0 && !fallback.empty() && selected_template != fallback) {
+        append_log(
+            ("GGUF chat template is unsupported by this llama.cpp revision; using built-in " +
+             fallback + " fallback for architecture=" + architecture + ".\n").c_str()
+        );
+        selected_template = fallback;
+        needed = apply_selected(selected_template);
+    }
+
+    if (needed < 0) {
+        append_log("llama_chat_apply_template failed and no compatible fallback succeeded.\n");
+        return env->NewStringUTF("");
+    }
+
+    if ((size_t) needed >= buffer.size()) {
+        buffer.resize((size_t) needed + 1);
+        needed = apply_selected(selected_template);
         if (needed < 0) {
             append_log("llama_chat_apply_template failed after resize.\n");
             return env->NewStringUTF("");
