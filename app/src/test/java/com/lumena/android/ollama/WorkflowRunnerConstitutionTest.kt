@@ -131,4 +131,58 @@ class WorkflowRunnerConstitutionTest {
         assertTrue(toolCalls.isEmpty())
         assertTrue(modelCalls.get() >= 1)
     }
+    @Test
+    fun constitutionProviderReachesModelSystemContext() = runBlocking {
+        var sawConstitution = false
+
+        val modelClient = object : ChatModelClient {
+            override suspend fun chat(
+                model: String,
+                messages: List<OllamaMessage>
+            ): Result<String> {
+                sawConstitution = messages.any { message ->
+                    message.role == "system" &&
+                        message.content.contains("CONSTITUTION GENOME") &&
+                        message.content.contains(
+                            "USER CONSTRAINT [cg-user]"
+                        )
+                }
+                return Result.success(
+                    """{"partial":true,"summary":"Fixture complete."}"""
+                )
+            }
+        }
+
+        val task = TaskState(
+            id = "constitution-context-e2e",
+            projectId = "project-a",
+            goal = "Continue the project",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val initial = AgentController()
+            .initial(task)
+            .copy(preflightCompleted = true)
+
+        val outcome = WorkflowRunner(
+            modelClient = modelClient,
+            bridge = null,
+            model = "fixture",
+            constitutionProvider = {
+                listOf(
+                    "USER CONSTRAINT [cg-user] · Preserve the project constraint."
+                )
+            }
+        ).run(
+            history = listOf(
+                OllamaMessage("user", task.goal)
+            ),
+            task = task,
+            control = initial
+        )
+
+        assertTrue(outcome is WorkflowOutcome.Finished)
+        assertTrue(sawConstitution)
+    }
+
+
 }
