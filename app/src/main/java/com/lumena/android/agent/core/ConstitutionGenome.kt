@@ -441,10 +441,8 @@ object ConstitutionGenomePolicy {
         scope: ConstitutionScope
     ): List<ConstitutionRule> {
         val view = view(state)
-        val conflictedIds = view.conflicts.flatMap { it.ruleIds }.toSet()
 
         return view.rules
-            .filter { it.id !in conflictedIds }
             .filter { rule ->
                 rule.scope == scope ||
                     rule.scope.kind == ConstitutionScopeKind.GLOBAL
@@ -525,40 +523,61 @@ object ConstitutionGenomePolicy {
             .filter { it.status != ConstitutionRuleStatus.SUPERSEDED }
             .groupBy { it.key() }
 
-        val conflicted = active
-            .filterValues { rules -> rules.map { it.stance }.toSet().size > 1 }
-            .values
-            .flatten()
-            .map { it.id }
-            .toSet()
-
-        val hardByKey = active
-            .mapValues { (_, rules) ->
-                rules.filter { it.status == ConstitutionRuleStatus.HARD_INVARIANT }
-            }
-
         val next = state.rules.map { rule ->
             if (rule.status == ConstitutionRuleStatus.SUPERSEDED) {
-                rule
-            } else if (
-                rule.id in conflicted &&
-                rule.status != ConstitutionRuleStatus.HARD_INVARIANT
-            ) {
-                rule.copy(
-                    status = ConstitutionRuleStatus.CONTESTED
-                )
-            } else if (
-                hardByKey[rule.key()].orEmpty().any {
-                    it.stance != rule.stance
-                } &&
-                rule.status != ConstitutionRuleStatus.HARD_INVARIANT
-            ) {
-                rule.copy(
-                    status = ConstitutionRuleStatus.CONTESTED
-                )
-            } else {
-                evaluate(rule)
+                return@map rule
             }
+
+            val sameClaim = active[rule.key()].orEmpty()
+            val stances = sameClaim.map { it.stance }.toSet()
+            if (stances.size < 2) {
+                return@map evaluate(rule)
+            }
+
+            val hardRules = sameClaim.filter {
+                it.authority == ConstitutionAuthority.HARD_GUARD &&
+                    it.status == ConstitutionRuleStatus.HARD_INVARIANT
+            }
+            if (hardRules.isNotEmpty()) {
+                if (rule.authority == ConstitutionAuthority.HARD_GUARD) {
+                    return@map rule
+                }
+                return@map if (hardRules.any { it.stance != rule.stance }) {
+                    rule.copy(status = ConstitutionRuleStatus.CONTESTED)
+                } else {
+                    evaluate(rule)
+                }
+            }
+
+            val userRules = sameClaim.filter {
+                it.authority == ConstitutionAuthority.USER_CONSTRAINT
+            }
+            if (userRules.isNotEmpty()) {
+                val userStances = userRules.map { it.stance }.toSet()
+                if (userStances.size > 1) {
+                    return@map rule.copy(
+                        status = ConstitutionRuleStatus.CONTESTED
+                    )
+                }
+
+                val userStance = userStances.single()
+                return@map when {
+                    rule.authority == ConstitutionAuthority.USER_CONSTRAINT ->
+                        rule.copy(
+                            status = ConstitutionRuleStatus.ACTIVE_USER_CONSTRAINT
+                        )
+
+                    rule.stance != userStance ->
+                        rule.copy(
+                            status = ConstitutionRuleStatus.CONTESTED
+                        )
+
+                    else ->
+                        evaluate(rule)
+                }
+            }
+
+            rule.copy(status = ConstitutionRuleStatus.CONTESTED)
         }
 
         return if (next == state.rules) state else state.copy(rules = next)
