@@ -61,7 +61,8 @@ data class ToolTransition(
     val state: AgentControlState,
     val stopReason: String? = null,
     val partialReason: String? = null,
-    val failureEvent: FailureEvent? = null
+    val failureEvent: FailureEvent? = null,
+    val reflexCandidates: ReflexCandidateSet? = null
 )
 
 class AgentController(
@@ -646,14 +647,19 @@ class AgentController(
             "Failed tool transition must carry a FailureEvent"
         }
         val familyCount = familyFailures[actionFamily] ?: 0
+        val recoveryState = RecoveryState(
+            familyFailures = familyCount,
+            semanticRecoverySpent = semanticSpent,
+            maxFamilyFailures = budget.maxActionFamilyFailures,
+            maxSemanticRecoveries = budget.maxSemanticRecoveries
+        )
         val decision = ConstitutionKernel.decide(
             event = event,
-            state = RecoveryState(
-                familyFailures = familyCount,
-                semanticRecoverySpent = semanticSpent,
-                maxFamilyFailures = budget.maxActionFamilyFailures,
-                maxSemanticRecoveries = budget.maxSemanticRecoveries
-            )
+            state = recoveryState
+        )
+        val reflexCandidates = ReflexKernel.candidates(
+            event = event,
+            state = recoveryState
         )
 
         fun combinedHint(policy: String): String =
@@ -668,7 +674,8 @@ class AgentController(
             is RecoveryDecision.RetryVariant ->
                 ToolTransition(
                     state = nextState.copy(recoveryHint = combinedHint(decision.guidance)),
-                    failureEvent = event
+                    failureEvent = event,
+                    reflexCandidates = reflexCandidates
                 )
 
             is RecoveryDecision.TryAlternative ->
@@ -693,7 +700,8 @@ class AgentController(
                         )
                     ),
                     partialReason = report,
-                    failureEvent = event
+                    failureEvent = event,
+                    reflexCandidates = reflexCandidates
                 )
             }
 
@@ -702,7 +710,8 @@ class AgentController(
                 ToolTransition(
                     state = fail(nextState.copy(recoveryHint = null), reason),
                     stopReason = reason,
-                    failureEvent = event
+                    failureEvent = event,
+                    reflexCandidates = reflexCandidates
                 )
             }
         }
