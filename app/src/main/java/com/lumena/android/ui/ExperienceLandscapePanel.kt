@@ -98,7 +98,9 @@ internal fun ExperienceLandscapePanel(busy: Boolean, refreshKey: String) {
                     append(result.positiveExperience)
                     append(" позитивних досвідів, ")
                     append(result.dormantRules)
-                    append(" dormant rules. ")
+                    append(" dormant rules, ")
+                    append(result.executionExamples)
+                    append(" execution examples. ")
                     append("Досвід є advisory і мусить бути перевірений локально на цьому телефоні.")
                     if (!result.versionsMatchCurrentRuntime) {
                         append(" Версії ядра відрізняються від поточного runtime; permissions не перенесені.")
@@ -164,7 +166,7 @@ internal fun ExperienceLandscapePanel(busy: Boolean, refreshKey: String) {
             ) {
                 Text("Переносне живе ядро", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "Експорт переносить версії конституції, позитивний підтверджений Context Genome і активні PREFER-правила як dormant hints. На іншому телефоні вони не активуються автоматично: спочатку локальна перевірка. Approval, bridge token і permissions не переносяться.",
+                    "Експорт переносить версії конституції, позитивний підтверджений Context Genome, verified execution/recovery examples і активні PREFER-правила як dormant hints. На іншому телефоні вони не активуються автоматично: спочатку локальна перевірка. Approval, bridge token і permissions не переносяться.",
                     style = MaterialTheme.typography.bodySmall
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
