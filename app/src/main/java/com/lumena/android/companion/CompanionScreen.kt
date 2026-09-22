@@ -42,9 +42,12 @@ import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.local.ToolResult
 import com.lumena.android.settings.LumenaPreferences
+import com.lumena.android.settings.ExperienceMemoryStore
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun CompanionScreen() {
@@ -155,7 +158,40 @@ fun CompanionScreen() {
                     dependency = "termux_bridge"
                 )
             }
-            val formatted = CompanionProtocol.formatResult(plan.request.tool, result)
+            val experienceRef = if (result.outcomeUnknown) {
+                null
+            } else {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        ExperienceMemoryStore.record(
+                            context = context,
+                            request = plan.request,
+                            result = result
+                        )
+                    }
+                }.getOrNull()
+            }
+            val memoryQuery = buildString {
+                append(plan.request.tool)
+                plan.request.args.toSortedMap().forEach { (key, value) ->
+                    append(' ').append(key).append('=').append(value.take(220))
+                }
+            }
+            val memoryHints = runCatching {
+                withContext(Dispatchers.IO) {
+                    ExperienceMemoryStore.relevant(
+                        context = context,
+                        query = memoryQuery,
+                        limit = 3
+                    )
+                }
+            }.getOrElse { emptyList() }
+            val formatted = CompanionProtocol.formatResult(
+                tool = plan.request.tool,
+                result = result,
+                experienceRef = experienceRef,
+                memoryHints = memoryHints
+            )
             lastResult = formatted
             handledFingerprint = command.fingerprint
             if (activeFingerprint == command.fingerprint) activeFingerprint = null
