@@ -7,7 +7,9 @@ import com.lumena.android.model.ScreenSnapshot
 import com.lumena.android.agent.core.ConstitutionCapsule
 import com.lumena.android.agent.core.CoreDna
 import com.lumena.android.settings.PortableKernelPolicy
-import org.json.JSONObject
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.security.MessageDigest
 
 data class CompanionCommand(
@@ -22,6 +24,19 @@ object CompanionProtocol {
     const val TOOL_MARKER = "LUMENA_TOOL"
     const val RESULT_MARKER = "LUMENA_RESULT"
     const val COORDINATOR_CONTRACT_VERSION = PortableKernelPolicy.COORDINATOR_CONTRACT_VERSION
+
+    private val moshi = Moshi.Builder()
+        .add(KotlinJsonAdapterFactory())
+        .build()
+    @Suppress("UNCHECKED_CAST")
+    private val mapAdapter = moshi.adapter<Map<String, Any?>>(
+        Types.newParameterizedType(
+            Map::class.java,
+            String::class.java,
+            Any::class.java
+        )
+    )
+    private val anyAdapter = moshi.adapter(Any::class.java)
 
     val handshakeText: String = """
         Use Lumena Companion for local work on my Android phone.
@@ -88,24 +103,32 @@ object CompanionProtocol {
         if (markerIndex < 0) return null
         val json = extractJsonObject(text, markerIndex + TOOL_MARKER.length) ?: return null
         return runCatching {
-            val obj = JSONObject(json)
-            val tool = obj.optString("tool").trim()
+            val obj = mapAdapter.fromJson(json) ?: return null
+            val tool = obj["tool"]?.toString()?.trim().orEmpty()
             if (tool.isBlank()) return null
-            val reason = obj.optString("reason").ifBlank { "ChatGPT requested $tool" }
-            val argsJson = obj.optJSONObject("args") ?: JSONObject()
-            val rawArgs = buildMap {
-                val keys = argsJson.keys()
-                while (keys.hasNext()) {
-                    val key = keys.next()
-                    put(key, argsJson.opt(key)?.toString().orEmpty())
+            val reason = obj["reason"]?.toString()?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: "ChatGPT requested $tool"
+
+            val rawArgs = (obj["args"] as? Map<*, *>)
+                .orEmpty()
+                .entries
+                .mapNotNull { (key, value) ->
+                    if (key == null || value == null) return@mapNotNull null
+                    val rendered = when (value) {
+                        is Map<*, *>, is List<*> -> anyAdapter.toJson(value)
+                        else -> value.toString()
+                    }
+                    key.toString() to rendered
                 }
-            }
+                .toMap()
+
             val args = normalizeArgs(tool, rawArgs)
             val sessionId = normalizeCoordinatorId(
-                obj.optString("session_id").trim()
+                obj["session_id"]?.toString().orEmpty()
             )
             val taskId = normalizeCoordinatorId(
-                obj.optString("task_id").trim()
+                obj["task_id"]?.toString().orEmpty()
             )
             CompanionCommand(
                 decision = PlannerDecision(ToolRequest(tool, args), reason),
