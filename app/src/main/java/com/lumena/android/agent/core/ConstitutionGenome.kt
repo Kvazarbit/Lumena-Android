@@ -102,8 +102,8 @@ data class ConstitutionEvidenceRef(
             )
 
     fun contextKey(): String =
-        projectId?.takeIf { it.isNotBlank() }?.let { "project:$it" }
-            ?: taskId?.takeIf { it.isNotBlank() }?.let { "task:$it" }
+        taskId?.takeIf { it.isNotBlank() }?.let { "task:$it" }
+            ?: projectId?.takeIf { it.isNotBlank() }?.let { "project:$it" }
             ?: "evidence:$id"
 }
 
