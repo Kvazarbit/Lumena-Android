@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.21
+Lumena Termux Bridge v0.22
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -455,10 +455,30 @@ def system_info() -> dict[str, Any]:
     }
 
 
-def _validated_public_https_url(raw_url: str) -> str:
-    if not raw_url or len(raw_url) > 4096:
+def _repair_transport_url(raw_url: str) -> str:
+    raw = str(raw_url or "")
+    if not raw or len(raw) > 4096:
         raise ValueError("http.json requires a URL up to 4096 characters")
 
+    raw = raw.strip().replace("\u2060", "").replace("\ufeff", "")
+
+    # Accessibility transport may replace an injected format character with U+FFFD.
+    # Repair only when removing U+FFFD leaves an unambiguous ASCII URL.
+    if "\ufffd" in raw:
+        candidate = raw.replace("\ufffd", "")
+        if not candidate or any(ord(ch) > 0x7F for ch in candidate):
+            raise ValueError("URL contains ambiguous transport corruption")
+        raw = candidate
+
+    # Do not silently normalize other zero-width characters.
+    if any(ch in raw for ch in "\u200b\u200c\u200d"):
+        raise ValueError("URL contains forbidden zero-width Unicode characters")
+
+    return raw
+
+
+def _validated_public_https_url(raw_url: str) -> str:
+    raw_url = _repair_transport_url(raw_url)
     parsed = urllib.parse.urlsplit(raw_url)
     if parsed.scheme.lower() != "https":
         raise ValueError("http.json allows HTTPS only")
@@ -500,7 +520,7 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.21",
+            "User-Agent": "LumenaBridge/0.22",
             "Cache-Control": "no-cache",
         },
     )
@@ -554,7 +574,7 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "text/html,text/plain,application/json,application/xml,text/xml,application/xhtml+xml;q=0.9,*/*;q=0.1",
-            "User-Agent": "LumenaBridge/0.21",
+            "User-Agent": "LumenaBridge/0.22",
             "Cache-Control": "no-cache",
         },
     )
@@ -619,7 +639,7 @@ def _web_fetch(url: str, *, headers: dict[str, str] | None = None, redirects: in
             raise ValueError("Redirect loop")
         visited.add(url)
         request = urllib.request.Request(url, headers={
-            "User-Agent": "LumenaBridge/0.21", "Accept-Encoding": "identity",
+            "User-Agent": "LumenaBridge/0.22", "Accept-Encoding": "identity",
             "Accept": "text/html,application/json,text/plain;q=0.9", **(headers or {}),
         })
         try:
@@ -1013,7 +1033,7 @@ def _wikimedia_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.21 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.22 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -1085,7 +1105,7 @@ def _openverse_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.21 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.22 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -1822,7 +1842,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"Lumena bridge OK\n"
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + root.name for root in READONLY_ROOTS if root.exists()) or '(none)'}\n"
-                f"version=0.21\n"
+                f"version=0.22\n"
             ),
             "stderr": "",
             "error": None,
@@ -1885,6 +1905,25 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         if not path.is_file():
             raise ValueError("Requested path is not a file")
         data = path.read_text(encoding="utf-8", errors="replace")
+
+        start_raw = args.get("start_line")
+        end_raw = args.get("end_line")
+        if start_raw is not None or end_raw is not None:
+            try:
+                start_line = int(start_raw) if start_raw is not None else 1
+                end_line = int(end_raw) if end_raw is not None else None
+            except (TypeError, ValueError) as exc:
+                raise ValueError("file.read start_line/end_line must be integers") from exc
+
+            if start_line < 1:
+                raise ValueError("file.read start_line must be >= 1")
+            if end_line is not None and end_line < start_line:
+                raise ValueError("file.read end_line must be >= start_line")
+
+            lines = data.splitlines(keepends=True)
+            selected_end = len(lines) if end_line is None else min(end_line, len(lines))
+            data = "".join(lines[start_line - 1:selected_end]) if start_line <= len(lines) else ""
+
         return {"ok": True, "exitCode": 0, "stdout": clamp(data), "stderr": "", "error": None}
 
     if tool == "project.create":
@@ -2089,7 +2128,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.21"
+    server_version = "LumenaBridge/0.22"
     protocol_version = "HTTP/1.1"
 
     def setup(self) -> None:
@@ -2132,7 +2171,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.21"})
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.22"})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
@@ -2184,7 +2223,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Lumena Termux Bridge v0.21")
+    print("Lumena Termux Bridge v0.22")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")

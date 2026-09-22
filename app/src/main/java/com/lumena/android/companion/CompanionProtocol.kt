@@ -28,9 +28,17 @@ object CompanionProtocol {
         health, system.time, system.info, context.snapshot, process.status,
         http.json, http.get, web.search, web.read, image.search, inspect.batch,
         workspace.list, file.list, file.search, file.read,
-        project.create, dir.create, file.write,
-        git.status, git.diff, git.log, git.add, git.commit, python.run,
+        project.create, dir.create, file.write, file.patch,
+        git.status, git.diff, git.log, git.add, git.commit,
+        python.run, python.syntax_check, python.tests,
         ollama.status, ollama.generate, ollama.start, ollama.pull.
+
+        Important argument contracts:
+        - python.run requires {"script":"relative/path.py"} and the .py file must already exist in the workspace. Never put inline Python source in script; use file.write first.
+        - python.syntax_check uses the same existing-script path contract.
+        - file.write requires {"path":"relative/path","content":"..."}.
+        - file.read supports optional {"start_line":"1","end_line":"200"} as 1-based inclusive line bounds.
+        - inspect.batch requires {"requests":[...]} and only accepts read-only nested tools.
 
         Never invent tool results. Wait for a LUMENA_RESULT message before continuing the task.
         Prefer read-only inspection before edits. Use only one top-level tool request at a time.
@@ -65,17 +73,18 @@ object CompanionProtocol {
             if (tool.isBlank()) return null
             val reason = obj.optString("reason").ifBlank { "ChatGPT requested $tool" }
             val argsJson = obj.optJSONObject("args") ?: JSONObject()
-            val args = buildMap {
+            val rawArgs = buildMap {
                 val keys = argsJson.keys()
                 while (keys.hasNext()) {
                     val key = keys.next()
                     put(key, argsJson.opt(key)?.toString().orEmpty())
                 }
             }
+            val args = normalizeArgs(tool, rawArgs)
             CompanionCommand(
                 decision = PlannerDecision(ToolRequest(tool, args), reason),
                 rawJson = json,
-                fingerprint = sha256(json)
+                fingerprint = commandFingerprint(tool, args)
             )
         }.getOrNull()
     }
@@ -123,6 +132,43 @@ object CompanionProtocol {
             }
         }
         return null
+    }
+
+    private val urlArgTools = setOf("http.json", "http.get", "web.read")
+
+    private fun normalizeArgs(tool: String, args: Map<String, String>): Map<String, String> =
+        args.mapValues { (key, value) ->
+            if (key == "url" && tool in urlArgTools) normalizeAccessibilityUrl(value) else value
+        }
+
+    internal fun normalizeAccessibilityUrl(value: String): String {
+        var repaired = value.trim()
+            .replace("\u2060", "")
+            .replace("\ufeff", "")
+
+        if ('\ufffd' in repaired) {
+            val candidate = repaired.replace("\ufffd", "")
+            if (candidate.isNotBlank() && candidate.all { it.code <= 0x7f }) {
+                repaired = candidate
+            }
+        }
+        return repaired
+    }
+
+    internal fun commandFingerprint(tool: String, args: Map<String, String>): String {
+        val normalizedArgs = normalizeArgs(tool, args)
+        return sha256(fingerprintPayload(tool, normalizedArgs))
+    }
+
+    private fun fingerprintPayload(tool: String, args: Map<String, String>): String = buildString {
+        fun part(value: String) {
+            append(value.length).append(':').append(value).append('|')
+        }
+        part(tool)
+        args.toSortedMap().forEach { (key, value) ->
+            part(key)
+            part(value)
+        }
     }
 
     private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")

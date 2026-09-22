@@ -36,7 +36,7 @@ object ToolRegistry {
         ToolSpec("file.list", ToolRisk.READ_ONLY, description = "List a directory in an allowed read root. Optional path; use @Lumena-Android for the app repo."),
         ToolSpec("file.search", ToolRisk.READ_ONLY, setOf("query"), "Search file names and text in allowed read roots. Optional path; @Lumena-Android is read-only."),
         ToolSpec("workspace.list", ToolRisk.READ_ONLY, description = "List writable workspace contents and discover explicit read-only roots such as @Lumena-Android."),
-        ToolSpec("file.read", ToolRisk.READ_ONLY, setOf("path"), "Read a text file from the workspace or an explicit read-only root."),
+        ToolSpec("file.read", ToolRisk.READ_ONLY, setOf("path"), "Read a text file from the workspace or an explicit read-only root. Optional start_line/end_line are 1-based inclusive."),
         ToolSpec("git.status", ToolRisk.READ_ONLY, setOf("cwd"), "Inspect repository status without optional locks; cwd may be @Lumena-Android."),
         ToolSpec("git.diff", ToolRisk.READ_ONLY, setOf("cwd"), "Inspect repository diff with external diff/textconv disabled; cwd may be @Lumena-Android."),
         ToolSpec("git.log", ToolRisk.READ_ONLY, setOf("cwd"), "Inspect recent Git commits; cwd may be @Lumena-Android."),
