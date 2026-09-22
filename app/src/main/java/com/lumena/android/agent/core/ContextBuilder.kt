@@ -23,6 +23,7 @@ class ContextBuilder(
         task: TaskState,
         project: VerifiedProjectContext?,
         relevantMemory: List<String>,
+        constitutionalGuidance: List<String> = emptyList(),
         allowedTools: Set<String>? = null,
         plan: List<String> = emptyList(),
         verificationRequirement: String? = null,
@@ -63,6 +64,25 @@ class ContextBuilder(
                 buildString {
                     appendLine("CONTEXT KERNEL")
                     append(sanitizeMultiline(kernelContext).take(900))
+                }
+            )
+        }
+
+        val constitution = constitutionalGuidance
+            .map(::sanitize)
+            .filter { it.isNotBlank() }
+            .distinct()
+            .take(8)
+        if (constitution.isNotEmpty()) {
+            appendOptional(
+                buildString {
+                    appendLine("CONSTITUTION GENOME")
+                    appendLine(
+                        "Active user/learned rules are scoped guidance; hard authority remains in executable gates."
+                    )
+                    constitution.forEach {
+                        appendLine("- ${it.take(900)}")
+                    }
                 }
             )
         }
