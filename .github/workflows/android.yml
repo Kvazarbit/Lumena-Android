@@ -286,13 +286,13 @@ jobs:
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner" verify --verbose "$APK"
           "$ANDROID_SDK_ROOT/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "$APK"
           mkdir -p dist
-          cp "$APK" dist/Lumena-v0.12.3-arm64-debug.apk
-          (cd dist && sha256sum Lumena-v0.12.3-arm64-debug.apk > SHA256SUMS.txt)
+          cp "$APK" dist/Lumena-v0.12.4-arm64-debug.apk
+          (cd dist && sha256sum Lumena-v0.12.4-arm64-debug.apk > SHA256SUMS.txt)
           printf 'App commit: %s\nllama.cpp commit: %s\n' "$(git rev-parse HEAD)" "$(git -C third_party/llama.cpp rev-parse HEAD)" > dist/BUILD-INFO.txt
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Lumena-v0.12.3-arm64-debug
+          name: Lumena-v0.12.4-arm64-debug
           path: dist/
           if-no-files-found: error
       - name: Upload test reports
