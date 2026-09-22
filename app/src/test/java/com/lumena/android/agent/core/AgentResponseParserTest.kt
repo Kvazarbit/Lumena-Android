@@ -107,6 +107,18 @@ class AgentResponseParserTest {
     }
 
     @Test
+    fun registeredToolActionEnvelopeIsNormalized() {
+        val parsed = parser.parse(
+            """{"action":"web_search","parameters":{"query":"latest Poland news","limit":3}}"""
+        )
+        assertTrue(parsed is AgentDecision.ToolCall)
+        parsed as AgentDecision.ToolCall
+        assertEquals("web_search", parsed.tool)
+        assertEquals("latest Poland news", parsed.args["query"])
+        assertEquals("3.0", parsed.args["limit"])
+    }
+
+    @Test
     fun unknownActionIsNeverExecutedAsTool() {
         val parsed = parser.parse(
             """{"action":"shell","tool":"file.write","args":{"path":"x","content":"bad"}}"""
