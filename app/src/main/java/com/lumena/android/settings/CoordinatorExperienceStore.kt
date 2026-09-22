@@ -24,8 +24,9 @@ data class CoordinatorEpisodeEvent(
 )
 
 data class CoordinatorEpisodeState(
-    val version: Int = 1,
-    val events: List<CoordinatorEpisodeEvent> = emptyList()
+    val version: Int = 2,
+    val events: List<CoordinatorEpisodeEvent> = emptyList(),
+    val learnedExamples: List<CoordinatorExecutionExample> = emptyList()
 )
 
 enum class CoordinatorExampleKind {
@@ -53,6 +54,7 @@ data class CoordinatorExecutionExample(
  */
 object CoordinatorExperiencePolicy {
     const val MAX_EVENTS = 2_048
+    const val MAX_LEARNED_EXAMPLES = 512
     const val MAX_SEQUENCE_STEPS = 6
 
     fun record(
@@ -67,8 +69,23 @@ object CoordinatorExperiencePolicy {
         }
         require(event.at > 0)
         require(event.surprise in 0.0..1.0)
+
+        val allEvents = state.events + event
+        val learned = (
+            state.learnedExamples +
+                deriveExamples(allEvents)
+            )
+            .distinctBy { it.id }
+            .sortedWith(
+                compareBy<CoordinatorExecutionExample> { it.updatedAt }
+                    .thenBy { it.id }
+            )
+            .takeLast(MAX_LEARNED_EXAMPLES)
+
         return state.copy(
-            events = (state.events + event).takeLast(MAX_EVENTS)
+            version = 2,
+            events = allEvents.takeLast(MAX_EVENTS),
+            learnedExamples = learned
         )
     }
 
@@ -106,23 +123,16 @@ object CoordinatorExperiencePolicy {
         query: String,
         limit: Int = 4
     ): List<CoordinatorExecutionExample> {
-        if (state.events.isEmpty()) return emptyList()
         val queryTokens = tokenize(query)
-        val candidates = mutableListOf<CoordinatorExecutionExample>()
+        val candidates = (
+            state.learnedExamples +
+                deriveExamples(state.events)
+            )
+            .distinctBy { it.id }
 
-        state.events
-            .groupBy { event ->
-                event.sessionId to (event.taskId ?: event.sessionId)
-            }
-            .values
-            .forEach { rawSession ->
-                val session = rawSession.sortedBy { it.at }
-                candidates += recoveryExamples(session)
-                successfulSequence(session)?.let { candidates += it }
-            }
+        if (candidates.isEmpty()) return emptyList()
 
         return candidates
-            .distinctBy { it.id }
             .map { example ->
                 val searchable = tokenize(
                     example.tools.joinToString(" ") + " " +
@@ -148,6 +158,24 @@ object CoordinatorExperiencePolicy {
             .replace(Regex("\\s{2,}"), " ")
             .trim()
             .take(900)
+
+    private fun deriveExamples(
+        events: List<CoordinatorEpisodeEvent>
+    ): List<CoordinatorExecutionExample> {
+        if (events.isEmpty()) return emptyList()
+        val out = mutableListOf<CoordinatorExecutionExample>()
+        events
+            .groupBy { event ->
+                event.sessionId to (event.taskId ?: event.sessionId)
+            }
+            .values
+            .forEach { rawSession ->
+                val session = rawSession.sortedBy { it.at }
+                out += recoveryExamples(session)
+                successfulSequence(session)?.let { out += it }
+            }
+        return out
+    }
 
     private fun recoveryExamples(
         session: List<CoordinatorEpisodeEvent>
@@ -268,11 +296,21 @@ object CoordinatorExperienceStore {
         if (!file.baseFile.exists() && !File(file.baseFile.path + ".bak").exists()) {
             return@synchronized CoordinatorEpisodeState()
         }
-        runCatching {
+
+        val parsed = try {
             adapter.fromJson(
                 file.openRead().bufferedReader().use { it.readText() }
             )
-        }.getOrNull() ?: CoordinatorEpisodeState()
+        } catch (failure: Exception) {
+            throw IllegalStateException(
+                "Coordinator experience store is unreadable; refusing to replace verified history.",
+                failure
+            )
+        }
+
+        requireNotNull(parsed) {
+            "Coordinator experience store is empty/corrupt; refusing to replace verified history."
+        }
     }
 
     fun record(
