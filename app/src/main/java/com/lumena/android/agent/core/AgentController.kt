@@ -11,6 +11,8 @@ data class AgentControlState(
     val plan: List<String> = emptyList(),
     val toolUsed: Boolean = false,
     val protocolRetries: Int = 0,
+    val protocolNormalizations: Int = 0,
+    val lastNormalizationRule: String? = null,
     val modelFailures: Int = 0,
     val semanticRecoverySpent: Int = 0,
     val actionFamilyFailures: Map<String, Int> = emptyMap(),
@@ -62,6 +64,7 @@ data class ToolTransition(
 )
 
 class AgentController(
+    private val normalizer: ProtocolNormalizer = ProtocolNormalizer(),
     private val parser: AgentResponseParser = AgentResponseParser(),
     private val budget: FailureBudget = FailureBudget()
 ) {
@@ -140,15 +143,47 @@ class AgentController(
     }
 
     fun interpret(raw: String, state: AgentControlState): ControllerInstruction {
-        return when (val decision = parser.parse(raw)) {
-            is AgentDecision.ToolCall -> interpretTool(decision, state)
-            is AgentDecision.Done -> interpretDone(decision, state)
-            is AgentDecision.Partial -> ControllerInstruction.Finish(
-                "Частково виконано.\n${decision.summary}",
-                state.copy(task = state.task.copy(status = TaskStatus.PARTIAL, lastResult = decision.summary.take(4000)))
-            )
-            is AgentDecision.Reply -> interpretReply(decision, state)
+        return when (val normalized = normalizer.normalize(raw)) {
+            is NormalizationResult.Canonical -> {
+                val next = if (normalized.changed) {
+                    state.copy(
+                        protocolNormalizations = state.protocolNormalizations + 1,
+                        lastNormalizationRule = normalized.rule?.name
+                    )
+                } else {
+                    state
+                }
+                interpretDecision(parser.parse(normalized.json), next)
+            }
+
+            is NormalizationResult.PlainText ->
+                interpretDecision(AgentDecision.Reply(normalized.text), state)
+
+            is NormalizationResult.Failure ->
+                protocolRetry(
+                    state,
+                    "Protocol ${normalized.kind}: ${normalized.reason}. " +
+                        "Return exactly one valid tool/done/partial/reply JSON object."
+                )
         }
+    }
+
+    private fun interpretDecision(
+        decision: AgentDecision,
+        state: AgentControlState
+    ): ControllerInstruction = when (decision) {
+        is AgentDecision.ToolCall -> interpretTool(decision, state)
+        is AgentDecision.Done -> interpretDone(decision, state)
+        is AgentDecision.Partial -> ControllerInstruction.Finish(
+            "Частково виконано.\n${decision.summary}",
+            state.copy(
+                task = state.task.copy(
+                    status = TaskStatus.PARTIAL,
+                    lastResult = decision.summary.take(4000)
+                )
+            )
+        )
+        is AgentDecision.Reply -> interpretReply(decision, state)
     }
 
     private fun interpretTool(
