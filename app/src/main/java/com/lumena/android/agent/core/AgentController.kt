@@ -452,14 +452,30 @@ class AgentController(
         retryable: Boolean? = null,
         dependency: String? = null
     ): ToolTransition {
-        if (outcomeUnknown) {
-            val reason = "Tool outcome unknown after transport failure. Inspect current state before replaying ${call.tool}."
-            return ToolTransition(fail(state, reason), reason)
-        }
-
         val canonicalTool = ToolRegistry.canonicalize(call.tool)
         val signature = signature(call)
         val actionFamily = RecoveryPolicy.actionFamily(call)
+
+        if (outcomeUnknown) {
+            val event = FailureEvents.fromToolOutcome(
+                call = call,
+                errorCode = errorCode,
+                suppliedClass = failureClass,
+                error = error,
+                stderr = stderr,
+                stdout = stdout,
+                retryable = retryable,
+                dependency = dependency,
+                outcomeUnknown = true,
+                attempt = (state.actionFamilyFailures[actionFamily] ?: 0) + 1
+            )
+            val reason = "Tool outcome unknown after transport failure. Inspect current state before replaying ${call.tool}."
+            return ToolTransition(
+                state = fail(state, reason),
+                stopReason = reason,
+                failureEvent = event
+            )
+        }
         var pythonFailures = state.pythonFailures
         val repeatedFailures = state.repeatedToolFailures.toMutableMap()
         val familyFailures = state.actionFamilyFailures.toMutableMap()
@@ -469,6 +485,7 @@ class AgentController(
             ok && (state.repeatedToolFailures[signature] ?: 0) > 0
         val recovered = recoveredFromPythonFailure || recoveredFromRepeatedToolFailure
 
+        var failureEvent: FailureEvent? = null
         if (ok) {
             repeatedFailures.remove(signature)
             if (call.tool.startsWith("python.")) pythonFailures = 0
@@ -476,17 +493,37 @@ class AgentController(
             val count = (repeatedFailures[signature] ?: 0) + 1
             repeatedFailures[signature] = count
             familyFailures[actionFamily] = (familyFailures[actionFamily] ?: 0) + 1
+            failureEvent = FailureEvents.fromToolOutcome(
+                call = call,
+                errorCode = errorCode,
+                suppliedClass = failureClass,
+                error = error,
+                stderr = stderr,
+                stdout = stdout,
+                retryable = retryable,
+                dependency = dependency,
+                outcomeUnknown = false,
+                attempt = familyFailures[actionFamily] ?: 1
+            )
             if (count > budget.maxIdenticalToolFailures) {
                 val reason = "Identical tool failure repeated $count times: ${call.tool}"
-                return ToolTransition(fail(state.copy(task = state.task.copy(kernel = ContextKernel.record(
-                    state.task.kernel, call, false, error ?: stderr))), reason), reason)
+                return ToolTransition(
+                    state = fail(state.copy(task = state.task.copy(kernel = ContextKernel.record(
+                        state.task.kernel, call, false, error ?: stderr))), reason),
+                    stopReason = reason,
+                    failureEvent = failureEvent
+                )
             }
             if (call.tool.startsWith("python.")) {
                 pythonFailures++
                 if (pythonFailures > budget.maxPythonFailures) {
                     val reason = "Python failure budget exceeded (${budget.maxPythonFailures})"
-                    return ToolTransition(fail(state.copy(task = state.task.copy(kernel = ContextKernel.record(
-                        state.task.kernel, call, false, error ?: stderr))), reason), reason)
+                    return ToolTransition(
+                        state = fail(state.copy(task = state.task.copy(kernel = ContextKernel.record(
+                            state.task.kernel, call, false, error ?: stderr))), reason),
+                        stopReason = reason,
+                        failureEvent = failureEvent
+                    )
                 }
             }
         }
@@ -578,21 +615,15 @@ class AgentController(
 
         if (ok) return ToolTransition(state = nextState.copy(recoveryHint = null))
 
-        val classified = RecoveryPolicy.classifyToolFailure(
-            tool = canonicalTool,
-            errorCode = errorCode,
-            suppliedClass = failureClass,
-            error = error,
-            stderr = stderr,
-            stdout = stdout,
-            outcomeUnknown = outcomeUnknown
-        )
+        val event = requireNotNull(failureEvent) {
+            "Failed tool transition must carry a FailureEvent"
+        }
         val familyCount = familyFailures[actionFamily] ?: 0
         val decision = RecoveryPolicy.decide(
             RecoveryContext(
-                failureClass = classified,
-                effectClass = RecoveryPolicy.effectClass(canonicalTool),
-                actionFamily = actionFamily,
+                failureClass = event.failureClass,
+                effectClass = event.effectClass,
+                actionFamily = event.actionFamily ?: actionFamily,
                 familyFailures = familyCount,
                 semanticRecoverySpent = semanticSpent,
                 maxFamilyFailures = budget.maxActionFamilyFailures,
@@ -610,10 +641,16 @@ class AgentController(
 
         return when (decision) {
             is RecoveryDecision.RetryVariant ->
-                ToolTransition(nextState.copy(recoveryHint = combinedHint(decision.guidance)))
+                ToolTransition(
+                    state = nextState.copy(recoveryHint = combinedHint(decision.guidance)),
+                    failureEvent = event
+                )
 
             is RecoveryDecision.TryAlternative ->
-                ToolTransition(nextState.copy(recoveryHint = combinedHint(decision.guidance)))
+                ToolTransition(
+                    state = nextState.copy(recoveryHint = combinedHint(decision.guidance)),
+                    failureEvent = event
+                )
 
             is RecoveryDecision.DegradePartial -> {
                 val report = buildString {
@@ -630,13 +667,18 @@ class AgentController(
                             lastResult = report
                         )
                     ),
-                    partialReason = report
+                    partialReason = report,
+                    failureEvent = event
                 )
             }
 
             is RecoveryDecision.Stop -> {
                 val reason = decision.reason
-                ToolTransition(fail(nextState.copy(recoveryHint = null), reason), stopReason = reason)
+                ToolTransition(
+                    state = fail(nextState.copy(recoveryHint = null), reason),
+                    stopReason = reason,
+                    failureEvent = event
+                )
             }
         }
     }
