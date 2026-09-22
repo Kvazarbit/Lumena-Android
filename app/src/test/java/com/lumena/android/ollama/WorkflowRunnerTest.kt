@@ -1,5 +1,8 @@
 package com.lumena.android.ollama
 
+import com.lumena.android.agent.core.AgentController
+import com.lumena.android.agent.core.ReflexOption
+import com.lumena.android.agent.core.ReflexRuntimeAdvice
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.local.ToolExecutor
@@ -245,6 +248,304 @@ class WorkflowRunnerTest {
         assertEquals(0, outcome.control.modelFailures)
         assertEquals(1, outcome.control.semanticRecoverySpent)
         assertEquals(1, outcome.control.actionFamilyFailures["file.read"])
+    }
+
+    @Test
+    fun strongReflexAdviceReachesNextModelTurnWithoutExecutingAnythingByItself() = runBlocking {
+        val modelCalls = AtomicInteger(0)
+        val providerCalls = AtomicInteger(0)
+        var sawReflexAdvice = false
+
+        val modelClient = object : ChatModelClient {
+            override suspend fun chat(
+                model: String,
+                messages: List<OllamaMessage>
+            ): Result<String> {
+                return when (modelCalls.incrementAndGet()) {
+                    1 -> Result.success(
+                        """{"tool":"file.read","args":{"path":"missing.txt"},"reason":"inspect target"}"""
+                    )
+                    else -> {
+                        sawReflexAdvice = messages.any { message ->
+                            message.role == "system" &&
+                                message.content.contains(
+                                    "REFLEX ADVICE (advisory only; not permission)"
+                                ) &&
+                                message.content.contains("option=TRY_ALTERNATIVE")
+                        }
+                        Result.success(
+                            """{"partial":true,"summary":"Fixture stops after advisory recovery context."}"""
+                        )
+                    }
+                }
+            }
+        }
+
+        val requests = mutableListOf<ToolRequest>()
+        val bridge = object : ToolExecutor {
+            override suspend fun execute(toolRequest: ToolRequest): ToolResult {
+                requests += toolRequest
+                return ToolResult(
+                    ok = false,
+                    tool = toolRequest.tool,
+                    exitCode = 1,
+                    error = "FileNotFoundError: No such file",
+                    failureClass = "STATE_DRIFT",
+                    retryable = false,
+                    dependency = "filesystem"
+                )
+            }
+        }
+
+        val task = TaskState(
+            id = "reflex-advisory-e2e",
+            projectId = null,
+            goal = "Виконай контрольовану перевірку файлу",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val initial = AgentController()
+            .initial(task)
+            .copy(preflightCompleted = true)
+
+        val outcome = WorkflowRunner(
+            modelClient = modelClient,
+            bridge = bridge,
+            model = "fixture",
+            reflexAdviceProvider = { _, candidates, _ ->
+                providerCalls.incrementAndGet()
+                assertTrue(ReflexOption.TRY_ALTERNATIVE in candidates.allowed)
+                ReflexRuntimeAdvice(
+                    option = ReflexOption.TRY_ALTERNATIVE,
+                    confidence = 0.95,
+                    evidenceCount = 8,
+                    calibrated = false
+                )
+            }
+        ).run(
+            history = listOf(OllamaMessage("user", task.goal)),
+            task = task,
+            control = initial
+        )
+
+        assertTrue(outcome is WorkflowOutcome.Finished)
+        assertEquals(2, modelCalls.get())
+        assertEquals(1, providerCalls.get())
+        assertEquals(1, requests.size)
+        assertEquals("file.read", requests.single().tool)
+        assertTrue(sawReflexAdvice)
+    }
+
+    @Test
+    fun lowConfidenceReflexAdviceIsNotInjectedIntoModelContext() = runBlocking {
+        val modelCalls = AtomicInteger(0)
+        var sawReflexAdvice = false
+
+        val modelClient = object : ChatModelClient {
+            override suspend fun chat(
+                model: String,
+                messages: List<OllamaMessage>
+            ): Result<String> {
+                return when (modelCalls.incrementAndGet()) {
+                    1 -> Result.success(
+                        """{"tool":"file.read","args":{"path":"missing.txt"},"reason":"inspect target"}"""
+                    )
+                    else -> {
+                        sawReflexAdvice = messages.any { message ->
+                            message.role == "system" &&
+                                message.content.contains("REFLEX ADVICE")
+                        }
+                        Result.success(
+                            """{"partial":true,"summary":"No strong reflex evidence."}"""
+                        )
+                    }
+                }
+            }
+        }
+
+        val bridge = object : ToolExecutor {
+            override suspend fun execute(toolRequest: ToolRequest): ToolResult =
+                ToolResult(
+                    ok = false,
+                    tool = toolRequest.tool,
+                    exitCode = 1,
+                    error = "No such file",
+                    failureClass = "STATE_DRIFT",
+                    retryable = false,
+                    dependency = "filesystem"
+                )
+        }
+
+        val task = TaskState(
+            id = "reflex-low-confidence",
+            projectId = null,
+            goal = "Виконай контрольовану перевірку файлу",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val initial = AgentController()
+            .initial(task)
+            .copy(preflightCompleted = true)
+
+        val outcome = WorkflowRunner(
+            modelClient = modelClient,
+            bridge = bridge,
+            model = "fixture",
+            reflexAdviceProvider = { _, _, _ ->
+                ReflexRuntimeAdvice(
+                    option = ReflexOption.TRY_ALTERNATIVE,
+                    confidence = 0.50,
+                    evidenceCount = 8,
+                    calibrated = false
+                )
+            }
+        ).run(
+            history = listOf(OllamaMessage("user", task.goal)),
+            task = task,
+            control = initial
+        )
+
+        assertTrue(outcome is WorkflowOutcome.Finished)
+        assertEquals(2, modelCalls.get())
+        assertFalse(sawReflexAdvice)
+    }
+
+    @Test
+    fun illegalReflexOptionIsRejectedAndNeverBecomesExecution() = runBlocking {
+        val modelCalls = AtomicInteger(0)
+        val progress = mutableListOf<String>()
+        val requests = mutableListOf<ToolRequest>()
+
+        val modelClient = object : ChatModelClient {
+            override suspend fun chat(
+                model: String,
+                messages: List<OllamaMessage>
+            ): Result<String> {
+                return when (modelCalls.incrementAndGet()) {
+                    1 -> Result.success(
+                        """{"tool":"file.read","args":{"path":"missing.txt"},"reason":"inspect"}"""
+                    )
+                    else -> Result.success(
+                        """{"partial":true,"summary":"Illegal reflex choice was ignored."}"""
+                    )
+                }
+            }
+        }
+
+        val bridge = object : ToolExecutor {
+            override suspend fun execute(toolRequest: ToolRequest): ToolResult {
+                requests += toolRequest
+                return ToolResult(
+                    ok = false,
+                    tool = toolRequest.tool,
+                    exitCode = 1,
+                    error = "No such file",
+                    failureClass = "STATE_DRIFT",
+                    retryable = false,
+                    dependency = "filesystem"
+                )
+            }
+        }
+
+        val task = TaskState(
+            id = "reflex-illegal-choice",
+            projectId = null,
+            goal = "Перевір файл",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val initial = AgentController()
+            .initial(task)
+            .copy(preflightCompleted = true)
+
+        val outcome = WorkflowRunner(
+            modelClient = modelClient,
+            bridge = bridge,
+            model = "fixture",
+            reflexAdviceProvider = { _, _, _ ->
+                ReflexRuntimeAdvice(
+                    option = ReflexOption.RETRY_VARIANT,
+                    confidence = 0.99,
+                    evidenceCount = 20,
+                    calibrated = false
+                )
+            }
+        ).run(
+            history = listOf(OllamaMessage("user", task.goal)),
+            task = task,
+            control = initial,
+            onProgress = { progress += it }
+        )
+
+        assertTrue(outcome is WorkflowOutcome.Finished)
+        assertEquals(1, requests.size)
+        assertTrue(
+            progress.any {
+                it.contains(
+                    "rejected outside constitutional candidates"
+                )
+            }
+        )
+    }
+
+    @Test
+    fun unknownMutationOutcomeStopsBeforeReflexProviderAndNeverReplays() = runBlocking {
+        val providerCalls = AtomicInteger(0)
+        val requests = mutableListOf<ToolRequest>()
+
+        val modelClient = object : ChatModelClient {
+            override suspend fun chat(
+                model: String,
+                messages: List<OllamaMessage>
+            ): Result<String> = Result.success(
+                """{"tool":"file.write","args":{"path":"demo.txt","content":"x"},"reason":"controlled mutation"}"""
+            )
+        }
+
+        val bridge = object : ToolExecutor {
+            override suspend fun execute(toolRequest: ToolRequest): ToolResult {
+                requests += toolRequest
+                return ToolResult(
+                    ok = false,
+                    tool = toolRequest.tool,
+                    error = "bridge transport lost after dispatch",
+                    outcomeUnknown = true,
+                    retryable = false,
+                    dependency = "bridge"
+                )
+            }
+        }
+
+        val task = TaskState(
+            id = "reflex-unknown-mutation",
+            projectId = null,
+            goal = "Створи контрольований тестовий файл",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val initial = AgentController()
+            .initial(task)
+            .copy(preflightCompleted = true)
+
+        val outcome = WorkflowRunner(
+            modelClient = modelClient,
+            bridge = bridge,
+            model = "fixture",
+            reflexAdviceProvider = { _, _, _ ->
+                providerCalls.incrementAndGet()
+                ReflexRuntimeAdvice(
+                    option = ReflexOption.STOP,
+                    confidence = 1.0,
+                    evidenceCount = 10,
+                    calibrated = false
+                )
+            }
+        ).run(
+            history = listOf(OllamaMessage("user", task.goal)),
+            task = task,
+            control = initial,
+            isApprovedForTask = { _, _ -> true }
+        )
+
+        assertTrue(outcome is WorkflowOutcome.Failed)
+        assertEquals(1, requests.size)
+        assertEquals(0, providerCalls.get())
     }
 
 }
