@@ -102,17 +102,43 @@ class AgentController(
                 errors = (state.task.errors + compactMessage).takeLast(8)
             )
         )
+        val decision = ConstitutionKernel.decide(
+            event = event,
+            state = RecoveryState(
+                familyFailures = failures,
+                semanticRecoverySpent = 0,
+                maxFamilyFailures = budget.maxModelRetries,
+                maxSemanticRecoveries = budget.maxSemanticRecoveries
+            )
+        )
 
-        return when {
-            event.retryable == false ->
-                ControllerInstruction.Stop(compactMessage, fail(next, compactMessage))
-            failures > budget.maxModelRetries ->
-                ControllerInstruction.Stop("Model retry limit reached: $compactMessage", fail(next, compactMessage))
-            else ->
+        return when (decision) {
+            is RecoveryDecision.RetryVariant ->
                 ControllerInstruction.AskModelAgain(
-                    feedback = "The previous model call failed [${event.failureClass}]: ${compactMessage.take(600)}. Retry the SAME task from the verified state. Do not invent results.",
+                    feedback = "The previous model call failed [${event.failureClass}]: ${compactMessage.take(600)}. ${decision.guidance}",
                     state = next
                 )
+
+            is RecoveryDecision.TryAlternative ->
+                ControllerInstruction.AskModelAgain(
+                    feedback = "The previous model call failed [${event.failureClass}]: ${compactMessage.take(600)}. ${decision.guidance}",
+                    state = next
+                )
+
+            is RecoveryDecision.DegradePartial ->
+                ControllerInstruction.Stop(
+                    "Model recovery cannot continue safely: ${decision.reason}",
+                    fail(next, compactMessage)
+                )
+
+            is RecoveryDecision.Stop -> {
+                val reason = if (event.retryable == false) {
+                    compactMessage
+                } else {
+                    "Model retry limit reached: $compactMessage"
+                }
+                ControllerInstruction.Stop(reason, fail(next, compactMessage))
+            }
         }
     }
 
@@ -139,9 +165,10 @@ class AgentController(
                     attempt = state.protocolRetries + 1
                 )
                 protocolRetry(
-                    state,
-                    "Protocol ${normalized.kind} [${event.failureClass}]: ${event.evidence}. " +
-                        "Return exactly one valid tool/done/partial/reply JSON object."
+                    state = state,
+                    problem = "Protocol ${normalized.kind} [${event.failureClass}]: ${event.evidence}. " +
+                        "Return exactly one valid tool/done/partial/reply JSON object.",
+                    observedEvent = event
                 )
             }
         }
@@ -619,11 +646,9 @@ class AgentController(
             "Failed tool transition must carry a FailureEvent"
         }
         val familyCount = familyFailures[actionFamily] ?: 0
-        val decision = RecoveryPolicy.decide(
-            RecoveryContext(
-                failureClass = event.failureClass,
-                effectClass = event.effectClass,
-                actionFamily = event.actionFamily ?: actionFamily,
+        val decision = ConstitutionKernel.decide(
+            event = event,
+            state = RecoveryState(
                 familyFailures = familyCount,
                 semanticRecoverySpent = semanticSpent,
                 maxFamilyFailures = budget.maxActionFamilyFailures,
@@ -725,24 +750,65 @@ class AgentController(
             clean.takeLast(tailChars)
     }
 
-    private fun protocolRetry(state: AgentControlState, problem: String): ControllerInstruction {
+    private fun protocolRetry(
+        state: AgentControlState,
+        problem: String,
+        observedEvent: FailureEvent? = null
+    ): ControllerInstruction {
         val retries = state.protocolRetries + 1
+        val event = (observedEvent ?: FailureEvent(
+            source = FailureSource.PROTOCOL,
+            failureClass = FailureClass.INVALID_INPUT,
+            retryable = true,
+            effectClass = EffectClass.NONE,
+            dependency = "model-protocol",
+            evidence = problem.take(8_000),
+            actionFamily = null,
+            attempt = retries,
+            outcomeUnknown = false,
+            code = "CONTROLLER_PROTOCOL"
+        )).copy(attempt = retries)
+
+        val decision = ConstitutionKernel.decide(
+            event = event,
+            state = RecoveryState(
+                familyFailures = retries,
+                semanticRecoverySpent = 0,
+                maxFamilyFailures = budget.maxModelRetries,
+                maxSemanticRecoveries = budget.maxSemanticRecoveries
+            )
+        )
         val next = state.copy(
             protocolRetries = retries,
             task = state.task.copy(
                 status = TaskStatus.WAITING_MODEL
             )
         )
-        return if (retries > 2) {
-            ControllerInstruction.Stop(
-                "Model protocol failed repeatedly: $problem",
-                fail(next, problem)
-            )
-        } else {
-            ControllerInstruction.AskModelAgain(
-                feedback = "Protocol correction: $problem Continue the SAME task from verified state. Do not claim success unless a tool result proves it.",
-                state = next
-            )
+
+        return when (decision) {
+            is RecoveryDecision.RetryVariant ->
+                ControllerInstruction.AskModelAgain(
+                    feedback = "Protocol correction: $problem ${decision.guidance} Continue the SAME task from verified state. Do not claim success unless a tool result proves it.",
+                    state = next
+                )
+
+            is RecoveryDecision.TryAlternative ->
+                ControllerInstruction.AskModelAgain(
+                    feedback = "Protocol correction: $problem ${decision.guidance} Continue the SAME task from verified state. Do not claim success unless a tool result proves it.",
+                    state = next
+                )
+
+            is RecoveryDecision.DegradePartial ->
+                ControllerInstruction.Stop(
+                    "Model protocol failed repeatedly: $problem",
+                    fail(next, problem)
+                )
+
+            is RecoveryDecision.Stop ->
+                ControllerInstruction.Stop(
+                    "Model protocol failed repeatedly: $problem",
+                    fail(next, problem)
+                )
         }
     }
 

@@ -785,4 +785,53 @@ class AgentControllerTest {
         assertTrue(event.retryable == false)
     }
 
+    @Test
+    fun protocolKernelStopsThirdInvalidEnvelope() {
+        var state = controller.initial(
+            TaskState(
+                id = "protocol-budget",
+                projectId = null,
+                goal = "Поясни коротко різницю між RAM і SSD",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        val raw = """{"action":"shell","tool":"file.write","args":{"path":"x","content":"bad"}}"""
+
+        val first = controller.interpret(raw, state)
+        assertTrue(first is ControllerInstruction.AskModelAgain)
+        state = first.state
+
+        val second = controller.interpret(raw, state)
+        assertTrue(second is ControllerInstruction.AskModelAgain)
+        state = second.state
+
+        val third = controller.interpret(raw, state)
+        assertTrue(third is ControllerInstruction.Stop)
+        assertTrue(third.state.task.status == TaskStatus.FAILED)
+    }
+
+    @Test
+    fun modelKernelStopsThirdTransientFailureButAllowsFirstTwo() {
+        var state = controller.initial(
+            TaskState(
+                id = "model-budget",
+                projectId = null,
+                goal = "Поясни коротко різницю між RAM і SSD",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        val first = controller.onModelFailure(state, "temporary model transport failure")
+        assertTrue(first is ControllerInstruction.AskModelAgain)
+        state = first.state
+
+        val second = controller.onModelFailure(state, "temporary model transport failure")
+        assertTrue(second is ControllerInstruction.AskModelAgain)
+        state = second.state
+
+        val third = controller.onModelFailure(state, "temporary model transport failure")
+        assertTrue(third is ControllerInstruction.Stop)
+        assertTrue(third.state.task.status == TaskStatus.FAILED)
+    }
+
 }

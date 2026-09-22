@@ -77,62 +77,25 @@ object RecoveryPolicy {
     )
 
     fun decide(ctx: RecoveryContext): RecoveryDecision {
-        if (ctx.failureClass == FailureClass.UNKNOWN_EFFECT) {
-            return RecoveryDecision.Stop(
-                "Tool outcome is unknown. Do not replay a possible mutation; inspect the checkpoint/current state first."
+        val event = FailureEvent(
+            source = FailureSource.TOOL,
+            failureClass = ctx.failureClass,
+            retryable = null,
+            effectClass = ctx.effectClass,
+            dependency = ctx.actionFamily,
+            evidence = "legacy RecoveryContext adapter",
+            actionFamily = ctx.actionFamily,
+            attempt = maxOf(1, ctx.familyFailures),
+            outcomeUnknown = ctx.failureClass == FailureClass.UNKNOWN_EFFECT
+        )
+        return ConstitutionKernel.decide(
+            event = event,
+            state = RecoveryState(
+                familyFailures = ctx.familyFailures,
+                semanticRecoverySpent = ctx.semanticRecoverySpent,
+                maxFamilyFailures = ctx.maxFamilyFailures,
+                maxSemanticRecoveries = ctx.maxSemanticRecoveries
             )
-        }
-
-        if (ctx.failureClass == FailureClass.POLICY_DENIED) {
-            return RecoveryDecision.Stop("Policy denied the action.")
-        }
-
-        if (ctx.failureClass == FailureClass.AUTH_OR_CONFIG) {
-            return RecoveryDecision.DegradePartial(
-                "Required local/API configuration is unavailable; no blind retry is allowed."
-            )
-        }
-
-        if (ctx.semanticRecoverySpent >= ctx.maxSemanticRecoveries) {
-            return RecoveryDecision.DegradePartial(
-                "Semantic recovery budget exhausted without verified progress."
-            )
-        }
-
-        if (ctx.familyFailures >= ctx.maxFamilyFailures) {
-            return RecoveryDecision.DegradePartial(
-                "The same action family failed repeatedly; a rephrased retry must not reset the failure history."
-            )
-        }
-
-        return when (ctx.failureClass) {
-            FailureClass.DEPENDENCY_EXHAUSTED,
-            FailureClass.PROVIDER_CHALLENGE ->
-                RecoveryDecision.RetryVariant(
-                    "The provider path failed. One meaningfully different query/route is allowed; otherwise use another evidence source or report partial."
-                )
-
-            FailureClass.STATE_DRIFT ->
-                RecoveryDecision.TryAlternative(
-                    "Re-discover current state/path/root before retrying the failed operation."
-                )
-
-            FailureClass.TRANSIENT_TRANSPORT,
-            FailureClass.TIMEOUT,
-            FailureClass.RATE_LIMIT ->
-                RecoveryDecision.TryAlternative(
-                    "The local dependency already owns mechanical retries. Use current evidence to choose a safe alternate route or report partial."
-                )
-
-            FailureClass.INVALID_INPUT ->
-                RecoveryDecision.TryAlternative(
-                    "Correct the input from verified state; do not repeat the unchanged action."
-                )
-
-            else ->
-                RecoveryDecision.TryAlternative(
-                    "Use a meaningfully different evidence-producing action; do not repeat the unchanged failure."
-                )
-        }
+        )
     }
 }
