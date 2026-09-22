@@ -1,5 +1,7 @@
 package com.lumena.android.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,9 +23,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.lumena.android.settings.ExperienceLandscapeStore
+import com.lumena.android.settings.PortableKernelStore
 import com.lumena.android.settings.LandscapeRuleStatus
 import com.lumena.android.settings.LandscapeSnapshot
 import com.lumena.android.agent.core.CoreDna
+import com.lumena.android.agent.core.ConstitutionCapsule
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -42,6 +46,74 @@ internal fun ExperienceLandscapePanel(busy: Boolean, refreshKey: String) {
     var selectedNode by remember { mutableStateOf<String?>(null) }
     var selectedIntent by remember { mutableStateOf<String?>(null) }
     var selectedVersion by remember { mutableStateOf<Long?>(null) }
+    var portabilityBusy by remember { mutableStateOf(false) }
+    var portabilityStatus by remember { mutableStateOf<String?>(null) }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri == null || portabilityBusy) return@rememberLauncherForActivityResult
+        portabilityBusy = true
+        scope.launch {
+            try {
+                val json = withContext(Dispatchers.IO) {
+                    PortableKernelStore.exportJson(context)
+                }
+                withContext(Dispatchers.IO) {
+                    val stream = requireNotNull(context.contentResolver.openOutputStream(uri)) {
+                        "Не вдалося відкрити файл для запису"
+                    }
+                    stream.bufferedWriter().use { writer -> writer.write(json) }
+                }
+                portabilityStatus =
+                    "Живе ядро експортовано. Файл містить версії конституції, позитивний підтверджений досвід і dormant learned rules; approvals/bridge token не експортуються."
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                portabilityStatus = "Експорт не виконано: ${failure.message}"
+            } finally {
+                portabilityBusy = false
+            }
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null || portabilityBusy) return@rememberLauncherForActivityResult
+        portabilityBusy = true
+        scope.launch {
+            try {
+                val raw = withContext(Dispatchers.IO) {
+                    val stream = requireNotNull(context.contentResolver.openInputStream(uri)) {
+                        "Не вдалося відкрити файл"
+                    }
+                    stream.bufferedReader().use { reader -> reader.readText() }
+                }
+                val result = withContext(Dispatchers.IO) {
+                    PortableKernelStore.importJson(context, raw)
+                }
+                portabilityStatus = buildString {
+                    append("Імпортовано: ")
+                    append(result.positiveExperience)
+                    append(" позитивних досвідів, ")
+                    append(result.dormantRules)
+                    append(" dormant rules. ")
+                    append("Досвід є advisory і мусить бути перевірений локально на цьому телефоні.")
+                    if (!result.versionsMatchCurrentRuntime) {
+                        append(" Версії ядра відрізняються від поточного runtime; permissions не перенесені.")
+                    }
+                }
+                revision++
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                portabilityStatus = "Імпорт відхилено: ${failure.message}"
+            } finally {
+                portabilityBusy = false
+            }
+        }
+    }
     val snapshot by produceState<LandscapeSnapshot?>(null, expanded, busy, refreshKey, revision) {
         if (expanded) {
             try {
@@ -83,6 +155,41 @@ internal fun ExperienceLandscapePanel(busy: Boolean, refreshKey: String) {
         Text("Конституція v${data.state.revision} · вивчених правил ${data.state.activeRules.size}",
             style = MaterialTheme.typography.titleSmall)
         Text("Початкове ДНК: ${CoreDna.VERSION}", style = MaterialTheme.typography.titleSmall)
+        Text("Переносна капсула: ${ConstitutionCapsule.VERSION}", style = MaterialTheme.typography.titleSmall)
+
+        Card(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier.padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text("Переносне живе ядро", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Експорт переносить версії конституції, позитивний підтверджений Context Genome і активні PREFER-правила як dormant hints. На іншому телефоні вони не активуються автоматично: спочатку локальна перевірка. Approval, bridge token і permissions не переносяться.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        enabled = !busy && !editing && !portabilityBusy,
+                        onClick = { exportLauncher.launch("lumena-live-kernel.json") }
+                    ) {
+                        Text("Експортувати ядро")
+                    }
+                    TextButton(
+                        enabled = !busy && !editing && !portabilityBusy,
+                        onClick = {
+                            importLauncher.launch(
+                                arrayOf("application/json", "text/plain")
+                            )
+                        }
+                    ) {
+                        Text("Імпортувати ядро")
+                    }
+                }
+                portabilityStatus?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
         Text("${CoreDna.principles.size} інженерних правил проєкту. Це початкові принципи, без приписаних успіхів. Короткі коди мають явне значення; модель не повинна вгадувати їх.", style = MaterialTheme.typography.bodySmall)
         CoreDna.principles.forEach { rule -> Text("${rule.id} · ${rule.title}", style = MaterialTheme.typography.bodySmall) }
         Text("Оцінюються виконання інструментів, а не досягнення всієї мети. Поради не змінюють дозволи та обов’язкові перевірки.",
