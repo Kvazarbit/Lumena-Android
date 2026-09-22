@@ -267,54 +267,124 @@ fun CompanionScreen() {
             return
         }
 
-        persistConnection()
-        busy = true
-        status = if (automatic) {
-            "Safe Auto · running " + plan.request.tool + "…"
+        val request = if (plan.request.requestId.isNullOrBlank()) {
+            plan.request.copy(requestId = "companion-" + UUID.randomUUID().toString())
         } else {
-            "Running " + plan.request.tool + "…"
+            plan.request
         }
 
-        scope.launch {
-            val result = TermuxBridgeClient(
-                bridgeUrl,
-                token,
-                context
-            ).execute(plan.request)
+        persistConnection()
+        busy = true
+        startedAtMs = System.currentTimeMillis()
+        elapsedSeconds = 0L
+        status = if (automatic) {
+            "Safe Auto · running " + request.tool + "…"
+        } else {
+            "Running " + request.tool + "…"
+        }
 
-            val formatted = CompanionProtocol.formatResult(
-                plan.request.tool,
-                result
-            )
-            lastResult = formatted
-            lastResultOpen = false
-            handledFingerprint = command.fingerprint
-            busy = false
+        runningJob = scope.launch {
+            var finished = false
+            try {
+                val result = TermuxBridgeClient(
+                    bridgeUrl,
+                    token,
+                    context
+                ).execute(request)
 
-            if (autoReturn) {
-                status = if (result.ok) {
-                    plan.request.tool + " completed. Returning the real result to ChatGPT…"
-                } else {
-                    plan.request.tool + " returned an error. Returning the real error to ChatGPT…"
-                }
-                delay(250)
-                openChatGptWith(
-                    formatted,
-                    send = true,
-                    onFinished = { sent ->
-                        status = if (sent) {
-                            plan.request.tool + " result sent to ChatGPT."
-                        } else {
-                            plan.request.tool + " finished, but ChatGPT Send was not confirmed. Result is ready below."
-                        }
-                    }
+                val formatted = CompanionProtocol.formatResult(
+                    request.tool,
+                    result
                 )
-            } else {
-                status = if (result.ok) {
-                    plan.request.tool + " completed. Result is ready below."
+                lastResult = formatted
+                lastResultOpen = false
+                handledFingerprint = command.fingerprint
+                finished = true
+
+                if (autoReturn) {
+                    status = if (result.ok) {
+                        request.tool + " completed. Returning the real result to ChatGPT…"
+                    } else {
+                        request.tool + " returned an error. Returning the real error to ChatGPT…"
+                    }
+                    delay(250)
+                    openChatGptWith(
+                        formatted,
+                        send = true,
+                        onFinished = { sent ->
+                            status = if (sent) {
+                                request.tool + " result sent to ChatGPT."
+                            } else {
+                                request.tool + " finished, but ChatGPT Send was not confirmed. Result is ready below."
+                            }
+                        }
+                    )
                 } else {
-                    plan.request.tool + " returned an error. The real error is shown below."
+                    status = if (result.ok) {
+                        request.tool + " completed. Result is ready below."
+                    } else {
+                        request.tool + " returned an error. The real error is shown below."
+                    }
                 }
+            } finally {
+                if (!finished && status.startsWith("Stopping")) {
+                    status = "Stopped by user."
+                }
+                busy = false
+                runningJob = null
+                startedAtMs = null
+            }
+        }
+    }
+
+    fun stopRunning() {
+        if (!busy) return
+        status = "Stopping current tool…"
+        runningJob?.cancel()
+    }
+
+    fun runDiagnostic(tool: String) {
+        if (busy) return
+        if (token.isBlank()) {
+            status = "Paste the Termux bridge token first."
+            return
+        }
+
+        val request = ToolRequest(
+            tool = tool,
+            requestId = "diagnostic-" + UUID.randomUUID().toString()
+        )
+        busy = true
+        startedAtMs = System.currentTimeMillis()
+        elapsedSeconds = 0L
+        status = "Diagnostic · running " + tool + "…"
+
+        runningJob = scope.launch {
+            var finished = false
+            try {
+                val result = TermuxBridgeClient(
+                    bridgeUrl,
+                    token,
+                    context
+                ).execute(request)
+                if (tool == "health") {
+                    updateBridgeSummary(result.stdout, result.ok)
+                }
+                lastResult = CompanionProtocol.formatResult(tool, result)
+                lastResultOpen = true
+                status = if (result.ok) {
+                    "Diagnostic completed · " + tool
+                } else {
+                    "Diagnostic failed · " + tool
+                }
+                finished = true
+            } finally {
+                if (!finished && status.startsWith("Stopping")) {
+                    status = "Stopped by user."
+                }
+                busy = false
+                runningJob = null
+                startedAtMs = null
             }
         }
     }
