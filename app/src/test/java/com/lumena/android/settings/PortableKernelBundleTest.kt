@@ -251,4 +251,133 @@ class PortableKernelBundleTest {
         assertFalse(encoded.contains("approval", ignoreCase = true))
         assertFalse(encoded.contains("bearer", ignoreCase = true))
     }
+    @Test
+    fun exportCarriesVerifiedExecutionExamplesWithoutRawTaskText() {
+        val example = CoordinatorExecutionExample(
+            id = "example-1",
+            kind = CoordinatorExampleKind.RECOVERY,
+            sourceSessionHash = "abcdef1234567890",
+            tools = listOf("file.read", "workspace.list"),
+            targets = listOf("path=missing.txt", ""),
+            evidenceIds = listOf("e1", "e2"),
+            updatedAt = 900,
+            surprise = 1.0,
+            text = "local rendered text must be reconstructed from structured fields"
+        )
+
+        val payload = PortableKernelPolicy.buildPayload(
+            localAnchors = listOf(positive()),
+            localRules = emptyList(),
+            imported = null,
+            exportedAt = 1_000,
+            sourceAppVersionCode = 29,
+            sourceDeviceHash = PortableKernelPolicy.hash("device"),
+            localExecutionExamples = listOf(example)
+        )
+
+        assertEquals(2, payload.schemaVersion)
+        assertEquals(1, payload.executionExamples.size)
+        val seed = payload.executionExamples.single()
+        assertEquals("RECOVERY", seed.kind)
+        assertEquals(listOf("file.read", "workspace.list"), seed.tools)
+        assertFalse(
+            PortableKernelCodec.encode(payload).contains(
+                "local rendered text must be reconstructed",
+                ignoreCase = true
+            )
+        )
+    }
+
+    @Test
+    fun portableExecutionExampleAdviceIsExplicitlyAdvisory() {
+        val payload = PortableKernelPayload(
+            coreDnaVersion = CoreDna.VERSION,
+            constitutionCapsuleVersion = ConstitutionCapsule.VERSION,
+            coordinatorContractVersion = PortableKernelPolicy.COORDINATOR_CONTRACT_VERSION,
+            exportedAt = 1_000,
+            sourceAppVersionCode = 29,
+            sourceDeviceHash = PortableKernelPolicy.hash("device"),
+            executionExamples = listOf(
+                PortableExecutionExampleSeed(
+                    id = "ex-1",
+                    kind = CoordinatorExampleKind.RECOVERY.name,
+                    sourceSessionHash = "abcdef1234567890",
+                    tools = listOf("file.read", "workspace.list"),
+                    targets = listOf("path=missing.txt", ""),
+                    evidenceIds = listOf("e1", "e2"),
+                    updatedAt = 900,
+                    surprise = 1.0
+                )
+            )
+        )
+
+        val advice = PortableKernelPolicy.advice(
+            payload = payload,
+            query = "missing file workspace",
+            limit = 3
+        ).single()
+
+        assertTrue(advice.contains("PORTABLE RECOVERY EXAMPLE"))
+        assertTrue(advice.contains("revalidate locally"))
+        assertTrue(advice.contains("not whole-goal proof"))
+        assertTrue(advice.contains("not permission"))
+    }
+
+    @Test
+    fun schemaOneBundleRemainsReadableAfterSchemaTwoUpgrade() {
+        val legacy = PortableKernelPayload(
+            schemaVersion = 1,
+            coreDnaVersion = CoreDna.VERSION,
+            constitutionCapsuleVersion = ConstitutionCapsule.VERSION,
+            coordinatorContractVersion = "lumena-coordinator-v1",
+            exportedAt = 1_000,
+            sourceAppVersionCode = 29,
+            sourceDeviceHash = PortableKernelPolicy.hash("legacy-device"),
+            positiveExperience = listOf(
+                PortableExperienceSeed(
+                    signature = "a".repeat(64),
+                    tool = "file.read",
+                    target = "path=README.md",
+                    occurrences = 2,
+                    firstSeenAt = 100,
+                    lastSeenAt = 200
+                )
+            )
+        )
+
+        val decoded = PortableKernelCodec.decode(
+            PortableKernelCodec.encode(legacy)
+        )
+
+        assertEquals(1, decoded.schemaVersion)
+        assertTrue(decoded.executionExamples.isEmpty())
+        assertFalse(PortableKernelPolicy.versionsMatchCurrentRuntime(decoded))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun unknownToolInPortableExecutionExampleIsRejected() {
+        val payload = PortableKernelPayload(
+            coreDnaVersion = CoreDna.VERSION,
+            constitutionCapsuleVersion = ConstitutionCapsule.VERSION,
+            coordinatorContractVersion = PortableKernelPolicy.COORDINATOR_CONTRACT_VERSION,
+            exportedAt = 1_000,
+            sourceAppVersionCode = 29,
+            sourceDeviceHash = PortableKernelPolicy.hash("device"),
+            executionExamples = listOf(
+                PortableExecutionExampleSeed(
+                    id = "ex-bad",
+                    kind = CoordinatorExampleKind.VERIFIED_SEQUENCE.name,
+                    sourceSessionHash = "abcdef1234567890",
+                    tools = listOf("shell.exec"),
+                    targets = listOf("cmd=bad"),
+                    evidenceIds = emptyList(),
+                    updatedAt = 900,
+                    surprise = 0.5
+                )
+            )
+        )
+
+        PortableKernelCodec.encode(payload)
+    }
+
 }
