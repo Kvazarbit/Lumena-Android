@@ -441,9 +441,9 @@ fun WorkflowChatScreen(
                     )
                 }
                 (
-                    advice +
-                        verifiedMemory +
-                        coordinatorExamples
+                    advice.take(2) +
+                        coordinatorExamples.take(2) +
+                        verifiedMemory.take(4)
                     )
                     .distinct()
                     .take(8)
@@ -453,16 +453,21 @@ fun WorkflowChatScreen(
             },
             onToolExperience = { task, request, result, elapsedMs ->
                 val eventId = ExperienceMemoryStore.record(context, request, result)
-                CoordinatorExperienceStore.record(
-                    context = context,
-                    sessionId = task.projectId
-                        ?.takeIf { it.isNotBlank() }
-                        ?: task.id,
-                    taskId = task.id,
-                    request = request,
-                    result = result,
-                    experienceId = eventId
-                )
+                val coordinatorFailure = runCatching {
+                    CoordinatorExperienceStore.record(
+                        context = context,
+                        sessionId = task.projectId
+                            ?.takeIf { it.isNotBlank() }
+                            ?: task.id,
+                        taskId = task.id,
+                        request = request,
+                        result = result,
+                        experienceId = eventId
+                    )
+                }.exceptionOrNull()
+
+                // A coordinator-playbook write failure must not erase the older,
+                // already-verified landscape projection.
                 ExperienceLandscapeStore.record(
                     context,
                     session,
@@ -472,6 +477,8 @@ fun WorkflowChatScreen(
                     elapsedMs,
                     eventId
                 )
+
+                coordinatorFailure?.let { throw it }
             })
     }
 
