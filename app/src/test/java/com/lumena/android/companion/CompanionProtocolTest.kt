@@ -6,43 +6,54 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CompanionProtocolTest {
-    private fun parse(url: String) = CompanionProtocol.parseVisibleText(
-        """
-        LUMENA_TOOL
-        {"tool":"http.get","args":{"url":"$url"},"reason":"probe"}
-        """.trimIndent()
-    )!!
-
     @Test
     fun accessibilityTransportArtifactsAreRepairedForAsciiUrls() {
         assertEquals(
             "https://example.com/path",
-            parse("ht\u2060tps://exa\ufeffmple.com/path").decision.request.args["url"]
+            CompanionProtocol.normalizeAccessibilityUrl(
+                "ht\u2060tps://exa\ufeffmple.com/path"
+            )
         )
         assertEquals(
             "https://example.com/path",
-            parse("https://exa\ufffdmple.com/path").decision.request.args["url"]
+            CompanionProtocol.normalizeAccessibilityUrl(
+                "https://exa\ufffdmple.com/path"
+            )
         )
     }
 
     @Test
     fun ambiguousReplacementInUnicodeUrlIsPreservedForBridgeRejection() {
-        val value = parse("https://b\ufffdücher.example").decision.request.args["url"].orEmpty()
+        val value = CompanionProtocol.normalizeAccessibilityUrl(
+            "https://b\ufffdücher.example"
+        )
         assertTrue(value.contains('\ufffd'))
     }
 
     @Test
     fun semanticallySameTransportDamagedCommandHasStableFingerprint() {
-        val clean = parse("https://example.com/path")
-        val damaged = parse("https://exa\u2060mple.com/path")
-        assertEquals(clean.fingerprint, damaged.fingerprint)
+        val clean = CompanionProtocol.commandFingerprint(
+            "http.get",
+            mapOf("url" to "https://example.com/path")
+        )
+        val damaged = CompanionProtocol.commandFingerprint(
+            "http.get",
+            mapOf("url" to "https://exa\u2060mple.com/path")
+        )
+        assertEquals(clean, damaged)
     }
 
     @Test
     fun differentUrlHasDifferentFingerprint() {
         assertNotEquals(
-            parse("https://example.com/a").fingerprint,
-            parse("https://example.com/b").fingerprint
+            CompanionProtocol.commandFingerprint(
+                "http.get",
+                mapOf("url" to "https://example.com/a")
+            ),
+            CompanionProtocol.commandFingerprint(
+                "http.get",
+                mapOf("url" to "https://example.com/b")
+            )
         )
     }
 
