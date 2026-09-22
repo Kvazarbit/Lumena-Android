@@ -638,4 +638,71 @@ class AgentControllerTest {
         }
     }
 
+    @Test
+    fun knownActionReplyEnvelopeFinishesWithoutProtocolRetry() {
+        val state = controller.initial(task())
+
+        val instruction = controller.interpret(
+            """{"action":"reply","result":"Привіт із локальної моделі"}""",
+            state
+        )
+
+        assertTrue(instruction is ControllerInstruction.Finish)
+        instruction as ControllerInstruction.Finish
+        assertTrue(instruction.text.contains("Привіт із локальної моделі"))
+        assertTrue(instruction.state.protocolRetries == 0)
+        assertTrue(instruction.state.protocolNormalizations == 1)
+        assertTrue(instruction.state.lastNormalizationRule == "ACTION_REPLY")
+    }
+
+    @Test
+    fun registeredToolActionEnvelopeExecutesWithoutCorrectionTurn() {
+        val webTask = TaskState(
+            id = "normalized-web",
+            projectId = null,
+            goal = "Знайди актуальні новини",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val state = controller.initial(webTask)
+
+        val instruction = controller.interpret(
+            """{"action":"web_search","parameters":{"query":"latest Poland news","limit":3}}""",
+            state
+        )
+
+        assertTrue(instruction is ControllerInstruction.Execute)
+        instruction as ControllerInstruction.Execute
+        assertTrue(instruction.call.tool == "web.search")
+        assertTrue(instruction.call.args["query"] == "latest Poland news")
+        assertTrue(instruction.state.protocolRetries == 0)
+        assertTrue(instruction.state.protocolNormalizations == 1)
+        assertTrue(instruction.state.lastNormalizationRule == "REGISTERED_ACTION_ALIAS")
+    }
+
+    @Test
+    fun unknownActionCannotSmuggleMutationThroughNormalizer() {
+        val state = controller.initial(task())
+
+        val instruction = controller.interpret(
+            """{"action":"shell","tool":"file.write","args":{"path":"x","content":"bad"}}""",
+            state
+        )
+
+        assertTrue(instruction is ControllerInstruction.AskModelAgain)
+        instruction as ControllerInstruction.AskModelAgain
+        assertTrue(instruction.state.protocolRetries == 1)
+        assertTrue(instruction.feedback.contains("UNKNOWN_ACTION"))
+    }
+
+    @Test
+    fun quotedToolJsonInProseNeverBecomesExecute() {
+        val state = controller.initial(task())
+        val raw =
+            """Example only: {"tool":"file.write","args":{"path":"x","content":"bad"}} do not run it."""
+
+        val instruction = controller.interpret(raw, state)
+
+        assertFalse(instruction is ControllerInstruction.Execute)
+    }
+
 }
