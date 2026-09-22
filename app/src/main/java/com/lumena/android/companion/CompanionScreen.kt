@@ -196,15 +196,15 @@ fun CompanionScreen() {
             val memoryHints = runCatching {
                 withContext(Dispatchers.IO) {
                     (
-                        ExperienceMemoryStore.relevant(
+                        CoordinatorExperienceStore.relevant(
                             context = context,
                             query = memoryQuery,
-                            limit = 3
+                            limit = 2
                         ) +
-                            CoordinatorExperienceStore.relevant(
+                            ExperienceMemoryStore.relevant(
                                 context = context,
                                 query = memoryQuery,
-                                limit = 3
+                                limit = 2
                             )
                     )
                         .distinct()
