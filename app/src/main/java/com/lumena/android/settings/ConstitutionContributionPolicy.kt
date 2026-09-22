@@ -33,7 +33,8 @@ object ConstitutionContributionPolicy {
     fun ingestVerifiedRecoveryExamples(
         state: ConstitutionGenomeState,
         task: TaskState,
-        examples: List<CoordinatorExecutionExample>
+        examples: List<CoordinatorExecutionExample>,
+        contributorModelId: String? = null
     ): ConstitutionGenomeState {
         var next = state
         examples
@@ -47,7 +48,8 @@ object ConstitutionContributionPolicy {
             .forEach { example ->
                 val proposal = verifiedRecoveryRule(
                     task = task,
-                    example = example
+                    example = example,
+                    contributorModelId = contributorModelId
                 ) ?: return@forEach
                 next = ConstitutionGenomePolicy.contributeVerifiedAdvisory(
                     state = next,
@@ -59,7 +61,8 @@ object ConstitutionContributionPolicy {
 
     fun verifiedRecoveryRule(
         task: TaskState,
-        example: CoordinatorExecutionExample
+        example: CoordinatorExecutionExample,
+        contributorModelId: String? = null
     ): ConstitutionRule? {
         if (example.kind != CoordinatorExampleKind.RECOVERY) return null
         if (example.updatedAt <= 0) return null
@@ -120,6 +123,9 @@ object ConstitutionContributionPolicy {
             source = ConstitutionProvenance(
                 sourceKind = ConstitutionSourceKind.PROJECT_ARTIFACT,
                 sourceId = "coordinator-example:" + safeId(example.id),
+                modelId = contributorModelId
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let(::safeId),
                 projectId = task.projectId
                     ?.takeIf { it.isNotBlank() }
                     ?.let(::safeId),
