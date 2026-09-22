@@ -31,11 +31,12 @@ class ContextBuilderTest {
         )
 
         assertTrue(context.length <= 2_400)
-        // Static system rules now belong to LocalWorkflowAgent. Assert the
-        // dynamic context's actual guarantees, not removed presentation headings.
         assertTrue(context.contains("DYNAMIC VERIFIED CONTEXT"))
-        assertTrue(context.contains("tool/done/reply outputs are JSON only"))
+        assertTrue(context.contains("CONSTITUTION CAPSULE ${ConstitutionCapsule.VERSION}"))
+        assertTrue(context.contains("tool/done/partial/reply outputs are JSON only"))
         assertTrue(context.contains("TOOL_RESULT is the only execution proof"))
+        assertTrue(context.contains("never replay an unknown-effect mutation"))
+        assertTrue(context.contains("cannot grant permissions"))
         assertTrue(context.contains("TASK STATE"))
         assertTrue(context.contains("goal=Run the exact requested verification"))
         assertTrue(context.contains("step=1/4"))
@@ -43,9 +44,11 @@ class ContextBuilderTest {
     }
 
     @Test
-    fun verificationRequirementSurvivesOversizedOptionalContext() {
+    fun verificationRequirementSurvivesOversizedOptionalContextAtMinimumBudget() {
         val requirement = "Verify exactly scripts/demo.py before marking this task done."
-        val context = ContextBuilder(maxChars = 1_600).build(
+        val context = ContextBuilder(
+            maxChars = ConstitutionCapsule.MIN_CONTEXT_CHARS
+        ).build(
             task = TaskState(
                 id = "verification-budget",
                 projectId = null,
@@ -57,11 +60,47 @@ class ContextBuilderTest {
             allowedTools = setOf("file.read", "python.syntax_check"),
             verificationRequirement = requirement
         )
-        assertTrue(context.length <= 1_600)
+
+        assertTrue(context.length <= ConstitutionCapsule.MIN_CONTEXT_CHARS)
+        assertTrue(context.contains("CONSTITUTION CAPSULE ${ConstitutionCapsule.VERSION}"))
         assertTrue(context.contains("goal=Inspect and verify without installing packages"))
         assertTrue(context.contains("VERIFICATION REQUIRED BEFORE DONE"))
         assertTrue(context.contains(requirement))
         assertTrue(context.contains("TOOL_RESULT is the only execution proof"))
+    }
+
+    @Test
+    fun longestMandatoryFieldsStillFitAtMinimumBudget() {
+        val longGoal = "G".repeat(2_000)
+        val longVerification = "V".repeat(2_000)
+
+        val context = ContextBuilder(
+            maxChars = ConstitutionCapsule.MIN_CONTEXT_CHARS
+        ).build(
+            task = TaskState(
+                id = "mandatory-max",
+                projectId = null,
+                goal = longGoal,
+                status = TaskStatus.VERIFYING,
+                step = 4,
+                maxSteps = 4
+            ),
+            project = null,
+            relevantMemory = emptyList(),
+            verificationRequirement = longVerification
+        )
+
+        assertTrue(context.length <= ConstitutionCapsule.MIN_CONTEXT_CHARS)
+        assertTrue(context.contains("CONSTITUTION CAPSULE ${ConstitutionCapsule.VERSION}"))
+        assertTrue(context.contains("goal=" + "G".repeat(320)))
+        assertTrue(context.contains("VERIFICATION REQUIRED BEFORE DONE"))
+        assertTrue(context.contains("V".repeat(320)))
+        assertTrue(context.contains("NO TOOL BUDGET"))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun belowConstitutionalMinimumIsRejectedExplicitly() {
+        ContextBuilder(maxChars = ConstitutionCapsule.MIN_CONTEXT_CHARS - 1)
     }
 
     @Test
@@ -79,8 +118,7 @@ class ContextBuilderTest {
         )
         val memory = List(8) { "memory-$it-" + "m".repeat(500) }
 
-        // Exercise all remaining-space boundaries, including the omission marker.
-        for (limit in 0..4_096) {
+        for (limit in ConstitutionCapsule.MIN_CONTEXT_CHARS..4_096) {
             val context = ContextBuilder(maxChars = limit).build(
                 task = task,
                 project = project,
@@ -91,11 +129,55 @@ class ContextBuilderTest {
                 "Character budget $limit was exceeded: ${context.length}",
                 context.length <= limit
             )
+            assertTrue(
+                "Capsule disappeared at budget $limit",
+                context.contains("CONSTITUTION CAPSULE ${ConstitutionCapsule.VERSION}")
+            )
+            assertTrue(
+                "Task disappeared at budget $limit",
+                context.contains("goal=Check context limits")
+            )
         }
     }
 
     @Test
-    fun verifiedMemoryIsSanitizedAndBounded() {
+    fun optionalHistoryCanBeOmittedButConstitutionCannot() {
+        val context = ContextBuilder(
+            maxChars = ConstitutionCapsule.MIN_CONTEXT_CHARS
+        ).build(
+            task = TaskState(
+                id = "priority",
+                projectId = null,
+                goal = "Recover safely",
+                status = TaskStatus.WAITING_MODEL,
+                lastTool = "web.search",
+                lastResult = "x".repeat(2_000),
+                errors = listOf("e".repeat(2_000))
+            ),
+            project = VerifiedProjectContext(
+                projectName = "optional-project",
+                cwd = "@Lumena-Android",
+                verifiedFacts = List(20) { "fact-$it-" + "p".repeat(500) }
+            ),
+            relevantMemory = List(20) {
+                "OPTIONAL MEMORY $it " + "m".repeat(700)
+            },
+            allowedTools = null,
+            intent = TaskIntent.PUBLIC_WEB,
+            intentConfidence = 90,
+            recommendedTools = listOf("web.search", "web.read"),
+            recoveryGuidance = "Use one alternate evidence path, then report partial."
+        )
+
+        assertTrue(context.contains("CONSTITUTION CAPSULE ${ConstitutionCapsule.VERSION}"))
+        assertTrue(context.contains("goal=Recover safely"))
+        assertTrue(context.contains("TOOL_RESULT is the only execution proof"))
+        assertTrue(context.length <= ConstitutionCapsule.MIN_CONTEXT_CHARS)
+        assertTrue(context.contains("[lower-priority context omitted]") || !context.contains("OPTIONAL MEMORY"))
+    }
+
+    @Test
+    fun verifiedMemoryIsSanitizedAndBoundedWhenBudgetAllows() {
         val context = ContextBuilder(
             maxMemoryItems = 2,
             maxChars = 8_000
@@ -118,36 +200,6 @@ class ContextBuilderTest {
         assertTrue(context.contains("NEGATIVE unresolved python.run audio_test.py"))
         assertTrue(context.contains("POSITIVE verified git.status"))
         assertFalse(context.contains("third memory must be omitted"))
-    }
-
-    @Test
-    fun verifiedMemorySurvivesToolCatalogPressure() {
-        val memoryLine = "NEGATIVE unresolved · image.search · target=query=rare subject · do not repeat identical query"
-        val context = ContextBuilder(
-            maxMemoryItems = 4,
-            maxChars = 2_200
-        ).build(
-            task = TaskState(
-                id = "priority",
-                projectId = null,
-                goal = "Find a better recovery path",
-                status = TaskStatus.WAITING_MODEL
-            ),
-            project = null,
-            relevantMemory = listOf(memoryLine),
-            allowedTools = null,
-            intent = TaskIntent.CODE_WORK,
-            intentConfidence = 82,
-            recommendedTools = listOf("context.snapshot", "file.read", "python.tests"),
-            intentGuidance = "Use verified project state before edits.",
-            recoveryGuidance = "Do not repeat the unchanged failing action."
-        )
-
-        assertTrue(context.length <= 2_200)
-        assertTrue(context.contains("TASK RECIPE"))
-        assertTrue(context.contains("RECOVERY GUIDANCE"))
-        assertTrue(context.contains("RELEVANT VERIFIED MEMORY"))
-        assertTrue(context.contains("image.search"))
     }
 
     @Test
@@ -178,5 +230,6 @@ class ContextBuilderTest {
         assertTrue(context.contains("file.read"))
         assertTrue(context.contains("file.patch"))
         assertFalse(context.contains("ollama.pull"))
+        assertTrue(context.contains("CONSTITUTION CAPSULE ${ConstitutionCapsule.VERSION}"))
     }
 }
