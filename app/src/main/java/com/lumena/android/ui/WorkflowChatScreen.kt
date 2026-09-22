@@ -494,21 +494,43 @@ fun WorkflowChatScreen(
             },
             onToolExperience = { task, request, result, elapsedMs ->
                 val eventId = ExperienceMemoryStore.record(context, request, result)
-                val coordinatorFailure = runCatching {
+                val episodeSessionId = task.projectId
+                    ?.takeIf { it.isNotBlank() }
+                    ?: task.id
+
+                val coordinatorResult = runCatching {
                     CoordinatorExperienceStore.record(
                         context = context,
-                        sessionId = task.projectId
-                            ?.takeIf { it.isNotBlank() }
-                            ?: task.id,
+                        sessionId = episodeSessionId,
                         taskId = task.id,
                         request = request,
                         result = result,
                         experienceId = eventId
                     )
-                }.exceptionOrNull()
+                }
+                val coordinatorFailure = coordinatorResult.exceptionOrNull()
 
-                // A coordinator-playbook write failure must not erase the older,
-                // already-verified landscape projection.
+                val constitutionFailure =
+                    if (coordinatorResult.isSuccess) {
+                        runCatching {
+                            val examples =
+                                CoordinatorExperienceStore.examplesForTask(
+                                    context = context,
+                                    sessionId = episodeSessionId,
+                                    taskId = task.id,
+                                    limit = 64
+                                )
+                            ConstitutionGenomeStore.ingestVerifiedRecoveryExamples(
+                                context = context,
+                                task = task,
+                                examples = examples
+                            )
+                        }.exceptionOrNull()
+                    } else {
+                        null
+                    }
+
+                // New projections must not erase older verified experience.
                 ExperienceLandscapeStore.record(
                     context,
                     session,
@@ -520,6 +542,7 @@ fun WorkflowChatScreen(
                 )
 
                 coordinatorFailure?.let { throw it }
+                constitutionFailure?.let { throw it }
             })
     }
 
