@@ -121,7 +121,8 @@ object CoordinatorExperiencePolicy {
     fun examples(
         state: CoordinatorEpisodeState,
         query: String,
-        limit: Int = 4
+        limit: Int = 4,
+        sourceSessionHash: String? = null
     ): List<CoordinatorExecutionExample> {
         val queryTokens = tokenize(query)
         val candidates = (
@@ -129,6 +130,10 @@ object CoordinatorExperiencePolicy {
                 deriveExamples(state.events)
             )
             .distinctBy { it.id }
+            .filter { example ->
+                sourceSessionHash == null ||
+                    example.sourceSessionHash == sourceSessionHash
+            }
 
         if (candidates.isEmpty()) return emptyList()
 
@@ -382,6 +387,28 @@ object CoordinatorExperienceStore {
         limit: Int = 8
     ): List<CoordinatorExecutionExample> = synchronized(lock) {
         CoordinatorExperiencePolicy.examples(load(context), query, limit)
+    }
+
+    fun examplesForTask(
+        context: Context,
+        sessionId: String,
+        taskId: String?,
+        limit: Int = 32
+    ): List<CoordinatorExecutionExample> = synchronized(lock) {
+        val safeSessionId = stableId(sessionId)
+        val safeTaskId = taskId
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::stableId)
+        val sourceHash = CoordinatorExperiencePolicy.hash(
+            safeSessionId + "|" + (safeTaskId ?: safeSessionId)
+        ).take(16)
+
+        CoordinatorExperiencePolicy.examples(
+            state = load(context),
+            query = "",
+            limit = limit.coerceIn(1, 64),
+            sourceSessionHash = sourceHash
+        )
     }
 
     fun clear(context: Context) = synchronized(lock) {
