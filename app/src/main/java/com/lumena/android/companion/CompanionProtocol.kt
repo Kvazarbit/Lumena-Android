@@ -37,6 +37,7 @@ object CompanionProtocol {
         - python.run requires {"script":"relative/path.py"} and the .py file must already exist in the workspace. Never put inline Python source in script; use file.write first.
         - python.syntax_check uses the same existing-script path contract.
         - file.write requires {"path":"relative/path","content":"..."}.
+        - file.read supports optional {"start_line":"1","end_line":"200"} as 1-based inclusive line bounds.
         - inspect.batch requires {"requests":[...]} and only accepts read-only nested tools.
 
         Never invent tool results. Wait for a LUMENA_RESULT message before continuing the task.
