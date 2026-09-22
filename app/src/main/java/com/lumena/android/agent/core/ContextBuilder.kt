@@ -23,7 +23,6 @@ class ContextBuilder(
         task: TaskState,
         project: VerifiedProjectContext?,
         relevantMemory: List<String>,
-        constitutionalGuidance: List<String> = emptyList(),
         allowedTools: Set<String>? = null,
         plan: List<String> = emptyList(),
         verificationRequirement: String? = null,
@@ -32,7 +31,8 @@ class ContextBuilder(
         recommendedTools: List<String> = emptyList(),
         intentGuidance: String? = null,
         recoveryGuidance: String? = null,
-        kernelContext: String? = null
+        kernelContext: String? = null,
+        constitutionalGuidance: List<String> = emptyList()
     ): String {
         val mandatory = buildMandatoryContext(
             task = task,
