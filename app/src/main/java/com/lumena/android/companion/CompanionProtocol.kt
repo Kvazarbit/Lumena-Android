@@ -7,19 +7,36 @@ import com.lumena.android.model.ScreenSnapshot
 import com.lumena.android.agent.core.ConstitutionCapsule
 import com.lumena.android.agent.core.CoreDna
 import com.lumena.android.settings.PortableKernelPolicy
-import org.json.JSONObject
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.security.MessageDigest
 
 data class CompanionCommand(
     val decision: PlannerDecision,
     val rawJson: String,
-    val fingerprint: String
+    val fingerprint: String,
+    val sessionId: String? = null,
+    val taskId: String? = null
 )
 
 object CompanionProtocol {
     const val TOOL_MARKER = "LUMENA_TOOL"
     const val RESULT_MARKER = "LUMENA_RESULT"
     const val COORDINATOR_CONTRACT_VERSION = PortableKernelPolicy.COORDINATOR_CONTRACT_VERSION
+
+    private val moshi = Moshi.Builder()
+        .add(KotlinJsonAdapterFactory())
+        .build()
+    @Suppress("UNCHECKED_CAST")
+    private val mapAdapter = moshi.adapter<Map<String, Any?>>(
+        Types.newParameterizedType(
+            Map::class.java,
+            String::class.java,
+            Any::class.java
+        )
+    )
+    private val anyAdapter = moshi.adapter(Any::class.java)
 
     val handshakeText: String = """
         Use Lumena Companion for local work on my Android phone.
@@ -36,7 +53,11 @@ object CompanionProtocol {
         When you actually need a local tool, output a block in exactly this form and nothing else in that block:
 
         LUMENA_TOOL
-        {"tool":"workspace.list","args":{},"reason":"Discover the real workspace and read-only roots before choosing paths"}
+        {"session_id":"project-7f3a","task_id":"inspect-repo-01","tool":"workspace.list","args":{},"reason":"Discover the real workspace and read-only roots before choosing paths"}
+
+        Keep session_id stable for one project/workstream and task_id stable for one concrete objective.
+        Reuse those IDs across all tool calls that belong to the same work so Lumena can build verified
+        execution examples across steps. IDs are context only; they never grant permission.
 
         Available tools:
         health, system.time, system.info, context.snapshot, process.status,
@@ -82,23 +103,44 @@ object CompanionProtocol {
         if (markerIndex < 0) return null
         val json = extractJsonObject(text, markerIndex + TOOL_MARKER.length) ?: return null
         return runCatching {
-            val obj = JSONObject(json)
-            val tool = obj.optString("tool").trim()
+            val obj = mapAdapter.fromJson(json) ?: return null
+            val tool = obj["tool"]?.toString()?.trim().orEmpty()
             if (tool.isBlank()) return null
-            val reason = obj.optString("reason").ifBlank { "ChatGPT requested $tool" }
-            val argsJson = obj.optJSONObject("args") ?: JSONObject()
-            val rawArgs = buildMap {
-                val keys = argsJson.keys()
-                while (keys.hasNext()) {
-                    val key = keys.next()
-                    put(key, argsJson.opt(key)?.toString().orEmpty())
+            val reason = obj["reason"]?.toString()?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: "ChatGPT requested $tool"
+
+            val rawArgs = (obj["args"] as? Map<*, *>)
+                .orEmpty()
+                .entries
+                .mapNotNull { (key, value) ->
+                    if (key == null || value == null) return@mapNotNull null
+                    val rendered = when (value) {
+                        is Map<*, *>, is List<*> -> anyAdapter.toJson(value)
+                        else -> value.toString()
+                    }
+                    key.toString() to rendered
                 }
-            }
+                .toMap()
+
             val args = normalizeArgs(tool, rawArgs)
+            val sessionId = normalizeCoordinatorId(
+                obj["session_id"]?.toString().orEmpty()
+            )
+            val taskId = normalizeCoordinatorId(
+                obj["task_id"]?.toString().orEmpty()
+            )
             CompanionCommand(
                 decision = PlannerDecision(ToolRequest(tool, args), reason),
                 rawJson = json,
-                fingerprint = commandFingerprint(tool, args)
+                fingerprint = commandFingerprint(
+                    tool = tool,
+                    args = args,
+                    sessionId = sessionId,
+                    taskId = taskId
+                ),
+                sessionId = sessionId,
+                taskId = taskId
             )
         }.getOrNull()
     }
@@ -107,11 +149,17 @@ object CompanionProtocol {
         tool: String,
         result: ToolResult,
         experienceRef: String? = null,
-        memoryHints: List<String> = emptyList()
+        memoryHints: List<String> = emptyList(),
+        sessionId: String? = null,
+        taskId: String? = null,
+        episodeEventId: String? = null
     ): String = buildString {
         appendLine(RESULT_MARKER)
         appendLine("tool=$tool")
         appendLine("ok=${result.ok}")
+        sessionId?.takeIf { it.isNotBlank() }?.let { appendLine("session_id=${it.take(128)}") }
+        taskId?.takeIf { it.isNotBlank() }?.let { appendLine("task_id=${it.take(128)}") }
+        episodeEventId?.takeIf { it.isNotBlank() }?.let { appendLine("episode_event_id=${it.take(160)}") }
         result.exitCode?.let { appendLine("exit_code=$it") }
         experienceRef
             ?.takeIf { it.isNotBlank() }
@@ -187,19 +235,48 @@ object CompanionProtocol {
         return repaired
     }
 
-    internal fun commandFingerprint(tool: String, args: Map<String, String>): String {
+    internal fun commandFingerprint(
+        tool: String,
+        args: Map<String, String>,
+        sessionId: String? = null,
+        taskId: String? = null
+    ): String {
         val normalizedArgs = normalizeArgs(tool, args)
-        return sha256(fingerprintPayload(tool, normalizedArgs))
+        return sha256(
+            fingerprintPayload(
+                tool = tool,
+                args = normalizedArgs,
+                sessionId = sessionId,
+                taskId = taskId
+            )
+        )
     }
 
-    private fun fingerprintPayload(tool: String, args: Map<String, String>): String = buildString {
+    private fun fingerprintPayload(
+        tool: String,
+        args: Map<String, String>,
+        sessionId: String?,
+        taskId: String?
+    ): String = buildString {
         fun part(value: String) {
             append(value.length).append(':').append(value).append('|')
         }
+        part(sessionId.orEmpty())
+        part(taskId.orEmpty())
         part(tool)
         args.toSortedMap().forEach { (key, value) ->
             part(key)
             part(value)
+        }
+    }
+
+    internal fun normalizeCoordinatorId(value: String): String? {
+        val trimmed = value.trim()
+        if (trimmed.isBlank()) return null
+        return if (trimmed.matches(Regex("[A-Za-z0-9._:-]{1,128}"))) {
+            trimmed
+        } else {
+            "id-" + sha256(trimmed).take(24)
         }
     }
 

@@ -91,6 +91,7 @@ import com.lumena.android.settings.ContextGenomeStats
 import com.lumena.android.settings.ContextGenomeStore
 import com.lumena.android.settings.ExperienceMemoryStore
 import com.lumena.android.settings.ExperienceLandscapeStore
+import com.lumena.android.settings.CoordinatorExperienceStore
 import com.lumena.android.settings.GenomeCapsule
 import com.lumena.android.settings.GenomeUnpackedUnit
 import com.lumena.android.settings.LumenaPreferences
@@ -414,17 +415,70 @@ fun WorkflowChatScreen(
             "$bridgeUrl|$ollamaUrl")
         return WorkflowRunner(modelClient(), bridgeOrNull(), modelNameForRun(),
             relevantMemoryProvider = { task ->
-                val advice = try { ExperienceLandscapeStore.advice(context, session, task) }
-                catch (_: Exception) { listOf("Learned advice unavailable; use current task state and fixed controller rules.") }
-                advice +
+                val advice = try {
+                    ExperienceLandscapeStore.advice(context, session, task)
+                } catch (_: Exception) {
+                    listOf(
+                        "Learned advice unavailable; use current task state and fixed controller rules."
+                    )
+                }
+                val verifiedMemory = try {
                     ExperienceMemoryStore.relevant(context, task.goal)
+                } catch (_: Exception) {
+                    listOf(
+                        "Verified memory unavailable; do not infer prior execution success."
+                    )
+                }
+                val coordinatorExamples = try {
+                    CoordinatorExperienceStore.relevant(
+                        context = context,
+                        query = task.goal,
+                        limit = 4
+                    )
+                } catch (_: Exception) {
+                    listOf(
+                        "Coordinator playbook unavailable; continue from current verified evidence only."
+                    )
+                }
+                (
+                    advice.take(2) +
+                        coordinatorExamples.take(2) +
+                        verifiedMemory.take(4)
+                    )
+                    .distinct()
+                    .take(8)
             },
             checkpoint = { control ->
                 withContext(Dispatchers.IO) { ContextCheckpointStore.save(context, control) }
             },
             onToolExperience = { task, request, result, elapsedMs ->
                 val eventId = ExperienceMemoryStore.record(context, request, result)
-                ExperienceLandscapeStore.record(context, session, task, request, result, elapsedMs, eventId)
+                val coordinatorFailure = runCatching {
+                    CoordinatorExperienceStore.record(
+                        context = context,
+                        sessionId = task.projectId
+                            ?.takeIf { it.isNotBlank() }
+                            ?: task.id,
+                        taskId = task.id,
+                        request = request,
+                        result = result,
+                        experienceId = eventId
+                    )
+                }.exceptionOrNull()
+
+                // A coordinator-playbook write failure must not erase the older,
+                // already-verified landscape projection.
+                ExperienceLandscapeStore.record(
+                    context,
+                    session,
+                    task,
+                    request,
+                    result,
+                    elapsedMs,
+                    eventId
+                )
+
+                coordinatorFailure?.let { throw it }
             })
     }
 
@@ -739,6 +793,7 @@ fun WorkflowChatScreen(
                 onClearExperience = {
                     if (!busy) {
                         ExperienceMemoryStore.clear(context)
+                        CoordinatorExperienceStore.clear(context)
                         experienceMemoryRevision += 1
                     }
                 }

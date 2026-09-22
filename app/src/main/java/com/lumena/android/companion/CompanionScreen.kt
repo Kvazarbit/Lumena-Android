@@ -43,6 +43,7 @@ import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.local.ToolResult
 import com.lumena.android.settings.LumenaPreferences
 import com.lumena.android.settings.ExperienceMemoryStore
+import com.lumena.android.settings.CoordinatorExperienceStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -171,6 +172,21 @@ fun CompanionScreen() {
                     }
                 }.getOrNull()
             }
+
+            val episodeEvent = runCatching {
+                withContext(Dispatchers.IO) {
+                    CoordinatorExperienceStore.record(
+                        context = context,
+                        sessionId = command.sessionId
+                            ?: "single-${command.fingerprint.take(24)}",
+                        taskId = command.taskId,
+                        request = plan.request,
+                        result = result,
+                        experienceId = experienceRef
+                    )
+                }
+            }.getOrNull()
+
             val memoryQuery = buildString {
                 append(plan.request.tool)
                 plan.request.args.toSortedMap().forEach { (key, value) ->
@@ -179,18 +195,31 @@ fun CompanionScreen() {
             }
             val memoryHints = runCatching {
                 withContext(Dispatchers.IO) {
-                    ExperienceMemoryStore.relevant(
-                        context = context,
-                        query = memoryQuery,
-                        limit = 3
+                    (
+                        CoordinatorExperienceStore.relevant(
+                            context = context,
+                            query = memoryQuery,
+                            limit = 2
+                        ) +
+                            ExperienceMemoryStore.relevant(
+                                context = context,
+                                query = memoryQuery,
+                                limit = 2
+                            )
                     )
+                        .distinct()
+                        .take(3)
                 }
             }.getOrElse { emptyList() }
+
             val formatted = CompanionProtocol.formatResult(
                 tool = plan.request.tool,
                 result = result,
                 experienceRef = experienceRef,
-                memoryHints = memoryHints
+                memoryHints = memoryHints,
+                sessionId = command.sessionId,
+                taskId = command.taskId,
+                episodeEventId = episodeEvent?.id
             )
             lastResult = formatted
             handledFingerprint = command.fingerprint
