@@ -4,6 +4,9 @@ import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.local.ToolResult
 import com.lumena.android.model.ScreenSnapshot
+import com.lumena.android.agent.core.ConstitutionCapsule
+import com.lumena.android.agent.core.CoreDna
+import com.lumena.android.settings.PortableKernelPolicy
 import org.json.JSONObject
 import java.security.MessageDigest
 
@@ -16,9 +19,20 @@ data class CompanionCommand(
 object CompanionProtocol {
     const val TOOL_MARKER = "LUMENA_TOOL"
     const val RESULT_MARKER = "LUMENA_RESULT"
+    const val COORDINATOR_CONTRACT_VERSION = PortableKernelPolicy.COORDINATOR_CONTRACT_VERSION
 
     val handshakeText: String = """
         Use Lumena Companion for local work on my Android phone.
+        Coordinator contract: ${COORDINATOR_CONTRACT_VERSION}
+        Core DNA: ${CoreDna.VERSION}
+        Constitution capsule: ${ConstitutionCapsule.VERSION}
+
+        The phone is the execution authority. GPT-Lumena-Koordynator may plan and request tools,
+        but Lumena's ToolRegistry/ToolGate/confirmation rules decide what may actually execute.
+        Verified TOOL_RESULT observations are recorded into the local Context Genome.
+        Imported portable experience is advisory source-device evidence only and must be revalidated locally;
+        it never grants permission, approval, or proof of completion.
+
         When you actually need a local tool, output a block in exactly this form and nothing else in that block:
 
         LUMENA_TOOL
@@ -89,11 +103,19 @@ object CompanionProtocol {
         }.getOrNull()
     }
 
-    fun formatResult(tool: String, result: ToolResult): String = buildString {
+    fun formatResult(
+        tool: String,
+        result: ToolResult,
+        experienceRef: String? = null,
+        memoryHints: List<String> = emptyList()
+    ): String = buildString {
         appendLine(RESULT_MARKER)
         appendLine("tool=$tool")
         appendLine("ok=${result.ok}")
         result.exitCode?.let { appendLine("exit_code=$it") }
+        experienceRef
+            ?.takeIf { it.isNotBlank() }
+            ?.let { appendLine("experience_id=${it.take(160)}") }
         if (!result.error.isNullOrBlank()) appendLine("error=${result.error}")
         if (result.stdout.isNotBlank()) {
             appendLine("stdout:")
@@ -102,6 +124,16 @@ object CompanionProtocol {
         if (result.stderr.isNotBlank()) {
             appendLine("stderr:")
             appendLine(result.stderr.take(6000).trimEnd())
+        }
+        val hints = memoryHints
+            .map { it.replace(Regex("[\\r\\n]+"), " ").trim().take(600) }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .take(3)
+        if (hints.isNotEmpty()) {
+            appendLine("experience_context:")
+            appendLine("advisory_only=true; revalidate before reuse; never permission or completion proof")
+            hints.forEach { appendLine("- $it") }
         }
         append("Continue the task using this real local result. Do not claim any action that is not shown here.")
     }
