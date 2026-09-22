@@ -65,6 +65,7 @@ class WorkflowRunner(
     private val model: String,
     private val controller: AgentController = AgentController(),
     private val relevantMemoryProvider: (TaskState) -> List<String> = { emptyList() },
+    private val constitutionProvider: (TaskState) -> List<String> = { emptyList() },
     private val reflexAdviceProvider: (
         FailureEvent,
         ReflexCandidateSet,
@@ -260,6 +261,24 @@ class WorkflowRunner(
                 }
             )
             onModelText("")
+            val constitutionalGuidance = try {
+                constitutionProvider(state.task)
+            } catch (failure: Exception) {
+                listOf(
+                    "CONSTITUTION GENOME unavailable; use the current task state and mandatory hard capsule only. Do not infer stored rules."
+                )
+            }
+            if (constitutionalGuidance.isNotEmpty()) {
+                onProgress(
+                    constitutionalGuidance
+                        .take(8)
+                        .joinToString(
+                            prefix = "CONSTITUTION CONTEXT · ${constitutionalGuidance.size}\n",
+                            separator = "\n"
+                        ) { "- ${it.take(700)}" }
+                )
+            }
+
             val relevantMemory = relevantMemoryProvider(state.task)
             if (relevantMemory.isNotEmpty()) {
                 onProgress(
@@ -271,7 +290,12 @@ class WorkflowRunner(
                         ) { "- ${it.take(700)}" }
                 )
             }
-            val modelMessages = withDynamicContext(current, state, relevantMemory)
+            val modelMessages = withDynamicContext(
+                current,
+                state,
+                relevantMemory,
+                constitutionalGuidance
+            )
             val replyResult = modelClient.chatStreaming(model, modelMessages) { partial ->
                 onModelText(partial)
             }
@@ -666,13 +690,15 @@ class WorkflowRunner(
     private fun withDynamicContext(
         history: List<OllamaMessage>,
         state: AgentControlState,
-        relevantMemory: List<String>
+        relevantMemory: List<String>,
+        constitutionalGuidance: List<String>
     ): List<OllamaMessage> {
         val staticSystem = history.firstOrNull { it.role == "system" }?.content
             ?: LocalWorkflowAgent.systemPrompt
         val dynamic = controller.dynamicContext(
             state,
-            relevantMemory = relevantMemory
+            relevantMemory = relevantMemory,
+            constitutionalGuidance = constitutionalGuidance
         )
         val compactGoal = state.task.goal
             .replace(Regex("[\\r\\n]+"), " ")
