@@ -43,10 +43,12 @@ import com.lumena.android.agent.local.TermuxBridgeClient
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.settings.LumenaPreferences
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.UUID
 
-private const val ONE_888_LABEL = "One_888"
+private const val ONE_888_LABEL = "One_888+"
 
 private enum class CompanionStage(val label: String) {
     WAITING("Waiting for ChatGPT"),
@@ -145,6 +147,9 @@ fun CompanionScreen() {
     var lastResult by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("Waiting for ChatGPT…") }
     var busy by remember { mutableStateOf(false) }
+    var runningJob by remember { mutableStateOf<Job?>(null) }
+    var startedAtMs by remember { mutableStateOf<Long?>(null) }
+    var elapsedSeconds by remember { mutableStateOf(0L) }
     var bridgeSummary by remember {
         mutableStateOf(if (token.isBlank()) "Not configured" else "Configured")
     }
@@ -209,6 +214,14 @@ fun CompanionScreen() {
             ok && version != null -> "OK · v" + version
             ok -> "OK"
             else -> "Error"
+        }
+    }
+
+    LaunchedEffect(busy, startedAtMs) {
+        while (busy && startedAtMs != null) {
+            elapsedSeconds = ((System.currentTimeMillis() - (startedAtMs ?: System.currentTimeMillis())) / 1000L)
+                .coerceAtLeast(0L)
+            delay(500)
         }
     }
 
