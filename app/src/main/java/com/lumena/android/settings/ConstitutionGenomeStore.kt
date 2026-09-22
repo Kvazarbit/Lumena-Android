@@ -9,8 +9,10 @@ import com.lumena.android.agent.core.ConstitutionGenomePolicy
 import com.lumena.android.agent.core.ConstitutionGenomeState
 import com.lumena.android.agent.core.ConstitutionProvenance
 import com.lumena.android.agent.core.ConstitutionRule
+import com.lumena.android.agent.core.ConstitutionRuleKind
 import com.lumena.android.agent.core.ConstitutionRuleStatus
 import com.lumena.android.agent.core.ConstitutionScope
+import com.lumena.android.agent.core.ConstitutionStance
 import com.lumena.android.agent.core.ConstitutionScopeKind
 import com.lumena.android.agent.core.TaskState
 import com.squareup.moshi.Moshi
@@ -251,8 +253,89 @@ object ConstitutionGenomeStore {
                 evidence = evidence,
                 provenance = provenance
             )
-            save(context, next)
+            if (next != current) save(context, next)
             next
+        }
+
+    fun ingestVerifiedRecoveryExamples(
+        context: Context,
+        task: TaskState,
+        examples: List<CoordinatorExecutionExample>
+    ): ConstitutionGenomeState =
+        synchronized(lock) {
+            val current = load(context)
+            val next =
+                ConstitutionContributionPolicy.ingestVerifiedRecoveryExamples(
+                    state = current,
+                    task = task,
+                    examples = examples
+                )
+            if (next != current) save(context, next)
+            next
+        }
+
+    fun recordExplicitUserConstraint(
+        context: Context,
+        task: TaskState,
+        sourceId: String,
+        claimKey: String,
+        statement: String,
+        rationale: String,
+        at: Long = System.currentTimeMillis(),
+        stance: ConstitutionStance = ConstitutionStance.AFFIRM
+    ): ConstitutionRule =
+        synchronized(lock) {
+            val rule =
+                ConstitutionContributionPolicy.explicitUserConstraint(
+                    task = task,
+                    sourceId = sourceId,
+                    claimKey = claimKey,
+                    statement = statement,
+                    rationale = rationale,
+                    at = at,
+                    stance = stance
+                )
+            val current = load(context)
+            val next = ConstitutionGenomePolicy.add(
+                state = current,
+                rule = rule
+            )
+            save(context, next)
+            next.rules.first { it.id == rule.id }
+        }
+
+    fun recordModelObservation(
+        context: Context,
+        task: TaskState,
+        modelId: String,
+        sourceId: String,
+        claimKey: String,
+        kind: ConstitutionRuleKind,
+        statement: String,
+        rationale: String,
+        at: Long = System.currentTimeMillis(),
+        stance: ConstitutionStance = ConstitutionStance.AFFIRM
+    ): ConstitutionRule =
+        synchronized(lock) {
+            val rule =
+                ConstitutionContributionPolicy.modelObservation(
+                    task = task,
+                    modelId = modelId,
+                    sourceId = sourceId,
+                    claimKey = claimKey,
+                    kind = kind,
+                    statement = statement,
+                    rationale = rationale,
+                    at = at,
+                    stance = stance
+                )
+            val current = load(context)
+            val next = ConstitutionGenomePolicy.add(
+                state = current,
+                rule = rule
+            )
+            save(context, next)
+            next.rules.first { it.id == rule.id }
         }
 
     fun supersedeAdvisory(
