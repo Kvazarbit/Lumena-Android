@@ -91,6 +91,7 @@ import com.lumena.android.settings.ContextGenomeStats
 import com.lumena.android.settings.ContextGenomeStore
 import com.lumena.android.settings.ExperienceMemoryStore
 import com.lumena.android.settings.ExperienceLandscapeStore
+import com.lumena.android.settings.CoordinatorExperienceStore
 import com.lumena.android.settings.GenomeCapsule
 import com.lumena.android.settings.GenomeUnpackedUnit
 import com.lumena.android.settings.LumenaPreferences
@@ -416,15 +417,42 @@ fun WorkflowChatScreen(
             relevantMemoryProvider = { task ->
                 val advice = try { ExperienceLandscapeStore.advice(context, session, task) }
                 catch (_: Exception) { listOf("Learned advice unavailable; use current task state and fixed controller rules.") }
-                advice +
-                    ExperienceMemoryStore.relevant(context, task.goal)
+                (
+                    advice +
+                        ExperienceMemoryStore.relevant(context, task.goal) +
+                        CoordinatorExperienceStore.relevant(
+                            context = context,
+                            query = task.goal,
+                            limit = 4
+                        )
+                    )
+                    .distinct()
+                    .take(8)
             },
             checkpoint = { control ->
                 withContext(Dispatchers.IO) { ContextCheckpointStore.save(context, control) }
             },
             onToolExperience = { task, request, result, elapsedMs ->
                 val eventId = ExperienceMemoryStore.record(context, request, result)
-                ExperienceLandscapeStore.record(context, session, task, request, result, elapsedMs, eventId)
+                CoordinatorExperienceStore.record(
+                    context = context,
+                    sessionId = task.projectId
+                        ?.takeIf { it.isNotBlank() }
+                        ?: task.id,
+                    taskId = task.id,
+                    request = request,
+                    result = result,
+                    experienceId = eventId
+                )
+                ExperienceLandscapeStore.record(
+                    context,
+                    session,
+                    task,
+                    request,
+                    result,
+                    elapsedMs,
+                    eventId
+                )
             })
     }
 
@@ -739,6 +767,7 @@ fun WorkflowChatScreen(
                 onClearExperience = {
                     if (!busy) {
                         ExperienceMemoryStore.clear(context)
+                        CoordinatorExperienceStore.clear(context)
                         experienceMemoryRevision += 1
                     }
                 }
