@@ -40,7 +40,9 @@ import com.lumena.android.agent.core.ToolRisk
 import com.lumena.android.agent.local.TermuxBridgeClient
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
+import com.lumena.android.agent.local.ToolResult
 import com.lumena.android.settings.LumenaPreferences
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -56,6 +58,7 @@ fun CompanionScreen() {
     var safeAuto by rememberSaveable { mutableStateOf(initial.companionSafeAuto) }
     var detected by remember { mutableStateOf<CompanionCommand?>(null) }
     var handledFingerprint by remember { mutableStateOf<String?>(null) }
+    var activeFingerprint by remember { mutableStateOf<String?>(null) }
     var lastResult by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("Waiting for ChatGPT…") }
     var busy by remember { mutableStateOf(false) }
@@ -103,7 +106,13 @@ fun CompanionScreen() {
     }
 
     fun executeCommand(command: CompanionCommand, automatic: Boolean) {
-        if (busy || command.fingerprint == handledFingerprint) return
+        if (!CompanionRequestLifecycle.shouldAccept(
+                fingerprint = command.fingerprint,
+                handledFingerprint = handledFingerprint,
+                activeFingerprint = activeFingerprint,
+                busy = busy
+            )
+        ) return
         if (token.isBlank()) {
             status = "Paste the Termux bridge token first."
             return
@@ -123,6 +132,8 @@ fun CompanionScreen() {
 
         persistConnection()
         busy = true
+        activeFingerprint = command.fingerprint
+        if (detected?.fingerprint == command.fingerprint) detected = null
         status = if (automatic) {
             "Safe Auto · running ${plan.request.tool}…"
         } else {
@@ -130,10 +141,24 @@ fun CompanionScreen() {
         }
 
         scope.launch {
-            val result = TermuxBridgeClient(bridgeUrl, token, context).execute(plan.request)
+            val result = try {
+                TermuxBridgeClient(bridgeUrl, token, context).execute(plan.request)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                ToolResult(
+                    ok = false,
+                    error = "Companion execution failed: ${error::class.simpleName}: ${error.message}",
+                    errorCode = "COMPANION_EXECUTION",
+                    failureClass = "LOCAL_EXECUTION",
+                    retryable = false,
+                    dependency = "termux_bridge"
+                )
+            }
             val formatted = CompanionProtocol.formatResult(plan.request.tool, result)
             lastResult = formatted
             handledFingerprint = command.fingerprint
+            if (activeFingerprint == command.fingerprint) activeFingerprint = null
             busy = false
 
             if (autoReturn) {
@@ -147,10 +172,12 @@ fun CompanionScreen() {
                     formatted,
                     send = true,
                     onFinished = { sent ->
-                        status = if (sent) {
-                            "${plan.request.tool} result sent to ChatGPT."
-                        } else {
-                            "${plan.request.tool} finished, but ChatGPT Send was not confirmed. Result is ready below."
+                        if (detected == null && activeFingerprint == null) {
+                            status = if (sent) {
+                                "${plan.request.tool} result sent to ChatGPT."
+                            } else {
+                                "${plan.request.tool} finished, but ChatGPT Send was not confirmed. Result is ready below."
+                            }
                         }
                     }
                 )
@@ -165,8 +192,17 @@ fun CompanionScreen() {
     }
 
     fun acceptDetected(command: CompanionCommand, force: Boolean = false) {
-        if (!force && command.fingerprint == handledFingerprint) {
-            status = "Last tool request was already handled."
+        if (!force && !CompanionRequestLifecycle.shouldAccept(
+                fingerprint = command.fingerprint,
+                handledFingerprint = handledFingerprint,
+                activeFingerprint = activeFingerprint,
+                busy = busy
+            )
+        ) {
+            if (command.fingerprint == handledFingerprint) {
+                if (detected?.fingerprint == command.fingerprint) detected = null
+                status = "Last tool request was already handled."
+            }
             return
         }
 
@@ -198,7 +234,18 @@ fun CompanionScreen() {
     }
 
     fun runDetected() {
-        detected?.let { executeCommand(it, automatic = false) }
+        val command = detected ?: return
+        if (!CompanionRequestLifecycle.shouldAccept(
+                fingerprint = command.fingerprint,
+                handledFingerprint = handledFingerprint,
+                activeFingerprint = activeFingerprint,
+                busy = busy
+            )
+        ) {
+            if (command.fingerprint == handledFingerprint) detected = null
+            return
+        }
+        executeCommand(command, automatic = false)
     }
 
     LaunchedEffect(safeAuto, token, bridgeUrl) {
@@ -206,8 +253,12 @@ fun CompanionScreen() {
             val command = CompanionProtocol.parse(LumenaAccessibilityService.lastChatGptSnapshot)
             if (
                 command != null &&
-                command.fingerprint != handledFingerprint &&
-                !busy
+                CompanionRequestLifecycle.shouldAccept(
+                    fingerprint = command.fingerprint,
+                    handledFingerprint = handledFingerprint,
+                    activeFingerprint = activeFingerprint,
+                    busy = busy
+                )
             ) {
                 acceptDetected(command)
             }
@@ -361,7 +412,15 @@ fun CompanionScreen() {
         Text("3 · Tool request", style = MaterialTheme.typography.titleLarge)
         Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
-        detected?.let { command ->
+        detected
+            ?.takeIf { command ->
+                CompanionRequestLifecycle.isVisible(
+                    fingerprint = command.fingerprint,
+                    handledFingerprint = handledFingerprint,
+                    activeFingerprint = activeFingerprint
+                )
+            }
+            ?.let { command ->
             val plan = planFor(command)
             val readOnly = plan.allowed &&
                 ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
@@ -380,7 +439,7 @@ fun CompanionScreen() {
                         },
                         style = MaterialTheme.typography.bodySmall
                     )
-                    if (!autoEligible || command.fingerprint == handledFingerprint) {
+                    if (!autoEligible) {
                         Button(
                             enabled = !busy && plan.allowed,
                             onClick = { runDetected() }
