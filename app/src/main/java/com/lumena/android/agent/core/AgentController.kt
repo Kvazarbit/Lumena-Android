@@ -681,7 +681,8 @@ class AgentController(
             is RecoveryDecision.TryAlternative ->
                 ToolTransition(
                     state = nextState.copy(recoveryHint = combinedHint(decision.guidance)),
-                    failureEvent = event
+                    failureEvent = event,
+                    reflexCandidates = reflexCandidates
                 )
 
             is RecoveryDecision.DegradePartial -> {
