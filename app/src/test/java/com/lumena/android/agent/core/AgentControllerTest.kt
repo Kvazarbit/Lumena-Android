@@ -711,4 +711,78 @@ class AgentControllerTest {
         assertFalse(instruction is ControllerInstruction.Execute)
     }
 
+    @Test
+    fun failedWebSearchCarriesTypedFailureEventIntoRecovery() {
+        val webTask = TaskState(
+            id = "typed-web-fail",
+            projectId = null,
+            goal = "Знайди останні новини в інтернеті",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val call = AgentDecision.ToolCall(
+            tool = "web.search",
+            args = mapOf("query" to "останні новини")
+        )
+        val initial = controller.initial(webTask)
+        val executing = initial.copy(
+            task = initial.task.copy(
+                status = TaskStatus.EXECUTING,
+                kernel = ContextKernel.before(initial.task.kernel, call)
+            )
+        )
+
+        val transition = controller.afterTool(
+            state = executing,
+            call = call,
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "Search unavailable",
+            errorCode = "SEARCH_EXHAUSTED",
+            failureClass = "DEPENDENCY_EXHAUSTED",
+            retryable = false,
+            dependency = "web.search"
+        )
+
+        val event = transition.failureEvent
+        assertTrue(event != null)
+        event!!
+        assertTrue(event.source == FailureSource.TOOL)
+        assertTrue(event.failureClass == FailureClass.DEPENDENCY_EXHAUSTED)
+        assertTrue(event.effectClass == EffectClass.READ_ONLY)
+        assertTrue(event.actionFamily == "web.search")
+        assertTrue(event.attempt == 1)
+        assertTrue(event.retryable == false)
+    }
+
+    @Test
+    fun unknownMutationOutcomeCarriesTypedEventAndStopsWithoutReplay() {
+        val call = AgentDecision.ToolCall(
+            tool = "file.write",
+            args = mapOf("path" to "demo.txt", "content" to "x")
+        )
+        val initial = controller.initial(task())
+
+        val transition = controller.afterTool(
+            state = initial,
+            call = call,
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "bridge transport lost after dispatch",
+            outcomeUnknown = true,
+            retryable = true,
+            dependency = "bridge"
+        )
+
+        assertTrue(transition.stopReason != null)
+        val event = transition.failureEvent
+        assertTrue(event != null)
+        event!!
+        assertTrue(event.failureClass == FailureClass.UNKNOWN_EFFECT)
+        assertTrue(event.effectClass == EffectClass.MUTATING_OR_EXECUTABLE)
+        assertTrue(event.outcomeUnknown)
+        assertTrue(event.retryable == false)
+    }
+
 }
