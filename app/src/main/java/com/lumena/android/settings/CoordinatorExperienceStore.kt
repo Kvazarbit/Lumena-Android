@@ -138,7 +138,7 @@ object CoordinatorExperiencePolicy {
                     it.second * 100 + (it.first.surprise * 20).toInt()
                 }.thenByDescending { it.first.updatedAt }
             )
-            .take(limit.coerceIn(1, 8))
+            .take(limit.coerceIn(1, 64))
             .map { it.first }
     }
 
@@ -232,11 +232,16 @@ object CoordinatorExperiencePolicy {
         .digest(value.toByteArray(Charsets.UTF_8))
         .joinToString("") { "%02x".format(it) }
 
-    private fun tokenize(value: String): Set<String> = value
-        .lowercase()
-        .split(Regex("[^\\p{L}\\p{N}._:@/-]+"))
-        .filter { it.length >= 2 }
-        .toSet()
+    private fun tokenize(value: String): Set<String> {
+        val lower = value.lowercase()
+        val compound = lower
+            .split(Regex("[^\\p{L}\\p{N}._:@/=-]+"))
+            .filter { it.length >= 2 }
+        val components = lower
+            .split(Regex("[^\\p{L}\\p{N}]+"))
+            .filter { it.length >= 2 }
+        return (compound + components).toSet()
+    }
 
     private fun sanitize(value: String, maxChars: Int): String = value
         .replace('\u0000', ' ')
