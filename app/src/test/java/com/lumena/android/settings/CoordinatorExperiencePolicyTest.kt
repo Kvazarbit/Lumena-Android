@@ -98,6 +98,10 @@ class CoordinatorExperiencePolicyTest {
             state,
             event("2", "s1", "workspace.list", "", true, 200, 0.8)
         )
+        state = CoordinatorExperiencePolicy.record(
+            state,
+            event("3", "s1", "file.read", "path=missing.txt", true, 300, 1.0)
+        )
 
         val examples = CoordinatorExperiencePolicy.examples(
             state = state,
@@ -110,7 +114,10 @@ class CoordinatorExperiencePolicyTest {
         }
         assertTrue(recovery != null)
         requireNotNull(recovery)
-        assertEquals(listOf("file.read", "workspace.list"), recovery.tools)
+        assertEquals(
+            listOf("file.read", "workspace.list", "file.read"),
+            recovery.tools
+        )
         assertTrue(recovery.text.contains("RECOVERY EXAMPLE"))
         assertTrue(recovery.text.contains("not whole-goal proof"))
         assertTrue(recovery.text.contains("not permission"))
@@ -188,4 +195,29 @@ class CoordinatorExperiencePolicyTest {
 
         assertEquals(CoordinatorExperiencePolicy.MAX_EVENTS, state.events.size)
     }
+    @Test
+    fun sameProjectDifferentTasksAreNotSplicedIntoOneExample() {
+        var state = CoordinatorEpisodeState()
+        state = CoordinatorExperiencePolicy.record(
+            state,
+            event("1", "project", "file.read", "path=a.txt", false, 100)
+                .copy(taskId = "task-a")
+        )
+        state = CoordinatorExperiencePolicy.record(
+            state,
+            event("2", "project", "file.read", "path=a.txt", true, 200)
+                .copy(taskId = "task-b")
+        )
+
+        val examples = CoordinatorExperiencePolicy.examples(
+            state = state,
+            query = "file read a",
+            limit = 8
+        )
+
+        assertTrue(
+            examples.none { it.kind == CoordinatorExampleKind.RECOVERY }
+        )
+    }
+
 }
