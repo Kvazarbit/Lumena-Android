@@ -258,7 +258,8 @@ object ConstitutionGenomePolicy {
         scope: ConstitutionScope,
         evidenceRefs: List<ConstitutionEvidenceRef> = emptyList(),
         testRefs: List<String> = emptyList(),
-        enforcementPoints: List<String> = emptyList()
+        enforcementPoints: List<String> = emptyList(),
+        identitySeed: String? = null
     ): ConstitutionRule {
         require(source.sourceKind != ConstitutionSourceKind.SYSTEM_SEED) {
             "Hard/system invariants must be created through seedHardInvariant"
@@ -282,13 +283,18 @@ object ConstitutionGenomePolicy {
                 ConstitutionRuleStatus.CANDIDATE
         }
 
+        identitySeed?.let {
+            require(it.isNotBlank())
+            require(it.length <= 180)
+        }
+
         val createdAt = source.at
         val rule = ConstitutionRule(
             id = ruleId(
                 claimKey = claimKey,
                 stance = stance,
                 scope = scope,
-                sourceId = source.sourceId,
+                sourceId = identitySeed ?: source.sourceId,
                 statement = statement
             ),
             claimKey = claimKey,
@@ -331,6 +337,93 @@ object ConstitutionGenomePolicy {
                 revision = state.revision + 1
             )
         )
+    }
+
+    /**
+     * Merge only a verified, deterministic advisory contribution into an
+     * existing rule of the exact same controlled template.
+     *
+     * Model/imported prose is deliberately excluded from this path so matching
+     * evidence cannot accidentally activate arbitrary text authored by a model
+     * or another device.
+     */
+    fun contributeVerifiedAdvisory(
+        state: ConstitutionGenomeState,
+        proposal: ConstitutionRule
+    ): ConstitutionGenomeState {
+        require(state.schemaVersion == SCHEMA_VERSION)
+        require(proposal.authority == ConstitutionAuthority.ADVISORY)
+        require(
+            proposal.status != ConstitutionRuleStatus.HARD_INVARIANT &&
+                proposal.status != ConstitutionRuleStatus.ACTIVE_USER_CONSTRAINT
+        )
+        require(
+            proposal.provenance.isNotEmpty() &&
+                proposal.provenance.none {
+                    it.sourceKind == ConstitutionSourceKind.MODEL ||
+                        it.sourceKind == ConstitutionSourceKind.IMPORTED_SOURCE_DEVICE ||
+                        it.sourceKind == ConstitutionSourceKind.USER ||
+                        it.sourceKind == ConstitutionSourceKind.SYSTEM_SEED
+                }
+        ) {
+            "Verified advisory contribution must come from local project/tool/test evidence"
+        }
+        require(proposal.evidenceRefs.isNotEmpty())
+        require(proposal.evidenceRefs.all { it.promotionEligible() }) {
+            "Verified advisory contribution requires only locally verified evidence"
+        }
+
+        val existing = state.rules.firstOrNull { rule ->
+            rule.status != ConstitutionRuleStatus.SUPERSEDED &&
+                rule.authority == ConstitutionAuthority.ADVISORY &&
+                rule.key() == proposal.key() &&
+                rule.stance == proposal.stance &&
+                rule.kind == proposal.kind &&
+                rule.statement == proposal.statement &&
+                rule.rationale == proposal.rationale &&
+                rule.threatPrevented == proposal.threatPrevented &&
+                rule.provenance.none {
+                    it.sourceKind == ConstitutionSourceKind.MODEL ||
+                        it.sourceKind == ConstitutionSourceKind.IMPORTED_SOURCE_DEVICE
+                }
+        }
+
+        if (existing == null) {
+            return add(state, evaluate(proposal))
+        }
+
+        val merged = existing.copy(
+            provenance = (existing.provenance + proposal.provenance)
+                .distinctBy {
+                    "${it.sourceKind}|${it.sourceId}|${it.projectId.orEmpty()}|" +
+                        "${it.taskId.orEmpty()}|${it.at}"
+                }
+                .takeLast(MAX_PROVENANCE),
+            evidenceRefs = (existing.evidenceRefs + proposal.evidenceRefs)
+                .distinctBy { it.id }
+                .takeLast(MAX_EVIDENCE),
+            testRefs = (existing.testRefs + proposal.testRefs)
+                .distinct()
+                .take(32),
+            enforcementPoints = (existing.enforcementPoints + proposal.enforcementPoints)
+                .distinct()
+                .take(32),
+            updatedAt = maxOf(existing.updatedAt, proposal.updatedAt),
+            revision = existing.revision + 1
+        )
+
+        val evaluated = evaluate(merged)
+        if (
+            evaluated.provenance == existing.provenance &&
+            evaluated.evidenceRefs == existing.evidenceRefs &&
+            evaluated.testRefs == existing.testRefs &&
+            evaluated.enforcementPoints == existing.enforcementPoints &&
+            evaluated.status == existing.status
+        ) {
+            return state
+        }
+
+        return replace(state, evaluated)
     }
 
     fun recordEvidence(
