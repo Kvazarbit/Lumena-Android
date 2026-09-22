@@ -325,4 +325,51 @@ class CoordinatorExperiencePolicyTest {
         )
     }
 
+    @Test
+    fun sourceSessionFilterAppliesBeforeLimit() {
+        val targetHash = CoordinatorExperiencePolicy
+            .hash("target|task-target")
+            .take(16)
+
+        val noisy = (1..80).map { index ->
+            CoordinatorExecutionExample(
+                id = "noise-$index",
+                kind = CoordinatorExampleKind.VERIFIED_SEQUENCE,
+                sourceSessionHash = CoordinatorExperiencePolicy
+                    .hash("noise-$index")
+                    .take(16),
+                tools = listOf("workspace.list", "file.read"),
+                targets = listOf("", "path=noise-$index"),
+                evidenceIds = listOf("noise-e-$index"),
+                updatedAt = (1_000 + index).toLong(),
+                surprise = 1.0,
+                text = "noise"
+            )
+        }
+        val target = CoordinatorExecutionExample(
+            id = "target",
+            kind = CoordinatorExampleKind.RECOVERY,
+            sourceSessionHash = targetHash,
+            tools = listOf("file.read", "workspace.list", "file.read"),
+            targets = listOf("path=a", "", "path=a"),
+            evidenceIds = listOf("e1", "e2", "e3"),
+            updatedAt = 10,
+            surprise = 0.1,
+            text = "target"
+        )
+        val state = CoordinatorEpisodeState(
+            learnedExamples = noisy + target
+        )
+
+        val filtered = CoordinatorExperiencePolicy.examples(
+            state = state,
+            query = "",
+            limit = 1,
+            sourceSessionHash = targetHash
+        )
+
+        assertEquals(listOf("target"), filtered.map { it.id })
+    }
+
+
 }
