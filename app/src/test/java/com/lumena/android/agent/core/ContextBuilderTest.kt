@@ -232,4 +232,48 @@ class ContextBuilderTest {
         assertFalse(context.contains("ollama.pull"))
         assertTrue(context.contains("CONSTITUTION CAPSULE ${ConstitutionCapsule.VERSION}"))
     }
+    @Test
+    fun constitutionGenomeGuidancePrecedesOrdinaryMemoryUnderPressure() {
+        val guidance =
+            "USER CONSTRAINT [cg-user] · Preserve the user's explicit project constraint."
+
+        val context = ContextBuilder(
+            maxMemoryItems = 8,
+            maxChars = ConstitutionCapsule.MIN_CONTEXT_CHARS
+        ).build(
+            task = TaskState(
+                id = "constitution-priority",
+                projectId = "project-a",
+                goal = "Continue the project safely",
+                status = TaskStatus.WAITING_MODEL
+            ),
+            project = null,
+            relevantMemory = List(12) {
+                "LOW PRIORITY MEMORY $it " + "m".repeat(700)
+            },
+            constitutionalGuidance = listOf(guidance)
+        )
+
+        assertTrue(
+            context.contains("CONSTITUTION GENOME")
+        )
+        assertTrue(
+            context.contains(guidance)
+        )
+        assertTrue(
+            context.contains(
+                "CONSTITUTION CAPSULE ${ConstitutionCapsule.VERSION}"
+            )
+        )
+        assertTrue(
+            context.length <=
+                ConstitutionCapsule.MIN_CONTEXT_CHARS
+        )
+        assertTrue(
+            context.contains("[lower-priority context omitted]") ||
+                !context.contains("LOW PRIORITY MEMORY")
+        )
+    }
+
+
 }
