@@ -297,11 +297,16 @@ object FailureEvents {
         attempt = attempt
     )
 
-    private fun compact(value: String, maxChars: Int = 4_000): String {
+    private fun compact(value: String, maxChars: Int = 8_000): String {
         val clean = value
             .replace('\u0000', ' ')
             .trim()
         if (clean.length <= maxChars) return clean
-        return clean.take(maxChars - 32) + "...[evidence truncated]"
+
+        val marker = "\n...[failure evidence middle omitted]...\n"
+        val available = (maxChars - marker.length).coerceAtLeast(0)
+        val headChars = (available * 3) / 5
+        val tailChars = available - headChars
+        return clean.take(headChars) + marker + clean.takeLast(tailChars)
     }
 }
