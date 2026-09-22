@@ -39,6 +39,36 @@ class WebToolsTest(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         return json.loads(result["stdout"])
 
+    def test_transport_artifacts_are_repaired_before_url_validation(self):
+        with patch.object(
+                self.b.socket,
+                "getaddrinfo",
+                return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+        ):
+            self.assertEqual(
+                "https://example.org/path",
+                self.b._validated_public_https_url("ht\u2060tps://exa\ufeffmple.org/path")
+            )
+            self.assertEqual(
+                "https://example.org/path",
+                self.b._validated_public_https_url("https://exa\ufffdmple.org/path")
+            )
+
+    def test_transport_repair_cannot_bypass_network_security(self):
+        def resolve(host, *args, **kwargs):
+            address = "127.0.0.1" if host == "127.0.0.1" else "93.184.216.34"
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443))]
+
+        with patch.object(self.b.socket, "getaddrinfo", side_effect=resolve):
+            with self.assertRaisesRegex(ValueError, "Non-public"):
+                self.b._validated_public_https_url("https://127.0.0.\u20601")
+            with self.assertRaisesRegex(ValueError, "HTTPS only"):
+                self.b._validated_public_https_url("ht\u2060tp://example.org")
+            with self.assertRaisesRegex(ValueError, "forbidden zero-width"):
+                self.b._validated_public_https_url("https://exam\u200bple.org")
+            with self.assertRaisesRegex(ValueError, "ambiguous transport corruption"):
+                self.b._validated_public_https_url("https://b\ufffdücher.example")
+
     def test_202_distinguishes_challenge_without_claiming_search_success(self):
         for body, expected in [("<form id='challenge-form'>verify</form>", "human verification"),
                                ("Accepted", "no completed response")]:
