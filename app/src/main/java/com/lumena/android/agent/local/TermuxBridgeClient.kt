@@ -29,6 +29,7 @@ class TermuxBridgeClient(
         ?: throw IllegalArgumentException("Bridge URL must use localhost/127.0.0.1 over http")
     private val endpoint = base.newBuilder().addPathSegment("tool").build()
     private val cancelEndpoint = base.newBuilder().addPathSegment("cancel").build()
+    private val shutdownEndpoint = base.newBuilder().addPathSegment("shutdown").build()
 
     private val client = OkHttpClient.Builder()
         // Tool POSTs can mutate state. A lost response must never cause an
@@ -134,6 +135,53 @@ class TermuxBridgeClient(
         })
     }
 
+    suspend fun shutdownBridge(): ToolResult = suspendCancellableCoroutine { continuation ->
+        val request = Request.Builder()
+            .url(shutdownEndpoint)
+            .header("Authorization", "Bearer $token")
+            .header("Connection", "close")
+            .post("{}".toRequestBody(jsonMediaType))
+            .build()
+        val call = client.newCall(request)
+
+        continuation.invokeOnCancellation { call.cancel() }
+
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (continuation.isActive) {
+                    continuation.resume(
+                        ToolResult(
+                            ok = false,
+                            tool = "bridge.shutdown",
+                            error = "Bridge shutdown failed: " + e::class.simpleName + ": " + e.message
+                        )
+                    )
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val result = try {
+                    response.use {
+                        val body = it.body?.string().orEmpty()
+                        val parsed = body.takeIf { value -> value.isNotBlank() }
+                            ?.let(resultAdapter::fromJson)
+                        (parsed ?: ToolResult(
+                            ok = it.isSuccessful,
+                            tool = "bridge.shutdown",
+                            error = if (it.isSuccessful) null else "Bridge returned HTTP " + it.code
+                        )).copy(tool = "bridge.shutdown")
+                    }
+                } catch (e: Exception) {
+                    ToolResult(
+                        ok = false,
+                        tool = "bridge.shutdown",
+                        error = "Bridge shutdown result unreadable: " + e.message
+                    )
+                }
+                if (continuation.isActive) continuation.resume(result)
+            }
+        })
+    }
     /**
      * STOP is best effort because the HTTP call itself may already be cancelled. The Termux
      * bridge tracks requestId -> child process and terminates the matching process group.
