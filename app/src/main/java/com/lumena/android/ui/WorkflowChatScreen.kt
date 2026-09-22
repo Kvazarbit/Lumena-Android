@@ -415,16 +415,35 @@ fun WorkflowChatScreen(
             "$bridgeUrl|$ollamaUrl")
         return WorkflowRunner(modelClient(), bridgeOrNull(), modelNameForRun(),
             relevantMemoryProvider = { task ->
-                val advice = try { ExperienceLandscapeStore.advice(context, session, task) }
-                catch (_: Exception) { listOf("Learned advice unavailable; use current task state and fixed controller rules.") }
+                val advice = try {
+                    ExperienceLandscapeStore.advice(context, session, task)
+                } catch (_: Exception) {
+                    listOf(
+                        "Learned advice unavailable; use current task state and fixed controller rules."
+                    )
+                }
+                val verifiedMemory = try {
+                    ExperienceMemoryStore.relevant(context, task.goal)
+                } catch (_: Exception) {
+                    listOf(
+                        "Verified memory unavailable; do not infer prior execution success."
+                    )
+                }
+                val coordinatorExamples = try {
+                    CoordinatorExperienceStore.relevant(
+                        context = context,
+                        query = task.goal,
+                        limit = 4
+                    )
+                } catch (_: Exception) {
+                    listOf(
+                        "Coordinator playbook unavailable; continue from current verified evidence only."
+                    )
+                }
                 (
                     advice +
-                        ExperienceMemoryStore.relevant(context, task.goal) +
-                        CoordinatorExperienceStore.relevant(
-                            context = context,
-                            query = task.goal,
-                            limit = 4
-                        )
+                        verifiedMemory +
+                        coordinatorExamples
                     )
                     .distinct()
                     .take(8)
