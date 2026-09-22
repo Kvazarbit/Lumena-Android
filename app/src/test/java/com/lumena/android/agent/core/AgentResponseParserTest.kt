@@ -85,6 +85,36 @@ class AgentResponseParserTest {
     }
 
     @Test
+    fun actionReplyResultEnvelopeBecomesReply() {
+        val parsed = parser.parse(
+            """```json
+{"action":"reply","result":"Привіт із локальної моделі"}
+```"""
+        )
+        assertEquals(AgentDecision.Reply("Привіт із локальної моделі"), parsed)
+    }
+
+    @Test
+    fun actionDoneAndPartialResultEnvelopesAreNormalized() {
+        assertEquals(
+            AgentDecision.Done("Verified result"),
+            parser.parse("""{"action":"done","result":"Verified result"}""")
+        )
+        assertEquals(
+            AgentDecision.Partial("Only partial evidence"),
+            parser.parse("""{"action":"partial","result":"Only partial evidence"}""")
+        )
+    }
+
+    @Test
+    fun unknownActionIsNeverExecutedAsTool() {
+        val parsed = parser.parse(
+            """{"action":"shell","tool":"file.write","args":{"path":"x","content":"bad"}}"""
+        )
+        assertTrue(parsed is AgentDecision.Reply)
+    }
+
+    @Test
     fun doneJsonBecomesDone() {
         val parsed = parser.parse("""{"done":true,"summary":"Tests passed"}""")
         assertEquals(AgentDecision.Done("Tests passed"), parsed)
