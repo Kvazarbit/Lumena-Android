@@ -25,6 +25,7 @@ enum class FailureClass {
 }
 
 enum class EffectClass {
+    NONE,
     READ_ONLY,
     MUTATING_OR_EXECUTABLE
 }
@@ -65,84 +66,15 @@ object RecoveryPolicy {
         stderr: String = "",
         stdout: String = "",
         outcomeUnknown: Boolean = false
-    ): FailureClass {
-        if (outcomeUnknown) return FailureClass.UNKNOWN_EFFECT
-
-        suppliedClass
-            ?.trim()
-            ?.uppercase()
-            ?.let { raw -> runCatching { FailureClass.valueOf(raw) }.getOrNull() }
-            ?.let { return it }
-
-        val code = errorCode.orEmpty().trim().uppercase()
-        if (code == "SEARCH_EXHAUSTED") return FailureClass.DEPENDENCY_EXHAUSTED
-        if (code == "BRIDGE_TRANSPORT") return FailureClass.TRANSIENT_TRANSPORT
-
-        val detail = sequenceOf(error, stderr, stdout)
-            .filterNotNull()
-            .joinToString(" ")
-            .lowercase()
-            .take(8_000)
-
-        return when {
-            "bridge transport" in detail ||
-                "connection reset" in detail ||
-                "connection refused" in detail ||
-                "dns lookup failed" in detail ->
-                FailureClass.TRANSIENT_TRANSPORT
-
-            "timeout" in detail || "timed out" in detail ->
-                FailureClass.TIMEOUT
-
-            "http 429" in detail || "rate limit" in detail || "retry-after" in detail ->
-                FailureClass.RATE_LIMIT
-
-            "http 202" in detail ||
-                "human verification" in detail ||
-                "challenge" in detail ||
-                "captcha" in detail ->
-                FailureClass.PROVIDER_CHALLENGE
-
-            "http 401" in detail ||
-                "unauthorized" in detail ||
-                "api key" in detail ||
-                "bridge token is required" in detail ->
-                FailureClass.AUTH_OR_CONFIG
-
-            "search unavailable" in detail && ToolRegistry.canonicalize(tool) == "web.search" ->
-                FailureClass.DEPENDENCY_EXHAUSTED
-
-            "no such file" in detail ||
-                "not found" in detail ||
-                "does not exist" in detail ||
-                "not a git repository" in detail ||
-                "requested path" in detail ->
-                FailureClass.STATE_DRIFT
-
-            "missing required args" in detail ||
-                "requires query" in detail ||
-                "requires a url" in detail ||
-                "invalid argument" in detail ->
-                FailureClass.INVALID_INPUT
-
-            "context length" in detail ||
-                "context window" in detail ||
-                "too many tokens" in detail ||
-                "requested tokens exceed" in detail ||
-                "num_ctx" in detail ->
-                FailureClass.CONTEXT_PRESSURE
-
-            "not enough free ram" in detail ||
-                "allocation/mmap failed" in detail ||
-                "out of memory" in detail ->
-                FailureClass.RESOURCE_PRESSURE
-
-            "policy rejected" in detail || "permission denied" in detail ->
-                FailureClass.POLICY_DENIED
-
-            else -> FailureClass.OTHER
-        }
-    }
+    ): FailureClass = FailureClassifier.tool(
+        tool = tool,
+        errorCode = errorCode,
+        suppliedClass = suppliedClass,
+        error = error,
+        stderr = stderr,
+        stdout = stdout,
+        outcomeUnknown = outcomeUnknown
+    )
 
     fun decide(ctx: RecoveryContext): RecoveryDecision {
         if (ctx.failureClass == FailureClass.UNKNOWN_EFFECT) {
