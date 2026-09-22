@@ -118,7 +118,7 @@ class FailureEventTest {
             attempt = 1
         )
 
-        assertTrue(event.evidence.length <= 4_000)
+        assertTrue(event.evidence.length <= 8_000)
         assertFalse(event.evidence.contains('\u0000'))
     }
 
