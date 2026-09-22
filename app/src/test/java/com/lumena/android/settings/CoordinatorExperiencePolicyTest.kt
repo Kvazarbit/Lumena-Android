@@ -306,9 +306,7 @@ class CoordinatorExperiencePolicyTest {
 
         val state = CoordinatorExperiencePolicy.record(
             CoordinatorEpisodeState(
-                learnedExamples = learned.take(
-                    CoordinatorExperiencePolicy.MAX_LEARNED_EXAMPLES
-                )
+                learnedExamples = learned
             ),
             event(
                 id = "new-event",
