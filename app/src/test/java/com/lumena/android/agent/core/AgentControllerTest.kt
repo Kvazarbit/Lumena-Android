@@ -640,7 +640,13 @@ class AgentControllerTest {
 
     @Test
     fun knownActionReplyEnvelopeFinishesWithoutProtocolRetry() {
-        val state = controller.initial(task())
+        val conversational = TaskState(
+            id = "normalized-reply",
+            projectId = null,
+            goal = "Поясни коротко різницю між RAM і SSD",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val state = controller.initial(conversational)
 
         val instruction = controller.interpret(
             """{"action":"reply","result":"Привіт із локальної моделі"}""",
