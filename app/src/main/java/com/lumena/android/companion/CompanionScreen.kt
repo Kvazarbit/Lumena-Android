@@ -561,6 +561,21 @@ fun CompanionScreen() {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (busy) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "Elapsed · " + elapsedSeconds + " s",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        OutlinedButton(onClick = { stopRunning() }) {
+                            Text("Stop")
+                        }
+                    }
+                }
 
                 val command = detected
                 if (command != null) {
@@ -609,19 +624,27 @@ fun CompanionScreen() {
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Button(
-                                    enabled = !busy && plan.allowed,
-                                    onClick = { runDetected() },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(if (busy) "Working…" else "Run once")
-                                }
-                                OutlinedButton(
-                                    enabled = !busy,
-                                    onClick = { rejectDetected() },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Reject")
+                                if (busy) {
+                                    Button(
+                                        onClick = { stopRunning() },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Stop · " + elapsedSeconds + " s")
+                                    }
+                                } else {
+                                    Button(
+                                        enabled = plan.allowed,
+                                        onClick = { runDetected() },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Run once")
+                                    }
+                                    OutlinedButton(
+                                        onClick = { rejectDetected() },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Reject")
+                                    }
                                 }
                             }
                         }
@@ -739,6 +762,12 @@ fun CompanionScreen() {
                     color = MaterialTheme.colorScheme.primary
                 )
 
+                Text(
+                    "Connection",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
                 Card(
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surfaceVariant
@@ -837,6 +866,12 @@ fun CompanionScreen() {
                     }
                 }
 
+                Text(
+                    "Automation",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
                 Card(
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surfaceVariant
@@ -897,6 +932,58 @@ fun CompanionScreen() {
                     }
                 }
 
+                Text(
+                    "Diagnostics & recovery",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "Run read-only checks without leaving Companion.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                enabled = !busy,
+                                onClick = { runDiagnostic("health") }
+                            ) { Text("Health") }
+                            OutlinedButton(
+                                enabled = !busy,
+                                onClick = { runDiagnostic("context.snapshot") }
+                            ) { Text("Context") }
+                            OutlinedButton(
+                                enabled = !busy,
+                                onClick = { runDiagnostic("ollama.status") }
+                            ) { Text("Ollama") }
+                        }
+                        if (busy) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    "Running · " + elapsedSeconds + " s",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                TextButton(onClick = { stopRunning() }) {
+                                    Text("Stop")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Text(
+                    "Advanced",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         onClick = {
@@ -913,6 +1000,15 @@ fun CompanionScreen() {
                         }
                     ) {
                         Text("Rescan")
+                    }
+                    TextButton(
+                        onClick = {
+                            context.startActivity(
+                                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                            )
+                        }
+                    ) {
+                        Text("Accessibility")
                     }
                 }
 
