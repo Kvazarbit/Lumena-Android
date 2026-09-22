@@ -84,7 +84,7 @@ object CompanionProtocol {
             CompanionCommand(
                 decision = PlannerDecision(ToolRequest(tool, args), reason),
                 rawJson = json,
-                fingerprint = sha256(fingerprintPayload(tool, args))
+                fingerprint = commandFingerprint(tool, args)
             )
         }.getOrNull()
     }
@@ -153,6 +153,11 @@ object CompanionProtocol {
             }
         }
         return repaired
+    }
+
+    internal fun commandFingerprint(tool: String, args: Map<String, String>): String {
+        val normalizedArgs = normalizeArgs(tool, args)
+        return sha256(fingerprintPayload(tool, normalizedArgs))
     }
 
     private fun fingerprintPayload(tool: String, args: Map<String, String>): String = buildString {
