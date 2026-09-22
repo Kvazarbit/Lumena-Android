@@ -1,0 +1,191 @@
+package com.lumena.android.settings
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class CoordinatorExperiencePolicyTest {
+    private fun event(
+        id: String,
+        session: String,
+        tool: String,
+        target: String,
+        ok: Boolean,
+        at: Long,
+        surprise: Double = 0.8,
+        evidence: String? = "ev-$id"
+    ) = CoordinatorEpisodeEvent(
+        id = id,
+        sessionId = session,
+        taskId = session,
+        tool = tool,
+        target = target,
+        ok = ok,
+        experienceId = evidence,
+        at = at,
+        surprise = surprise
+    )
+
+    @Test
+    fun repeatedSuccessBecomesLessSurprising() {
+        var state = CoordinatorEpisodeState()
+        val first = CoordinatorExperiencePolicy.surprise(
+            state = state,
+            sessionId = "s1",
+            tool = "file.read",
+            target = "path=README.md",
+            ok = true
+        )
+        assertEquals(0.80, first, 0.0001)
+
+        state = CoordinatorExperiencePolicy.record(
+            state,
+            event(
+                id = "1",
+                session = "s1",
+                tool = "file.read",
+                target = "path=README.md",
+                ok = true,
+                at = 100,
+                surprise = first
+            )
+        )
+        val second = CoordinatorExperiencePolicy.surprise(
+            state = state,
+            sessionId = "s1",
+            tool = "file.read",
+            target = "path=README.md",
+            ok = true
+        )
+        assertTrue(second < first)
+    }
+
+    @Test
+    fun outcomeFlipGetsMaximumSurprise() {
+        val state = CoordinatorExperiencePolicy.record(
+            CoordinatorEpisodeState(),
+            event(
+                id = "1",
+                session = "s1",
+                tool = "web.search",
+                target = "query=latest news",
+                ok = false,
+                at = 100,
+                surprise = 0.85
+            )
+        )
+
+        val score = CoordinatorExperiencePolicy.surprise(
+            state = state,
+            sessionId = "s1",
+            tool = "web.search",
+            target = "query=latest news",
+            ok = true
+        )
+
+        assertEquals(1.0, score, 0.0001)
+    }
+
+    @Test
+    fun failureThenSuccessCreatesRecoveryExample() {
+        var state = CoordinatorEpisodeState()
+        state = CoordinatorExperiencePolicy.record(
+            state,
+            event("1", "s1", "file.read", "path=missing.txt", false, 100, 0.9)
+        )
+        state = CoordinatorExperiencePolicy.record(
+            state,
+            event("2", "s1", "workspace.list", "", true, 200, 0.8)
+        )
+
+        val examples = CoordinatorExperiencePolicy.examples(
+            state = state,
+            query = "missing workspace file",
+            limit = 4
+        )
+
+        val recovery = examples.firstOrNull {
+            it.kind == CoordinatorExampleKind.RECOVERY
+        }
+        assertTrue(recovery != null)
+        requireNotNull(recovery)
+        assertEquals(listOf("file.read", "workspace.list"), recovery.tools)
+        assertTrue(recovery.text.contains("RECOVERY EXAMPLE"))
+        assertTrue(recovery.text.contains("not whole-goal proof"))
+        assertTrue(recovery.text.contains("not permission"))
+    }
+
+    @Test
+    fun successfulSequenceNeverClaimsWholeGoalSuccess() {
+        val state = listOf(
+            event("1", "s1", "workspace.list", "", true, 100, 0.8),
+            event("2", "s1", "file.read", "path=README.md", true, 200, 0.5),
+            event("3", "s1", "git.status", "cwd=@Lumena-Android", true, 300, 0.4)
+        ).fold(CoordinatorEpisodeState()) { acc, item ->
+            CoordinatorExperiencePolicy.record(acc, item)
+        }
+
+        val example = CoordinatorExperiencePolicy.examples(
+            state = state,
+            query = "read repository status",
+            limit = 4
+        ).first { it.kind == CoordinatorExampleKind.VERIFIED_SEQUENCE }
+
+        val prompt = CoordinatorExperiencePolicy.formatForPrompt(example)
+        assertTrue(prompt.contains("VERIFIED EXECUTION SEQUENCE"))
+        assertTrue(prompt.contains("not whole-goal proof"))
+        assertTrue(prompt.contains("not permission"))
+        assertFalse(prompt.contains("task succeeded", ignoreCase = true))
+    }
+
+    @Test
+    fun differentSessionsAreNeverSplicedIntoOneExample() {
+        var state = CoordinatorEpisodeState()
+        state = CoordinatorExperiencePolicy.record(
+            state,
+            event("1", "s1", "file.read", "path=a.txt", false, 100)
+        )
+        state = CoordinatorExperiencePolicy.record(
+            state,
+            event("2", "s2", "workspace.list", "", true, 200)
+        )
+
+        val examples = CoordinatorExperiencePolicy.examples(
+            state = state,
+            query = "",
+            limit = 8
+        )
+
+        assertTrue(
+            examples.none {
+                it.tools == listOf("file.read", "workspace.list")
+            }
+        )
+    }
+
+    @Test
+    fun recordIsIdempotentAndBounded() {
+        var state = CoordinatorEpisodeState()
+        val first = event("same", "s1", "file.read", "path=a", true, 1)
+        state = CoordinatorExperiencePolicy.record(state, first)
+        state = CoordinatorExperiencePolicy.record(state, first)
+        assertEquals(1, state.events.size)
+
+        for (i in 2..(CoordinatorExperiencePolicy.MAX_EVENTS + 20)) {
+            state = CoordinatorExperiencePolicy.record(
+                state,
+                event(
+                    id = "e$i",
+                    session = "s$i",
+                    tool = "file.read",
+                    target = "path=$i",
+                    ok = true,
+                    at = i.toLong()
+                )
+            )
+        }
+
+        assertEquals(CoordinatorExperiencePolicy.MAX_EVENTS, state.events.size)
+    }
+}
