@@ -27,6 +27,33 @@ class AgentResponseParser {
         val obj = runCatching { mapAdapter.fromJson(candidate) }.getOrNull()
             ?: return AgentDecision.Reply(text)
 
+        // Compatibility envelope used by several local instruct models:
+        // {"action":"reply","result":"..."}, {"action":"done","result":"..."},
+        // {"action":"partial","result":"..."}, or {"action":"tool",...}.
+        // Normalize only explicitly known actions; never execute an unknown action.
+        when (obj["action"]?.toString()?.trim()?.lowercase()) {
+            "reply" -> {
+                val value = (obj["reply"] ?: obj["result"] ?: obj["content"])
+                    ?.toString()?.trim().orEmpty()
+                if (value.isNotBlank()) return AgentDecision.Reply(value)
+            }
+            "done" -> {
+                val value = (obj["summary"] ?: obj["result"] ?: obj["reply"])
+                    ?.toString()?.trim().orEmpty()
+                return AgentDecision.Done(value.ifBlank { "Task complete." })
+            }
+            "partial" -> {
+                val value = (obj["summary"] ?: obj["result"] ?: obj["reply"])
+                    ?.toString()?.trim().orEmpty()
+                return AgentDecision.Partial(
+                    value.ifBlank { "Task incomplete; inspect the recorded results before continuing." }
+                )
+            }
+            "tool" -> Unit
+            null, "" -> Unit
+            else -> return AgentDecision.Reply(text)
+        }
+
         if (obj["partial"] == true) {
             return AgentDecision.Partial(obj["summary"]?.toString()?.trim().orEmpty()
                 .ifBlank { "Task incomplete; inspect the recorded results before continuing." })
