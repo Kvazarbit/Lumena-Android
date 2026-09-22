@@ -111,7 +111,9 @@ object CoordinatorExperiencePolicy {
         val candidates = mutableListOf<CoordinatorExecutionExample>()
 
         state.events
-            .groupBy { it.sessionId }
+            .groupBy { event ->
+                event.sessionId to (event.taskId ?: event.sessionId)
+            }
             .values
             .forEach { rawSession ->
                 val session = rawSession.sortedBy { it.at }
@@ -156,7 +158,16 @@ object CoordinatorExperiencePolicy {
             if (failed.ok) continue
 
             val end = (i + MAX_SEQUENCE_STEPS).coerceAtMost(session.lastIndex)
-            val successIndex = (i + 1..end).firstOrNull { session[it].ok } ?: continue
+            // A recovery example is only created when the originally failed
+            // operation later succeeds for the same tool + target. Intermediate
+            // discovery/repair steps are retained, but a random successful tool
+            // must never be mistaken for resolution.
+            val successIndex = (i + 1..end).firstOrNull { index ->
+                val candidate = session[index]
+                candidate.ok &&
+                    candidate.tool == failed.tool &&
+                    candidate.target == failed.target
+            } ?: continue
             val segment = session.subList(i, successIndex + 1)
 
             out += buildExample(
@@ -193,7 +204,10 @@ object CoordinatorExperiencePolicy {
             "${event.tool}[$outcome]${event.target.takeIf(String::isNotBlank)?.let { " target=${sanitize(it, 120)}" }.orEmpty()}"
         }
         val evidenceIds = segment.mapNotNull { it.experienceId }.distinct().take(16)
-        val sessionHash = hash(segment.first().sessionId).take(16)
+        val first = segment.first()
+        val sessionHash = hash(
+            first.sessionId + "|" + (first.taskId ?: first.sessionId)
+        ).take(16)
         val text = "$label (verified tool outcomes; not whole-goal proof; not permission) · " +
             "$steps · recheck current state before reuse"
         val id = hash(
@@ -291,7 +305,7 @@ object CoordinatorExperienceStore {
 
         val event = CoordinatorEpisodeEvent(
             id = CoordinatorExperiencePolicy.hash(
-                safeSessionId + "|" + requestIdentity
+                safeSessionId + "|" + safeTaskId.orEmpty() + "|" + requestIdentity
             ).take(24),
             sessionId = safeSessionId,
             taskId = safeTaskId,
