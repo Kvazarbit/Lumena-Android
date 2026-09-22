@@ -248,6 +248,35 @@ fun CompanionScreen() {
         }
     }
 
+    fun stopBridge() {
+        if (busy) {
+            status = "Stop the current tool before stopping the bridge."
+            return
+        }
+        if (token.isBlank()) {
+            status = "Paste the bridge token first."
+            return
+        }
+
+        busy = true
+        status = "Stopping bridge…"
+        scope.launch {
+            val result = TermuxBridgeClient(
+                bridgeUrl,
+                token,
+                context
+            ).shutdownBridge()
+
+            bridgeSummary = if (result.ok) "Stopped" else "Error"
+            status = if (result.ok) {
+                "Bridge stopped. The next local tool or Start/check can start it again."
+            } else {
+                result.error ?: "Bridge stop failed."
+            }
+            busy = false
+        }
+    }
+
     fun executeCommand(command: CompanionCommand, automatic: Boolean) {
         if (busy || command.fingerprint == handledFingerprint) return
         if (token.isBlank()) {
@@ -842,22 +871,33 @@ fun CompanionScreen() {
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth()
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                enabled = !busy,
+                                onClick = { testBridge() },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Start / check")
+                            }
                             OutlinedButton(
                                 enabled = !busy,
-                                onClick = { testBridge() }
+                                onClick = { stopBridge() },
+                                modifier = Modifier.weight(1f)
                             ) {
-                                Text("Test bridge")
+                                Text("Stop bridge")
                             }
-                            TextButton(
-                                onClick = {
-                                    context.startActivity(
-                                        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                                    )
-                                }
-                            ) {
-                                Text("Accessibility")
+                        }
+                        TextButton(
+                            onClick = {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                )
                             }
+                        ) {
+                            Text("Accessibility")
                         }
                         Text(
                             "Bridge status: " + bridgeSummary,
