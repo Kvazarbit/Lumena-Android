@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.20
+Lumena Termux Bridge v0.21
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -28,6 +28,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import OrderedDict
 from html.parser import HTMLParser
@@ -499,7 +500,7 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.20",
+            "User-Agent": "LumenaBridge/0.21",
             "Cache-Control": "no-cache",
         },
     )
@@ -553,7 +554,7 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "text/html,text/plain,application/json,application/xml,text/xml,application/xhtml+xml;q=0.9,*/*;q=0.1",
-            "User-Agent": "LumenaBridge/0.20",
+            "User-Agent": "LumenaBridge/0.21",
             "Cache-Control": "no-cache",
         },
     )
@@ -618,7 +619,7 @@ def _web_fetch(url: str, *, headers: dict[str, str] | None = None, redirects: in
             raise ValueError("Redirect loop")
         visited.add(url)
         request = urllib.request.Request(url, headers={
-            "User-Agent": "LumenaBridge/0.20", "Accept-Encoding": "identity",
+            "User-Agent": "LumenaBridge/0.21", "Accept-Encoding": "identity",
             "Accept": "text/html,application/json,text/plain;q=0.9", **(headers or {}),
         })
         try:
@@ -640,7 +641,7 @@ def _web_fetch(url: str, *, headers: dict[str, str] | None = None, redirects: in
             if status not in {200, 202}:
                 raise ValueError(f"Upstream HTTP {response.status}; not a usable page")
             content_type = response.headers.get_content_type().lower()
-            if not (content_type.startswith("text/") or content_type in {"application/json", "application/xhtml+xml"}):
+            if not (content_type.startswith("text/") or content_type in {"application/json", "application/xhtml+xml", "application/xml", "application/rss+xml"}):
                 raise ValueError(f"Unsupported web content: {content_type}")
             size = response.headers.get("Content-Length")
             if size and int(size) > MAX_HTTP_JSON:
@@ -735,8 +736,9 @@ def _result_url(value: str) -> str | None:
 
 
 class DuckSearchParser(HTMLParser):
-    def __init__(self):
+    def __init__(self, base_url: str = "https://html.duckduckgo.com"):
         super().__init__(convert_charrefs=True)
+        self.base_url = base_url
         self.results: list[dict[str, str]] = []
         self.current = None
         self.field = None
@@ -745,15 +747,15 @@ class DuckSearchParser(HTMLParser):
     def handle_starttag(self, tag, attrs):
         values = dict(attrs)
         classes = values.get("class", "").split()
-        if tag == "a" and "result__a" in classes:
-            href = urllib.parse.urljoin("https://html.duckduckgo.com", values.get("href", ""))
+        if tag == "a" and ("result__a" in classes or "result-link" in classes):
+            href = urllib.parse.urljoin(self.base_url, values.get("href", ""))
             parsed = urllib.parse.urlsplit(href)
-            if parsed.hostname in {"duckduckgo.com", "html.duckduckgo.com"}:
+            if parsed.hostname in {"duckduckgo.com", "html.duckduckgo.com", "lite.duckduckgo.com"}:
                 href = urllib.parse.parse_qs(parsed.query).get("uddg", [href])[0]
             self.current = {"url": href, "title": "", "snippet": ""}
             self.results.append(self.current)
             self.field, self.field_tag = "title", tag
-        elif self.current is not None and "result__snippet" in classes:
+        elif self.current is not None and ("result__snippet" in classes or "result-snippet" in classes):
             self.field, self.field_tag = "snippet", tag
 
     def handle_endtag(self, tag):
@@ -790,15 +792,44 @@ def _search_provider(provider: str, query: str, limit: int, period: str, key: st
         payload = json.loads(body)
         return [{"title": r.get("title"), "url": r.get("url"), "snippet": r.get("content"),
                  "published": r.get("publishedDate")} for r in payload.get("results", []) if isinstance(r, dict)]
-    params = {"q": query}
-    if period:
-        params["df"] = {"day": "d", "week": "w", "month": "m", "year": "y"}[period]
-    _, _, body = _web_fetch("https://html.duckduckgo.com/html/?" + urllib.parse.urlencode(params))
-    if any(marker in body.lower() for marker in ("anomaly.js", "anomaly-modal", "challenge-form", "g-recaptcha")):
-        raise ValueError("Search provider requires human verification; no bypass attempted")
-    parser = DuckSearchParser()
-    parser.feed(body)
-    return parser.results
+    if provider == "bing-rss":
+        # Bing exposes an RSS representation of ordinary web-search results.
+        # It needs no API key and gives us a second independent keyless path when
+        # DuckDuckGo rate-limits or serves a human-verification page.
+        params = {"q": query, "format": "rss"}
+        _, _, body = _web_fetch("https://www.bing.com/search?" + urllib.parse.urlencode(params))
+        try:
+            root = ET.fromstring(body)
+        except ET.ParseError as exc:
+            raise ValueError("Bing RSS returned unreadable XML") from exc
+        results = []
+        for item in root.findall(".//item"):
+            url = (item.findtext("link") or "").strip()
+            title = (item.findtext("title") or "").strip()
+            if not url or not title:
+                continue
+            results.append({
+                "title": title,
+                "url": url,
+                "snippet": (item.findtext("description") or "").strip(),
+                "published": (item.findtext("pubDate") or "").strip() or None,
+            })
+        return results
+
+    if provider in {"duckduckgo-lite", "duckduckgo"}:
+        params = {"q": query}
+        if period:
+            params["df"] = {"day": "d", "week": "w", "month": "m", "year": "y"}[period]
+        base = "https://lite.duckduckgo.com" if provider == "duckduckgo-lite" else "https://html.duckduckgo.com"
+        path = "/lite/?" if provider == "duckduckgo-lite" else "/html/?"
+        _, _, body = _web_fetch(base + path + urllib.parse.urlencode(params))
+        if any(marker in body.lower() for marker in ("anomaly.js", "anomaly-modal", "challenge-form", "g-recaptcha")):
+            raise ValueError("Search provider requires human verification; no bypass attempted")
+        parser = DuckSearchParser(base)
+        parser.feed(body)
+        return parser.results
+
+    raise ValueError(f"Unknown search provider: {provider}")
 
 
 def _web_result(payload: dict[str, Any], error: str | None = None) -> dict[str, Any]:
@@ -816,7 +847,11 @@ def web_search(args: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("time_range must be day, week, month or year")
     key = os.environ.get("LUMENA_BRAVE_API_KEY", "").strip()
     endpoint = os.environ.get("LUMENA_SEARXNG_URL", "").strip()
-    providers = (["brave"] if key else []) + (["searxng"] if endpoint else []) + ["duckduckgo"]
+    providers = (
+        (["brave"] if key else [])
+        + (["searxng"] if endpoint else [])
+        + ["duckduckgo-lite", "bing-rss", "duckduckgo"]
+    )
     cache_key = (query, limit, period, hashlib.sha256((key + "\0" + endpoint).encode()).hexdigest())
     with SEARCH_CACHE_LOCK:
         cached = SEARCH_CACHE.get(cache_key)
@@ -865,7 +900,7 @@ def web_search(args: dict[str, Any]) -> dict[str, Any]:
             attempts.append({"provider": provider, "error": detail[:200]})
     result = _web_result(
         {"query": query, "results": [], "attempts": attempts},
-        "Search unavailable. Do not invent current facts. Try a narrower query or configure Brave API / SearXNG; report partial if evidence remains unavailable."
+        "Search unavailable after all keyless/configured providers were tried. Do not invent current facts; report partial if evidence remains unavailable."
     )
     result.update({
         "errorCode": "SEARCH_EXHAUSTED",
@@ -978,7 +1013,7 @@ def _wikimedia_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.20 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.21 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -1050,7 +1085,7 @@ def _openverse_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.20 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.21 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -1787,7 +1822,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"Lumena bridge OK\n"
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + root.name for root in READONLY_ROOTS if root.exists()) or '(none)'}\n"
-                f"version=0.20\n"
+                f"version=0.21\n"
             ),
             "stderr": "",
             "error": None,
@@ -2054,7 +2089,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.20"
+    server_version = "LumenaBridge/0.21"
     protocol_version = "HTTP/1.1"
 
     def setup(self) -> None:
@@ -2097,7 +2132,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.20"})
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.21"})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
@@ -2149,7 +2184,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Lumena Termux Bridge v0.20")
+    print("Lumena Termux Bridge v0.21")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")
