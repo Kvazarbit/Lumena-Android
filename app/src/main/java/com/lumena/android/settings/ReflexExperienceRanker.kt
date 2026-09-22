@@ -37,9 +37,18 @@ object ReflexExperienceRanker {
         event: FailureEvent,
         state: RecoveryState,
         examples: List<CoordinatorExecutionExample>
-    ): ReflexExperienceRecommendation {
-        val candidates = ReflexKernel.candidates(event, state)
+    ): ReflexExperienceRecommendation =
+        rank(
+            event = event,
+            candidates = ReflexKernel.candidates(event, state),
+            examples = examples
+        )
 
+    fun rank(
+        event: FailureEvent,
+        candidates: ReflexCandidateSet,
+        examples: List<CoordinatorExecutionExample>
+    ): ReflexExperienceRecommendation {
         if (candidates.allowed == setOf(ReflexOption.STOP)) {
             return ReflexExperienceRecommendation(
                 choice = ReflexKernel.rank(

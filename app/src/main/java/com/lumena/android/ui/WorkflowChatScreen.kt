@@ -87,11 +87,13 @@ import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.settings.ContextCheckpointStore
 import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.FollowUpGoal
+import com.lumena.android.agent.core.ReflexRuntimeAdvice
 import com.lumena.android.settings.ContextGenomeStats
 import com.lumena.android.settings.ContextGenomeStore
 import com.lumena.android.settings.ExperienceMemoryStore
 import com.lumena.android.settings.ExperienceLandscapeStore
 import com.lumena.android.settings.CoordinatorExperienceStore
+import com.lumena.android.settings.ReflexExperienceRanker
 import com.lumena.android.settings.GenomeCapsule
 import com.lumena.android.settings.GenomeUnpackedUnit
 import com.lumena.android.settings.LumenaPreferences
@@ -447,6 +449,37 @@ fun WorkflowChatScreen(
                     )
                     .distinct()
                     .take(8)
+            },
+            reflexAdviceProvider = { event, candidates, task ->
+                try {
+                    val query = buildString {
+                        append(task.goal)
+                        event.actionFamily
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { append(' ').append(it) }
+                        append(' ').append(event.failureClass.name)
+                    }
+                    val examples = CoordinatorExperienceStore.examples(
+                        context = context,
+                        query = query,
+                        limit = 64
+                    )
+                    val recommendation = ReflexExperienceRanker.rank(
+                        event = event,
+                        candidates = candidates,
+                        examples = examples
+                    )
+                    recommendation.choice?.let { choice ->
+                        ReflexRuntimeAdvice(
+                            option = choice.best(),
+                            confidence = choice.confidence,
+                            evidenceCount = choice.evidenceCount,
+                            calibrated = recommendation.calibrated
+                        )
+                    }
+                } catch (_: Exception) {
+                    null
+                }
             },
             checkpoint = { control ->
                 withContext(Dispatchers.IO) { ContextCheckpointStore.save(context, control) }
