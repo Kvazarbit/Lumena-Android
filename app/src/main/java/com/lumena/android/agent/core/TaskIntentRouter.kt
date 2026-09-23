@@ -141,7 +141,7 @@ object TaskIntentRouter {
                 guidance = "Search with web.search; read relevant source URLs with web.read or documented http.json APIs. Cite fetched URLs, compare sources for current claims. Snippets/homepages do not prove popularity or profit. If evidence is missing, report partial; distinguish observed failures from hypotheses.",
                 preflight = if ("https://" in lower || "http://" in lower) null else IntentPreflight(
                     tool = "web.search",
-                    args = mapOf("query" to goal.trim().replace(Regex("\\s+"), " ").take(400)),
+                    args = mapOf("query" to publicSearchQuery(normalized)),
                     reason = "Find real source URLs before making current public claims.",
                     mandatory = true
                 )
@@ -154,6 +154,56 @@ object TaskIntentRouter {
             recommendedTools = emptyList(),
             guidance = "No deterministic operational recipe matched; let the model reason under the normal tool policy."
         )
+    }
+
+    private fun publicSearchQuery(goal: String): String {
+        var query = goal
+            .replace(Regex("[\\r\\n\\t]+"), " ")
+            .replace(Regex("\\s{2,}"), " ")
+            .trim()
+
+        val leadingNoise = listOf(
+            Regex(
+                "(?iu)^спробуй\\s+інший\\s+підхід\\s+до\\s+запиту\\s*:\\s*"
+            ),
+            Regex(
+                "(?iu)^(?:знайди|знайти|пошукай|найди|найти|find|search|znajdź|wyszukaj)" +
+                    "(?:\\s+(?:в\\s+інтернеті|в\\s+интернете|on\\s+the\\s+internet|online|w\\s+internecie))?" +
+                    "\\s+"
+            )
+        )
+        leadingNoise.forEach { query = query.replace(it, "") }
+
+        // Keep the searchable subject/time terms, but drop requested presentation
+        // work such as "and briefly summarize with links". Those instructions
+        // belong to the task, not to the search engine query.
+        query = query.replace(
+            Regex(
+                "(?iu)\\s+(?:і|та|и|and|oraz)\\s+" +
+                    "(?:коротко\\s+)?" +
+                    "(?:підсум[\\p{L}]*|summari[sz][\\p{L}]*|подвед[\\p{L}]*|streść[\\p{L}]*)\\b.*$"
+            ),
+            ""
+        )
+        query = query.replace(
+            Regex(
+                "(?iu)\\s+(?:з|із|с|with|ze)\\s+" +
+                    "(?:посиланнями|ссылками|links?|linkami)\\s*" +
+                    "(?:(?:на|to|do)\\s+)?" +
+                    "(?:джерела|источники|sources|źródeł)\\.?$"
+            ),
+            ""
+        )
+
+        query = query
+            .trim()
+            .trim(' ', '.', ',', ':', ';', '-', '—')
+            .replace(Regex("\\s{2,}"), " ")
+
+        return query
+            .takeIf { it.length >= 2 }
+            ?.take(240)
+            ?: goal.trim().replace(Regex("\\s+"), " ").take(240)
     }
 
     private fun isOllamaOperation(lower: String): Boolean {
