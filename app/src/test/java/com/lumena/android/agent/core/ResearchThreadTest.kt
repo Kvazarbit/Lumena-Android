@@ -51,6 +51,29 @@ class ResearchThreadTest {
     }
 
     @Test
+    fun relationalFollowUpWinsOverPublicWebKeyword() {
+        val thread = ResearchThreadState(
+            rootGoal = "Знайди офіційні джерела про Android background execution"
+        )
+
+        val verify = ResearchThreadResolver.resolve(
+            text = "перевір це в інтернеті",
+            previousGoal = thread.rootGoal,
+            thread = thread
+        )
+        assertEquals(ResearchFollowUpKind.VERIFY, verify.followUpKind)
+        assertEquals(thread.rootGoal, verify.thread?.rootGoal)
+
+        val other = ResearchThreadResolver.resolve(
+            text = "знайди інше джерело online",
+            previousGoal = verify.goal,
+            thread = thread
+        )
+        assertEquals(ResearchFollowUpKind.ALTERNATIVE, other.followUpKind)
+        assertEquals(thread.rootGoal, other.thread?.rootGoal)
+    }
+
+    @Test
     fun ordinalFollowUpWorksForArbitraryResearchItems() {
         val thread = ResearchThreadState(
             rootGoal = "Search online for three Vulkan memory allocator approaches"
