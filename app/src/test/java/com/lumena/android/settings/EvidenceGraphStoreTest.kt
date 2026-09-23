@@ -1,7 +1,9 @@
 package com.lumena.android.settings
 
+import com.lumena.android.agent.core.EvidenceClaimNode
 import com.lumena.android.agent.core.EvidenceGraphReducer
 import com.lumena.android.agent.core.EvidenceGraphState
+import com.lumena.android.agent.core.EvidenceSourceNode
 import com.lumena.android.agent.core.EvidenceSourceKind
 import com.lumena.android.agent.core.EvidenceVerificationState
 import com.lumena.android.agent.core.TaskState
@@ -302,6 +304,80 @@ class EvidenceGraphStoreTest {
         assertTrue(observation.statement.length <= 1_600)
         assertFalse(encoded.contains(hugeMarker))
         assertTrue(encoded.length < 8_000)
+    }
+
+    @Test
+    fun trimNeverLeavesClaimWithPartialSourceSet() {
+        val newestIds = (1..300).map { "new-source-$it" }
+        val olderIds = (1..300).map { "old-source-$it" }
+
+        val sources = (
+            newestIds.mapIndexed { index, id ->
+                EvidenceSourceNode(
+                    id = id,
+                    uri = "https://new$index.example/item",
+                    host = "new$index.example",
+                    kind = EvidenceSourceKind.WEB_PAGE,
+                    retrievalMethod = "web.read",
+                    evidenceIds = listOf("e-new-$index"),
+                    firstObservedAt = now + 100,
+                    lastObservedAt = now + 100
+                )
+            } +
+                olderIds.mapIndexed { index, id ->
+                    EvidenceSourceNode(
+                        id = id,
+                        uri = "https://old$index.example/item",
+                        host = "old$index.example",
+                        kind = EvidenceSourceKind.WEB_PAGE,
+                        retrievalMethod = "web.read",
+                        evidenceIds = listOf("e-old-$index"),
+                        firstObservedAt = now,
+                        lastObservedAt = now
+                    )
+                }
+            )
+
+        val newest = EvidenceClaimNode(
+            id = "new-claim",
+            claimKey = "new-claim",
+            statement = "newest",
+            verificationState =
+                EvidenceVerificationState.CORROBORATED,
+            supportSourceIds = newestIds,
+            evidenceIds = listOf("e-new"),
+            firstObservedAt = now + 100,
+            lastObservedAt = now + 100
+        )
+        val older = EvidenceClaimNode(
+            id = "old-claim",
+            claimKey = "old-claim",
+            statement = "older",
+            verificationState =
+                EvidenceVerificationState.CORROBORATED,
+            supportSourceIds = olderIds,
+            evidenceIds = listOf("e-old"),
+            firstObservedAt = now,
+            lastObservedAt = now
+        )
+
+        val trimmed = EvidenceGraphStore.trim(
+            EvidenceGraphState(
+                claims = listOf(older, newest),
+                sources = sources
+            )
+        )
+
+        assertEquals(listOf("new-claim"), trimmed.claims.map { it.id })
+        assertEquals(300, trimmed.sources.size)
+        assertEquals(
+            newestIds.toSet(),
+            trimmed.sources.map { it.id }.toSet()
+        )
+        assertEquals(
+            newestIds,
+            trimmed.claims.single().supportSourceIds
+        )
     }
 
     @Test
