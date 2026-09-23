@@ -325,6 +325,28 @@ class WebToolsTest(unittest.TestCase):
             self.assertFalse(data["cached"])
             self.assertEqual(19, provider.call_count)
 
+    def test_gzip_json_provider_response_is_decoded_before_parsing(self):
+        payload = {"query": {"pages": []}}
+        compressed = gzip.compress(json.dumps(payload).encode("utf-8"))
+        response = Response(
+            compressed,
+            "application/json; charset=utf-8",
+            content_encoding="gzip",
+        )
+        request = urllib.request.Request("https://example.org/api")
+        with patch.object(
+                self.b.PUBLIC_HTTPS_OPENER,
+                "open",
+                return_value=response,
+        ):
+            decoded = self.b._read_json_response(
+                request,
+                5,
+                "fixture",
+            )
+
+        self.assertEqual(payload, decoded)
+
     def test_gzip_web_response_is_decoded_before_html_parsing(self):
         html = (
             "<html><head><title>Python Blogs</title></head>"
