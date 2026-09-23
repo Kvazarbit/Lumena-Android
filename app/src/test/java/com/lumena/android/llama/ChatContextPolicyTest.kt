@@ -62,6 +62,34 @@ class ChatContextPolicyTest {
     }
 
     @Test
+    fun sharedNewestClipperPreservesToolResultHeadAndContinuationTail() {
+        val raw = buildString {
+            append("TOOL_RESULT for web.search:\n")
+            append("ok=true\n")
+            append("stdout:\n")
+            append("{\"provider\":\"bing-rss\",\"results\":[")
+            append("{\"url\":\"https://primary.example/article\"},")
+            append("x".repeat(5_000))
+            append("]}\n")
+            append("Continue the SAME goal from TASK STATE and CONTEXT KERNEL.")
+        }
+
+        val clipped = clipNewestContextText(raw, 1_200)
+
+        assertEquals(1_200, clipped.length)
+        assertTrue(clipped.startsWith("TOOL_RESULT for web.search:"))
+        assertTrue(clipped.contains("ok=true"))
+        assertTrue(clipped.contains("\"provider\":\"bing-rss\""))
+        assertTrue(clipped.contains("https://primary.example/article"))
+        assertTrue(clipped.contains("middle recent context omitted"))
+        assertTrue(
+            clipped.endsWith(
+                "Continue the SAME goal from TASK STATE and CONTEXT KERNEL."
+            )
+        )
+    }
+
+    @Test
     fun neverDropsSystemToForceAFit() {
         val fit = ChatContextPolicy.fit(
             roles = arrayOf("system", "user"),
