@@ -82,6 +82,7 @@ class WorkflowRunner(
         onProgress: (String) -> Unit = {},
         onModelText: (String) -> Unit = {},
         onToolTelemetry: (String) -> Unit = {},
+        onContextUsage: (ModelContextUsage) -> Unit = {},
         isApprovedForTask: (String, ToolRequest) -> Boolean = { _, _ -> false },
         onState: (AgentControlState) -> Unit = {}
     ): WorkflowOutcome {
@@ -296,9 +297,11 @@ class WorkflowRunner(
                 relevantMemory,
                 constitutionalGuidance
             )
-            val replyResult = modelClient.chatStreaming(model, modelMessages) { partial ->
-                onModelText(partial)
-            }
+            val replyResult = chatWithContextTelemetry(
+                messages = modelMessages,
+                onModelText = onModelText,
+                onContextUsage = onContextUsage
+            )
             coroutineContext.ensureActive()
 
             if (replyResult.isFailure) {
@@ -523,6 +526,7 @@ class WorkflowRunner(
         onProgress: (String) -> Unit = {},
         onModelText: (String) -> Unit = {},
         onToolTelemetry: (String) -> Unit = {},
+        onContextUsage: (ModelContextUsage) -> Unit = {},
         isApprovedForTask: (String, ToolRequest) -> Boolean = { _, _ -> false },
         onState: (AgentControlState) -> Unit = {}
     ): WorkflowOutcome {
@@ -612,9 +616,26 @@ class WorkflowRunner(
             onProgress = onProgress,
             onModelText = onModelText,
             onToolTelemetry = onToolTelemetry,
+            onContextUsage = onContextUsage,
             isApprovedForTask = isApprovedForTask,
             onState = onState
         )
+    }
+
+    private suspend fun chatWithContextTelemetry(
+        messages: List<OllamaMessage>,
+        onModelText: (String) -> Unit,
+        onContextUsage: (ModelContextUsage) -> Unit
+    ): Result<String> {
+        val telemetry = modelClient as? ModelContextTelemetrySource
+        telemetry?.estimateContextUsage(messages)?.let(onContextUsage)
+
+        val result = modelClient.chatStreaming(model, messages) { partial ->
+            onModelText(partial)
+        }
+
+        telemetry?.lastContextUsage()?.let(onContextUsage)
+        return result
     }
 
     private fun normalizeDisplayResult(
