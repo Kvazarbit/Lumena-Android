@@ -104,6 +104,8 @@ class RelayConfig:
 
         if not REPO_RE.fullmatch(repo):
             raise RelayError("repo must be owner/name")
+        if raw.get("requirePrivateRepo", True) is not True:
+            raise RelayError("requirePrivateRepo cannot be disabled")
         if issue_number < 1:
             raise RelayError("issueNumber must be >= 1")
         if not allowed_author or len(allowed_author) > 100:
@@ -119,7 +121,7 @@ class RelayConfig:
             allowed_author=allowed_author,
             poll_seconds=max(3, min(poll_seconds, 300)),
             bridge_url=bridge_url,
-            require_private_repo=bool(raw.get("requirePrivateRepo", True)),
+            require_private_repo=True,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -513,7 +515,7 @@ class BridgeClient:
 
 def verify_mailbox(config: RelayConfig, github: GitHubClient) -> None:
     repo = github.repo(config.repo)
-    if config.require_private_repo and repo.get("private") is not True:
+    if repo.get("private") is not True:
         raise RelayError(
             "Remote relay refuses a public repository. "
             "Use a dedicated private mailbox repository."
