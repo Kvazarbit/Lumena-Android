@@ -115,6 +115,15 @@ class RemoteRelayProtocolTest(unittest.TestCase):
                 relay.REQUEST_MARKER + "\n" + json.dumps(raw)
             )
 
+    def test_private_requirement_cannot_be_disabled_in_config(self):
+        with self.assertRaises(relay.RelayError):
+            relay.RelayConfig.from_dict({
+                "repo": "owner/mailbox",
+                "issueNumber": 1,
+                "allowedAuthor": "owner",
+                "requirePrivateRepo": False,
+            })
+
     def test_public_mailbox_is_rejected(self):
         config = relay.RelayConfig(
             repo="owner/private-mailbox",
