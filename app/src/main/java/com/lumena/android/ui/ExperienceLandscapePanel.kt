@@ -66,7 +66,7 @@ internal fun ExperienceLandscapePanel(busy: Boolean, refreshKey: String) {
                     stream.bufferedWriter().use { writer -> writer.write(json) }
                 }
                 portabilityStatus =
-                    "Живе ядро експортовано. Файл містить версії конституції, позитивний підтверджений досвід і dormant learned rules; approvals/bridge token не експортуються."
+                    "Живе ядро експортовано. Файл містить версії конституції, позитивний підтверджений досвід, verified execution/recovery examples і переносні constitutional seeds. Hard DNA, approvals, permissions і bridge token не експортуються."
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
@@ -100,8 +100,10 @@ internal fun ExperienceLandscapePanel(busy: Boolean, refreshKey: String) {
                     append(result.dormantRules)
                     append(" dormant rules, ")
                     append(result.executionExamples)
-                    append(" execution examples. ")
-                    append("Досвід є advisory і мусить бути перевірений локально на цьому телефоні.")
+                    append(" execution examples, ")
+                    append(result.constitutionalSeeds)
+                    append(" constitutional seeds. ")
+                    append("Learned seeds є advisory і потребують локальної перевірки; user-constraint records потребують повторного підтвердження користувачем.")
                     if (!result.versionsMatchCurrentRuntime) {
                         append(" Версії ядра відрізняються від поточного runtime; permissions не перенесені.")
                     }
@@ -166,7 +168,7 @@ internal fun ExperienceLandscapePanel(busy: Boolean, refreshKey: String) {
             ) {
                 Text("Переносне живе ядро", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "Експорт переносить версії конституції, позитивний підтверджений Context Genome, verified execution/recovery examples і активні PREFER-правила як dormant hints. На іншому телефоні вони не активуються автоматично: спочатку локальна перевірка. Approval, bridge token і permissions не переносяться.",
+                    "Експорт переносить версії конституції, позитивний підтверджений Context Genome, verified execution/recovery examples, активні PREFER-правила як dormant hints та структуровані Learned Constitution seeds. Learned seeds на іншому телефоні потребують local revalidation; записи user constraints — явного повторного підтвердження користувачем. Hard DNA, approvals, bridge token і permissions не переносяться.",
                     style = MaterialTheme.typography.bodySmall
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
