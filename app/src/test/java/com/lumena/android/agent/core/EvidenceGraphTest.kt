@@ -131,6 +131,42 @@ class EvidenceGraphTest {
     }
 
     @Test
+    fun retrievedEvidenceReplacesDiscoverySnippetStatement() {
+        var state = EvidenceGraphReducer.record(
+            EvidenceGraphState(),
+            obs(
+                statement = "Search snippet only",
+                uri = "https://example.org/docs",
+                kind = EvidenceSourceKind.SEARCH_SNIPPET,
+                method = "web.search",
+                evidenceId = "search-1"
+            )
+        ).state
+
+        state = EvidenceGraphReducer.record(
+            state,
+            obs(
+                statement = "Retrieved primary page content",
+                uri = "https://example.org/docs",
+                kind = EvidenceSourceKind.WEB_PAGE,
+                method = "web.read",
+                evidenceId = "read-1",
+                at = t0 + 1
+            )
+        ).state
+
+        val claim = state.claims.single()
+        assertEquals(
+            EvidenceVerificationState.RETRIEVED,
+            claim.verificationState
+        )
+        assertEquals(
+            "Retrieved primary page content",
+            claim.statement
+        )
+    }
+
+    @Test
     fun twoIndependentHostsCorroborateClaim() {
         var state = EvidenceGraphState()
         state = EvidenceGraphReducer.record(
