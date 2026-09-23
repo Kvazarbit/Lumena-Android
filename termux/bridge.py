@@ -1228,6 +1228,11 @@ def _read_json_response(
         raw = response.read(MAX_HTTP_JSON + 1)
         if len(raw) > MAX_HTTP_JSON:
             raise ValueError(f"{provider} response exceeds 2 MiB limit")
+        raw = _decode_bounded_http_body(
+            raw,
+            response.headers,
+            label=f"{provider} response",
+        )
 
     try:
         payload = json.loads(raw.decode("utf-8"))
@@ -1261,6 +1266,7 @@ def _wikimedia_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
+            "Accept-Encoding": "identity",
             "User-Agent": "LumenaBridge/0.25 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
