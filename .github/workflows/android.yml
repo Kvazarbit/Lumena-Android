@@ -164,6 +164,8 @@ jobs:
           }
 
           class FakeResponse:
+              headers = {}
+
               def __enter__(self):
                   return self
 
@@ -221,6 +223,7 @@ jobs:
                   class Response:
                       def __init__(self, payload):
                           self.payload = payload
+                          self.headers = {}
 
                       def __enter__(self):
                           return self
