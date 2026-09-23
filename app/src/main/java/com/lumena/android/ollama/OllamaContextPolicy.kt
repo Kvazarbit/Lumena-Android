@@ -1,6 +1,7 @@
 package com.lumena.android.ollama
 
 import com.lumena.android.llama.LlamaRuntimeProfile
+import com.lumena.android.llama.clipNewestContextText
 import kotlin.math.min
 
 data class OllamaRequestBudget(
