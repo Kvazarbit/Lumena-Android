@@ -479,44 +479,46 @@ object EvidenceGraphStore {
     internal fun trim(
         state: EvidenceGraphState
     ): EvidenceGraphState {
-        val claims = state.claims
+        val orderedClaims = state.claims
             .sortedByDescending { it.lastObservedAt }
-            .take(MAX_CLAIMS)
 
-        val referencedSourceIds = claims
-            .flatMap {
-                it.supportSourceIds +
-                    it.contradictionSourceIds +
-                    it.mentionSourceIds
+        val retainedClaims = mutableListOf<EvidenceClaimNode>()
+        val retainedSourceIds = linkedSetOf<String>()
+
+        for (claim in orderedClaims) {
+            if (retainedClaims.size >= MAX_CLAIMS) break
+
+            val claimSourceIds = (
+                claim.supportSourceIds +
+                    claim.contradictionSourceIds +
+                    claim.mentionSourceIds
+                )
+                .distinct()
+
+            // Never partially retain a claim's source set. Verification state
+            // (for example CORROBORATED/CONTESTED) was derived from these exact
+            // links, so dropping only some links would make the stored state
+            // semantically inconsistent.
+            val nextUnionSize =
+                (retainedSourceIds + claimSourceIds).size
+            if (
+                claimSourceIds.isNotEmpty() &&
+                nextUnionSize > MAX_SOURCES
+            ) {
+                continue
             }
-            .toSet()
 
-        val sources = state.sources
-            .filter {
-                it.id in referencedSourceIds
-            }
-            .sortedByDescending { it.lastObservedAt }
-            .take(MAX_SOURCES)
-
-        val retainedSourceIds = sources
-            .map { it.id }
-            .toSet()
-
-        val cleanedClaims = claims.map { claim ->
-            claim.copy(
-                supportSourceIds = claim.supportSourceIds
-                    .filter { it in retainedSourceIds },
-                contradictionSourceIds =
-                    claim.contradictionSourceIds
-                        .filter { it in retainedSourceIds },
-                mentionSourceIds = claim.mentionSourceIds
-                    .filter { it in retainedSourceIds }
-            )
+            retainedClaims += claim
+            retainedSourceIds += claimSourceIds
         }
 
+        val retainedSources = state.sources
+            .filter { it.id in retainedSourceIds }
+            .sortedByDescending { it.lastObservedAt }
+
         return state.copy(
-            claims = cleanedClaims,
-            sources = sources
+            claims = retainedClaims,
+            sources = retainedSources
         )
     }
 
