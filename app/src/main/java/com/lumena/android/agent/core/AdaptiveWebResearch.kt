@@ -2,6 +2,7 @@ package com.lumena.android.agent.core
 
 import java.net.URI
 import kotlin.math.pow
+import kotlin.math.sqrt
 
 enum class WebQueryClass {
     ENGLISH,
@@ -248,6 +249,17 @@ object JevLikeWebCalibrationRanker {
     const val HALF_LIFE_DAYS = 30.0
     const val CALIBRATION_SUPPORT = 8.0
 
+    /**
+     * Bounded optimism for under-explored routes.
+     *
+     * The posterior means below remain the calibrated estimates shown to the
+     * user. These Z values affect selection utility only. They are analogous to
+     * a small UCB/PUCT-style exploration pressure inside the already-admitted
+     * READ_ONLY strategy set.
+     */
+    const val ACCESS_UCB_Z = 1.50
+    const val RELEVANCE_UCB_Z = 1.00
+
     fun rank(
         candidates: List<WebStrategyCandidate>,
         observations: List<WebStrategyObservation>,
@@ -335,20 +347,43 @@ object JevLikeWebCalibrationRanker {
 
         val evidenceCount = weighted.size
 
-        // Unknown relevance shrinks to 0.5. Latency is a smaller preference;
-        // verified access + relevance dominate the route score.
-        val baseUtility =
-            accessProbability *
-                (0.55 + 0.45 * relevanceProbability) *
-                (0.85 + 0.15 * latencyScore)
+        // Posterior means above are the calibrated estimates. Selection uses
+        // a bounded upper-confidence value so an under-explored admitted route
+        // can still be sampled instead of being permanently starved by an
+        // early winner. This is ranking only: it creates no execution authority.
+        val accessStdDev = sqrt(
+            (
+                accessProbability *
+                    (1.0 - accessProbability) /
+                    (effectiveEvidence + 3.0)
+                ).coerceAtLeast(0.0)
+        )
+        val relevanceStdDev = sqrt(
+            (
+                relevanceProbability *
+                    (1.0 - relevanceProbability) /
+                    (relevanceWeight + 3.0)
+                ).coerceAtLeast(0.0)
+        )
+        val selectionAccess =
+            (
+                accessProbability +
+                    ACCESS_UCB_Z * accessStdDev
+                ).coerceIn(0.0, 1.0)
+        val selectionRelevance =
+            (
+                relevanceProbability +
+                    RELEVANCE_UCB_Z * relevanceStdDev
+                ).coerceIn(0.0, 1.0)
 
-        // Small uncertainty bonus prevents permanent lock-in while keeping
-        // exploration bounded and advisory.
-        val explorationBonus =
-            0.06 * (1.0 - calibrationConfidence)
-
+        // Unknown relevance still shrinks to 0.5 in the posterior. Latency is a
+        // smaller preference; access + relevance dominate the routing score.
         val utility =
-            (baseUtility + explorationBonus).coerceIn(0.0, 1.0)
+            (
+                selectionAccess *
+                    (0.55 + 0.45 * selectionRelevance) *
+                    (0.85 + 0.15 * latencyScore)
+                ).coerceIn(0.0, 1.0)
 
         return WebStrategyScore(
             candidate = candidate,
