@@ -20,6 +20,8 @@ data class ConstitutionInspectorEntry(
     val scope: String,
     val localEvidenceCount: Int,
     val distinctLocalContexts: Int,
+    val distinctTaskCount: Int,
+    val distinctProjectCount: Int,
     val contributorModelIds: List<String>,
     val provenance: List<String>,
     val enforcementPoints: List<String>,
@@ -199,6 +201,14 @@ object ConstitutionGenomeInspectorPolicy {
         val contexts = eligible
             .map { it.contextKey() }
             .distinct()
+        val distinctTasks = eligible
+            .mapNotNull { it.taskId }
+            .filter { it.isNotBlank() }
+            .distinct()
+        val distinctProjects = eligible
+            .mapNotNull { it.projectId }
+            .filter { it.isNotBlank() }
+            .distinct()
 
         val explanation = when {
             rule.authority == ConstitutionAuthority.HARD_GUARD ->
@@ -227,6 +237,8 @@ object ConstitutionGenomeInspectorPolicy {
             scope = rule.scope.stableKey(),
             localEvidenceCount = eligible.size,
             distinctLocalContexts = contexts.size,
+            distinctTaskCount = distinctTasks.size,
+            distinctProjectCount = distinctProjects.size,
             contributorModelIds = rule.provenance
                 .mapNotNull { it.modelId }
                 .distinct()
