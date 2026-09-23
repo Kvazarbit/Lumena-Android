@@ -161,14 +161,48 @@ class AgentController(
                 interpretDecision(AgentDecision.Reply(normalized.text), state)
 
             is NormalizationResult.Failure -> {
+                val hasSuccessfulToolEvidence =
+                    state.toolUsed &&
+                        state.task.lastResult
+                            ?.trimStart()
+                            ?.startsWith("ok=true") == true
+
+                if (
+                    normalized.kind == ProtocolFailureKind.UNSUPPORTED_SHAPE &&
+                    hasSuccessfulToolEvidence &&
+                    state.protocolRetries >= 1
+                ) {
+                    return preserveUnsupportedProtocolAsPartial(
+                        state = state,
+                        raw = raw,
+                        reason = normalized.reason
+                    )
+                }
+
                 val event = FailureEvents.fromProtocol(
                     failure = normalized,
                     attempt = state.protocolRetries + 1
                 )
+                val webContinuationHint =
+                    if (
+                        normalized.kind == ProtocolFailureKind.UNSUPPORTED_SHAPE &&
+                        hasSuccessfulToolEvidence &&
+                        state.intent == TaskIntent.PUBLIC_WEB &&
+                        state.task.lastTool == "web.search"
+                    ) {
+                        " Do not echo or wrap the search-result JSON. " +
+                            "Choose exactly one relevant URL from the verified TOOL_RESULT " +
+                            "and return one {\"tool\":\"web.read\",\"args\":{\"url\":\"https://...\"}} object, " +
+                            "or return partial JSON if source reading cannot continue."
+                    } else {
+                        ""
+                    }
+
                 protocolRetry(
                     state = state,
                     problem = "Protocol ${normalized.kind} [${event.failureClass}]: ${event.evidence}. " +
-                        "Return exactly one valid tool/done/partial/reply JSON object.",
+                        "Return exactly one valid tool/done/partial/reply JSON object." +
+                        webContinuationHint,
                     observedEvent = event
                 )
             }
@@ -240,7 +274,7 @@ class AgentController(
         val canonical = decision.copy(tool = validation.canonicalTool)
 
         if (state.recoveryHint != null &&
-            state.semanticRecoverySpent >= budget.maxSemanticRecoveries
+            state.semanticRecoverySpent >= semanticRecoveryLimit(state, canonical)
         ) {
             val report = "Частково виконано. Ліміт семантичного відновлення вичерпано без нових перевірених доказів."
             return ControllerInstruction.Finish(
@@ -257,7 +291,7 @@ class AgentController(
 
         val actionFamily = RecoveryPolicy.actionFamily(canonical)
         val familyFailures = state.actionFamilyFailures[actionFamily] ?: 0
-        if (familyFailures >= budget.maxActionFamilyFailures) {
+        if (familyFailures >= actionFamilyFailureLimit(state, canonical)) {
             return protocolRetry(
                 state,
                 "Action family $actionFamily already failed $familyFailures times in this task. " +
@@ -439,6 +473,48 @@ class AgentController(
 
         // Once an agentic task has started, prose alone is not proof of completion.
         return recoverPlainReply(state, trimmed, "An active tool task needs a verified conclusion.")
+    }
+
+    private fun preserveUnsupportedProtocolAsPartial(
+        state: AgentControlState,
+        raw: String,
+        reason: String
+    ): ControllerInstruction.Finish {
+        val report = buildString {
+            append(
+                "Частково виконано. Перевірений результат інструмента збережено, " +
+                    "але модель повторно повернула JSON без однозначної канонічної дії."
+            )
+            state.task.lastTool?.let {
+                append("\nОстанній інструмент: ").append(it)
+            }
+            state.task.lastResult
+                ?.takeIf { it.isNotBlank() }
+                ?.let {
+                    append("\nПеревірений TOOL_RESULT: ")
+                    append(it.take(1800))
+                }
+            append("\nПричина протоколу: ").append(reason.take(600))
+            raw.trim()
+                .takeIf { it.isNotBlank() }
+                ?.let {
+                    append("\n\nНеперевірений вихід моделі:\n")
+                    append(it.take(2000))
+                }
+        }
+        return ControllerInstruction.Finish(
+            report,
+            state.copy(
+                task = state.task.copy(
+                    status = TaskStatus.PARTIAL,
+                    lastResult = report,
+                    errors = (
+                        state.task.errors +
+                            "Unsupported model protocol preserved as partial: $reason"
+                        ).takeLast(8)
+                )
+            )
+        )
     }
 
     private fun recoverPlainReply(state: AgentControlState, text: String, problem: String): ControllerInstruction {
@@ -650,8 +726,8 @@ class AgentController(
         val recoveryState = RecoveryState(
             familyFailures = familyCount,
             semanticRecoverySpent = semanticSpent,
-            maxFamilyFailures = budget.maxActionFamilyFailures,
-            maxSemanticRecoveries = budget.maxSemanticRecoveries
+            maxFamilyFailures = actionFamilyFailureLimit(nextState, call),
+            maxSemanticRecoveries = semanticRecoveryLimit(nextState, call)
         )
         val decision = ConstitutionKernel.decide(
             event = event,
@@ -823,6 +899,32 @@ class AgentController(
                 )
         }
     }
+
+    private fun actionFamilyFailureLimit(
+        state: AgentControlState,
+        call: AgentDecision.ToolCall
+    ): Int =
+        if (
+            state.intent == TaskIntent.PUBLIC_WEB &&
+            ToolRegistry.canonicalize(call.tool) == "web.read"
+        ) {
+            budget.maxWebSourceFailures
+        } else {
+            budget.maxActionFamilyFailures
+        }
+
+    private fun semanticRecoveryLimit(
+        state: AgentControlState,
+        call: AgentDecision.ToolCall
+    ): Int =
+        if (
+            state.intent == TaskIntent.PUBLIC_WEB &&
+            ToolRegistry.canonicalize(call.tool) == "web.read"
+        ) {
+            budget.maxWebSourceFailures
+        } else {
+            budget.maxSemanticRecoveries
+        }
 
     private fun requiresToolEvidence(intent: TaskIntent): Boolean =
         intent in setOf(

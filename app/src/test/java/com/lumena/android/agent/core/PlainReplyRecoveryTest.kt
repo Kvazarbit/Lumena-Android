@@ -27,6 +27,53 @@ class PlainReplyRecoveryTest {
         assertEquals(first.state.task.kernel, second.state.task.kernel)
     }
 
+    @Test
+    fun repeatedUnsupportedJsonAfterSuccessfulWebSearchBecomesPartialNotFailed() {
+        val task = TaskState(
+            "web-json-shape",
+            null,
+            "Знайди останні новини Python в інтернеті",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val call = AgentDecision.ToolCall(
+            "web.search",
+            mapOf("query" to "latest Python news")
+        )
+        val initial = controller.initial(task)
+        val executing = initial.copy(
+            task = initial.task.copy(
+                status = TaskStatus.EXECUTING,
+                kernel = ContextKernel.before(initial.task.kernel, call)
+            )
+        )
+        val afterSearch = controller.afterTool(
+            state = executing,
+            call = call,
+            ok = true,
+            stdout = """{"provider":"duckduckgo-lite","results":[{"url":"https://example.org/python"}]}""",
+            stderr = "",
+            error = null
+        ).state
+
+        val unsupported =
+            """{"query":"latest Python news","provider":"duckduckgo-lite","results":[{"url":"https://example.org/python"}]}"""
+
+        val first = controller.interpret(unsupported, afterSearch)
+        assertTrue(first is ControllerInstruction.AskModelAgain)
+        first as ControllerInstruction.AskModelAgain
+        assertTrue(first.feedback.contains("web.read"))
+        assertTrue(first.feedback.contains("Do not echo"))
+
+        val second = controller.interpret(unsupported, first.state)
+        assertTrue(second is ControllerInstruction.Finish)
+        second as ControllerInstruction.Finish
+        assertEquals(TaskStatus.PARTIAL, second.state.task.status)
+        assertTrue(second.text.contains("Перевірений TOOL_RESULT"))
+        assertTrue(second.text.contains("web.search"))
+        assertTrue(second.text.contains("duckduckgo-lite"))
+        assertEquals(afterSearch.task.kernel, second.state.task.kernel)
+    }
+
     @Test fun correctedProtocolCanStillCompleteWithExistingEvidence() {
         val evidence = ContextKernel.record(ContextKernelState(),
             AgentDecision.ToolCall("web.read", mapOf("url" to "https://example.org/news")), true, "Read article")

@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.23
+Lumena Termux Bridge v0.24
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -522,7 +522,7 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.23",
+            "User-Agent": "LumenaBridge/0.24",
             "Cache-Control": "no-cache",
         },
     )
@@ -576,7 +576,7 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "text/html,text/plain,application/json,application/xml,text/xml,application/xhtml+xml;q=0.9,*/*;q=0.1",
-            "User-Agent": "LumenaBridge/0.23",
+            "User-Agent": "LumenaBridge/0.24",
             "Cache-Control": "no-cache",
         },
     )
@@ -632,7 +632,13 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         }
 
 
-def _web_fetch(url: str, *, headers: dict[str, str] | None = None, redirects: int = 3) -> tuple[str, str, str]:
+def _web_fetch(
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    redirects: int = 3,
+    timeout_seconds: int = 8,
+) -> tuple[str, str, str]:
     """Bounded public HTTPS GET. Credentials never cross a redirect."""
     visited: set[str] = set()
     for hop in range(redirects + 1):
@@ -641,11 +647,14 @@ def _web_fetch(url: str, *, headers: dict[str, str] | None = None, redirects: in
             raise ValueError("Redirect loop")
         visited.add(url)
         request = urllib.request.Request(url, headers={
-            "User-Agent": "LumenaBridge/0.23", "Accept-Encoding": "identity",
+            "User-Agent": "LumenaBridge/0.24", "Accept-Encoding": "identity",
             "Accept": "text/html,application/json,text/plain;q=0.9", **(headers or {}),
         })
         try:
-            response = PUBLIC_HTTPS_OPENER.open(request, timeout=8)
+            response = PUBLIC_HTTPS_OPENER.open(
+                request,
+                timeout=max(1, min(int(timeout_seconds), 20)),
+            )
         except urllib.error.HTTPError as exc:
             location = exc.headers.get("Location", "")
             status = exc.code
@@ -1080,7 +1089,17 @@ def web_search(
 
 
 def web_read(args: dict[str, Any]) -> dict[str, Any]:
-    url, kind, body = _web_fetch(str(args.get("url", "")).strip())
+    raw_url = str(args.get("url", "")).strip()
+    try:
+        url, kind, body = _web_fetch(raw_url)
+    except ValueError as exc:
+        # A single mechanical retry is safe for read-only GETs and handles
+        # transient mobile-network stalls without spending an agent semantic
+        # recovery. Challenge/CAPTCHA/HTTP errors are not retried here.
+        if "Public HTTPS transport failed (TimeoutError)" not in str(exc):
+            raise
+        url, kind, body = _web_fetch(raw_url, timeout_seconds=12)
+
     limit = _bounded_int(args.get("max_chars"), 6000, 500, 12000)
     title, published = "", None
     if kind in {"text/html", "application/xhtml+xml"}:
@@ -1181,7 +1200,7 @@ def _wikimedia_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.23 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.24 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -1253,7 +1272,7 @@ def _openverse_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.23 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.24 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -1991,7 +2010,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"Lumena bridge OK\n"
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + root.name for root in READONLY_ROOTS if root.exists()) or '(none)'}\n"
-                f"version=0.23\n"
+                f"version=0.24\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
                 f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
@@ -2284,7 +2303,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.23"
+    server_version = "LumenaBridge/0.24"
     protocol_version = "HTTP/1.1"
 
     def setup(self) -> None:
@@ -2327,7 +2346,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.23",
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.24",
                              "bridge_run_id": BRIDGE_RUN_ID})
             return
         self._json(404, {"ok": False, "error": "Not found"})
@@ -2381,7 +2400,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     _mark_interrupted_search_from_previous_run()
-    print("Lumena Termux Bridge v0.23")
+    print("Lumena Termux Bridge v0.24")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")
