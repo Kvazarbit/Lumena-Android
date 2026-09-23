@@ -108,6 +108,43 @@ class OllamaClientHttpTest {
     }
 
     @Test
+    fun finalOllamaUsageCountsReplaceThePreflightEstimate() {
+        withFixture(
+            listOf(
+                """{"message":{"role":"assistant","content":"ok"},"done":false,"prompt_eval_count":321}
+{"done":true,"eval_count":17}
+"""
+            )
+        ) { port, calls ->
+            val client = OllamaClient("http://127.0.0.1:$port")
+            val before = client.estimateContextUsage(
+                listOf(OllamaMessage("user", "hello context meter"))
+            )
+            assertTrue(!before.promptTokensExact)
+
+            val result = runBlocking {
+                client.chatStreaming(
+                    model = "fixture",
+                    messages = listOf(
+                        OllamaMessage("user", "hello context meter")
+                    ),
+                    onPartial = {}
+                )
+            }
+
+            assertEquals("ok", result.getOrThrow())
+            assertEquals(1, calls.get())
+            val usage = client.lastContextUsage()
+            assertTrue(usage != null)
+            usage!!
+            assertTrue(usage.promptTokensExact)
+            assertEquals(321, usage.promptTokens)
+            assertEquals(17, usage.generatedTokens)
+            assertTrue(usage.inputBudgetTokens > 0)
+        }
+    }
+
+    @Test
     fun emptyStreamingResponseFallsBackToNonStreamingChatOnce() {
         withFixture(
             listOf(

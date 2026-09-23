@@ -76,6 +76,7 @@ import com.lumena.android.llama.EmbeddedLlamaRuntime
 import com.lumena.android.llama.LlamaHardwareProfile
 import com.lumena.android.ollama.ChatModelClient
 import com.lumena.android.ollama.LocalWorkflowAgent
+import com.lumena.android.ollama.ModelContextUsage
 import com.lumena.android.ollama.OllamaClient
 import com.lumena.android.ollama.OllamaMessage
 import com.lumena.android.ollama.PendingWorkflowTool
@@ -188,6 +189,7 @@ fun WorkflowChatScreen(
     var history by remember {
         mutableStateOf(listOf(systemMessage) + restored.history.map { OllamaMessage(it.role, it.content) })
     }
+    var contextUsage by remember { mutableStateOf<ModelContextUsage?>(null) }
     var busy by remember {
         mutableStateOf(
             restored.task?.status in setOf(
@@ -381,6 +383,7 @@ fun WorkflowChatScreen(
         taskApprovals.clear()
         currentTask = null
         history = listOf(systemMessage)
+        contextUsage = null
         bubbles.clear()
         bubbles += ChatBubble("assistant", "Новий чат. Що хочеш зробити?")
         busy = false
@@ -576,6 +579,21 @@ fun WorkflowChatScreen(
         }
     }
 
+    fun reportContextUsage(
+        taskId: String,
+        runToken: Long,
+        usage: ModelContextUsage
+    ) {
+        uiScope.launch {
+            if (
+                coordinator.isCurrent(runToken, taskId) &&
+                isCurrentTask(taskId)
+            ) {
+                contextUsage = usage
+            }
+        }
+    }
+
     fun reportProgress(taskId: String, runToken: Long, message: String) {
         if (message.isBlank() || !coordinator.isCurrent(runToken, taskId) || !isCurrentTask(taskId)) return
         coordinator.addProgress(runToken, message)
@@ -664,6 +682,9 @@ fun WorkflowChatScreen(
                         else coordinator.updateModelText(runToken, text)
                     },
                     onToolTelemetry = { coordinator.updateToolTelemetry(runToken, it) },
+                    onContextUsage = {
+                        reportContextUsage(task.id, runToken, it)
+                    },
                     isApprovedForTask = ::isApprovedForTask,
                     onState = { acceptControl(task.id, runToken, it) }
                 )
@@ -752,6 +773,7 @@ fun WorkflowChatScreen(
             modelLabel = modelLabel,
             backendLabel = backendLabel,
             busy = busy,
+            contextUsage = contextUsage,
             onHistory = { onOpenHistory?.invoke() },
             onNew = { clearConversation() },
             onMore = {
@@ -784,6 +806,7 @@ fun WorkflowChatScreen(
             pendingApproval = pending != null,
             nowMs = nowMs,
             expanded = progressExpanded,
+            contextUsage = contextUsage,
             onToggle = { progressExpanded = !progressExpanded },
             onStop = { stopCurrentTask() }
         )
@@ -805,6 +828,7 @@ fun WorkflowChatScreen(
                 inferenceBackend = inferenceBackend,
                 onBackend = {
                     inferenceBackend = it
+                    contextUsage = null
                     LumenaPreferences.saveInferenceBackend(context, it)
                 },
                 computeMode = computeMode,
@@ -833,11 +857,13 @@ fun WorkflowChatScreen(
                 ollamaUrl = ollamaUrl,
                 onOllamaUrl = {
                     ollamaUrl = it
+                    contextUsage = null
                     LumenaPreferences.saveOllamaUrl(context, it)
                 },
                 selectedModel = selectedModel,
                 onSelectedModel = {
                     selectedModel = it
+                    contextUsage = null
                     LumenaPreferences.saveSelectedModel(context, it)
                 },
                 models = models,
@@ -901,6 +927,9 @@ fun WorkflowChatScreen(
                             else coordinator.updateModelText(runToken, text)
                         },
                         onToolTelemetry = { coordinator.updateToolTelemetry(runToken, it) },
+                        onContextUsage = {
+                            reportContextUsage(taskId, runToken, it)
+                        },
                         isApprovedForTask = ::isApprovedForTask,
                         onState = { acceptControl(taskId, runToken, it) }
                     )
@@ -967,6 +996,7 @@ private fun ModernChatHeader(
     modelLabel: String,
     backendLabel: String,
     busy: Boolean,
+    contextUsage: ModelContextUsage?,
     onHistory: () -> Unit,
     onNew: () -> Unit,
     onMore: () -> Unit,
@@ -994,6 +1024,14 @@ private fun ModernChatHeader(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1
             )
+            contextUsage?.let { usage ->
+                Text(
+                    usage.compactLabel(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
         }
         Surface(
             modifier = Modifier.clickable(onClick = onNew),
@@ -1014,6 +1052,7 @@ private fun CompactAgentStatus(
     pendingApproval: Boolean,
     nowMs: Long,
     expanded: Boolean,
+    contextUsage: ModelContextUsage?,
     onToggle: () -> Unit,
     onStop: () -> Unit
 ) {
@@ -1063,6 +1102,35 @@ private fun CompactAgentStatus(
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
             }
             if (expanded) {
+                contextUsage?.let { usage ->
+                    Text(
+                        buildString {
+                            append("Context · prompt ")
+                            append(if (usage.promptTokensExact) "" else "≈")
+                            append(usage.promptTokens)
+                            append(" tok · input budget ")
+                            append(usage.inputBudgetTokens)
+                            append(" · requested window ")
+                            append(usage.requestedContextWindowTokens)
+                            append(" · output reserve ")
+                            append(usage.reservedOutputTokens)
+                            usage.generatedTokens?.let { generated ->
+                                append(" · generated ")
+                                append(generated)
+                            }
+                            if (usage.compacted) append(" · compacted")
+                        },
+                        modifier = Modifier.padding(top = 6.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "Input budget is Lumena's request budget; a cloud provider's hard context limit may differ.",
+                        modifier = Modifier.padding(top = 2.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 coordinator.progress.takeLast(8).forEach {
                     Text(
                         it,
