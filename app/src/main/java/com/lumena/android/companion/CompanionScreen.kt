@@ -35,6 +35,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.LumenaAccessibilityService
+import com.lumena.android.agent.core.TaskState
+import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.core.ToolRegistry
 import com.lumena.android.agent.core.ToolRisk
 import com.lumena.android.agent.local.TermuxBridgeClient
@@ -44,6 +46,7 @@ import com.lumena.android.agent.local.ToolResult
 import com.lumena.android.settings.LumenaPreferences
 import com.lumena.android.settings.ExperienceMemoryStore
 import com.lumena.android.settings.CoordinatorExperienceStore
+import com.lumena.android.settings.ConstitutionGenomeStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -144,6 +147,11 @@ fun CompanionScreen() {
             "Running ${plan.request.tool}…"
         }
 
+        val episodeSessionId = command.sessionId
+            ?: "single-${command.fingerprint.take(24)}"
+        val contributorModelId = command.modelId
+            ?: CompanionProtocol.DEFAULT_COMPANION_MODEL_ID
+
         scope.launch {
             val result = try {
                 TermuxBridgeClient(bridgeUrl, token, context).execute(plan.request)
@@ -177,15 +185,41 @@ fun CompanionScreen() {
                 withContext(Dispatchers.IO) {
                     CoordinatorExperienceStore.record(
                         context = context,
-                        sessionId = command.sessionId
-                            ?: "single-${command.fingerprint.take(24)}",
+                        sessionId = episodeSessionId,
                         taskId = command.taskId,
                         request = plan.request,
                         result = result,
-                        experienceId = experienceRef
+                        experienceId = experienceRef,
+                        modelId = contributorModelId
                     )
                 }
             }.getOrNull()
+
+            if (episodeEvent != null) {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        val examples =
+                            CoordinatorExperienceStore.examplesForTask(
+                                context = context,
+                                sessionId = episodeSessionId,
+                                taskId = command.taskId,
+                                limit = 64
+                            )
+                        val constitutionTask = TaskState(
+                            id = command.taskId ?: episodeSessionId,
+                            projectId = command.sessionId,
+                            goal = "Companion coordinator task",
+                            status = TaskStatus.WAITING_MODEL
+                        )
+                        ConstitutionGenomeStore.ingestVerifiedRecoveryExamples(
+                            context = context,
+                            task = constitutionTask,
+                            examples = examples,
+                            contributorModelId = contributorModelId
+                        )
+                    }
+                }
+            }
 
             val memoryQuery = buildString {
                 append(plan.request.tool)
@@ -219,6 +253,7 @@ fun CompanionScreen() {
                 memoryHints = memoryHints,
                 sessionId = command.sessionId,
                 taskId = command.taskId,
+                contributorModelId = contributorModelId,
                 episodeEventId = episodeEvent?.id
             )
             lastResult = formatted
