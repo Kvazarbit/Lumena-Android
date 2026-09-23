@@ -48,6 +48,15 @@ data class AnchoredGoalResolution(
  * in-flight execution state, permissions or tool success.
  */
 object ResearchGoalAnchor {
+    private val explicitSearchDirective = Regex(
+        "(?iu)\\b(?:знайди|знайти|пошукай|пошукати|найди|найти|поищи|" +
+            "find|search|look\\s+up|znajdź|wyszukaj)\\b"
+    )
+
+    private fun isExplicitPublicWebGoal(text: String): Boolean =
+        explicitSearchDirective.containsMatchIn(text) &&
+            TaskIntentRouter.route(text).intent == TaskIntent.PUBLIC_WEB
+
     fun resolve(
         text: String,
         previousGoal: String?,
@@ -63,10 +72,8 @@ object ResearchGoalAnchor {
 
         val nextResearchGoal = when {
             newsReference -> researchGoal
-                ?: resolved.takeIf {
-                    TaskIntentRouter.route(it).intent == TaskIntent.PUBLIC_WEB
-                }
-            TaskIntentRouter.route(text).intent == TaskIntent.PUBLIC_WEB -> text
+                ?: resolved.takeIf(::isExplicitPublicWebGoal)
+            isExplicitPublicWebGoal(text) -> text
             else -> researchGoal
         }
 
