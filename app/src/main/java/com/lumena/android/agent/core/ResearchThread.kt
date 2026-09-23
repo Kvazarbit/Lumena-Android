@@ -74,6 +74,41 @@ object ResearchThreadResolver {
     ): ResearchThreadResolution {
         val trimmed = text.trim()
 
+        // When a thread already exists, a clear relational follow-up wins even
+        // if the sentence also contains words like "internet", "online" or a
+        // URL. Otherwise "verify this online" would incorrectly start a new
+        // research root instead of continuing the active one.
+        val classified = classifyFollowUp(trimmed, thread != null)
+        if (thread != null && classified.first != ResearchFollowUpKind.NONE) {
+            val kind = classified.first
+            val ordinal = classified.second
+            val context = contextMessage(thread, kind, ordinal, trimmed)
+
+            if (kind == ResearchFollowUpKind.APPLY) {
+                return ResearchThreadResolution(
+                    goal = trimmed,
+                    thread = thread,
+                    followUpKind = kind,
+                    ordinal = ordinal,
+                    contextMessage = context
+                )
+            }
+
+            val continuation = buildContinuationGoal(
+                thread = thread,
+                kind = kind,
+                ordinal = ordinal,
+                userText = trimmed
+            )
+            return ResearchThreadResolution(
+                goal = continuation,
+                thread = thread,
+                followUpKind = kind,
+                ordinal = ordinal,
+                contextMessage = context
+            )
+        }
+
         if (isExplicitResearchGoal(trimmed)) {
             val next = ResearchThreadState(rootGoal = trimmed.take(8_000))
             return ResearchThreadResolution(
@@ -82,65 +117,45 @@ object ResearchThreadResolver {
             )
         }
 
-        val classified = classifyFollowUp(trimmed, thread != null)
-        if (classified.first == ResearchFollowUpKind.NONE || thread == null) {
-            val resolved = FollowUpGoal.resolve(trimmed, previousGoal)
-            return ResearchThreadResolution(
-                goal = resolved,
-                thread = thread
-            )
-        }
-
-        val kind = classified.first
-        val ordinal = classified.second
-        val context = contextMessage(thread, kind, ordinal, trimmed)
-
-        if (kind == ResearchFollowUpKind.APPLY) {
-            return ResearchThreadResolution(
-                goal = trimmed,
-                thread = thread,
-                followUpKind = kind,
-                ordinal = ordinal,
-                contextMessage = context
-            )
-        }
-
-        val continuation = buildString {
-            appendLine(thread.rootGoal)
-            appendLine()
-            append("RESEARCH FOLLOW-UP: ")
-            append(
-                when (kind) {
-                    ResearchFollowUpKind.CONTINUE ->
-                        "continue the same research thread from current verified evidence"
-                    ResearchFollowUpKind.NEXT ->
-                        "return the next distinct useful result; do not repeat an already used source"
-                    ResearchFollowUpKind.ALTERNATIVE ->
-                        "find a materially different source or approach; do not repeat an already used source"
-                    ResearchFollowUpKind.NTH ->
-                        "focus only on result/item #${ordinal ?: 1}; do not repeat earlier items unless needed for context"
-                    ResearchFollowUpKind.DEEPEN ->
-                        "go deeper on the relevant finding and read primary/source material where possible"
-                    ResearchFollowUpKind.VERIFY ->
-                        "verify the relevant claim with current source evidence; distinguish proof from model prose"
-                    ResearchFollowUpKind.COMPARE ->
-                        "compare the relevant alternatives using source evidence and explicit criteria"
-                    else -> "continue the same research thread"
-                }
-            )
-            appendLine()
-            append("USER FOLLOW-UP: ")
-            append(trimmed.take(MAX_REFERENCE_CHARS))
-        }
-
+        val resolved = FollowUpGoal.resolve(trimmed, previousGoal)
         return ResearchThreadResolution(
-            goal = continuation.take(8_000),
-            thread = thread,
-            followUpKind = kind,
-            ordinal = ordinal,
-            contextMessage = context
+            goal = resolved,
+            thread = thread
         )
     }
+
+    private fun buildContinuationGoal(
+        thread: ResearchThreadState,
+        kind: ResearchFollowUpKind,
+        ordinal: Int?,
+        userText: String
+    ): String = buildString {
+        appendLine(thread.rootGoal)
+        appendLine()
+        append("RESEARCH FOLLOW-UP: ")
+        append(
+            when (kind) {
+                ResearchFollowUpKind.CONTINUE ->
+                    "continue the same research thread from current verified evidence"
+                ResearchFollowUpKind.NEXT ->
+                    "return the next distinct useful result; do not repeat an already used source"
+                ResearchFollowUpKind.ALTERNATIVE ->
+                    "find a materially different source or approach; do not repeat an already used source"
+                ResearchFollowUpKind.NTH ->
+                    "focus only on result/item #${ordinal ?: 1}; do not repeat earlier items unless needed for context"
+                ResearchFollowUpKind.DEEPEN ->
+                    "go deeper on the relevant finding and read primary/source material where possible"
+                ResearchFollowUpKind.VERIFY ->
+                    "verify the relevant claim with current source evidence; distinguish proof from model prose"
+                ResearchFollowUpKind.COMPARE ->
+                    "compare the relevant alternatives using source evidence and explicit criteria"
+                else -> "continue the same research thread"
+            }
+        )
+        appendLine()
+        append("USER FOLLOW-UP: ")
+        append(userText.take(MAX_REFERENCE_CHARS))
+    }.take(8_000)
 
     fun observeHistory(
         history: List<OllamaMessage>,
