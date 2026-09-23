@@ -49,6 +49,9 @@ data class OllamaChatResponse(
     val error: String? = null
 )
 
+private class EmptyOllamaStreamException :
+    IllegalStateException("Ollama stream completed without assistant message content")
+
 internal fun ollamaChunkError(chunk: OllamaChatResponse): String? =
     chunk.error?.trim()?.takeIf { it.isNotEmpty() }
 
@@ -147,7 +150,7 @@ class OllamaClient(
             require(model.isNotBlank()) { "Choose an Ollama model first" }
             val normalBudget = OllamaContextPolicy.budget(runtimeProfile, retry = false)
             val text = try {
-                executeStreamingChat(
+                executeStreamingWithEmptyFallback(
                     model = model,
                     messages = OllamaContextPolicy.compact(messages, normalBudget),
                     options = normalBudget.options,
@@ -159,7 +162,7 @@ class OllamaClient(
 
                 onPartial("")
                 val retryBudget = OllamaContextPolicy.budget(runtimeProfile, retry = true)
-                executeStreamingChat(
+                executeStreamingWithEmptyFallback(
                     model = model,
                     messages = OllamaContextPolicy.compact(messages, retryBudget),
                     options = retryBudget.options,
@@ -171,6 +174,34 @@ class OllamaClient(
             throw cancelled
         } catch (t: Throwable) {
             Result.failure(t)
+        }
+    }
+
+    private suspend fun executeStreamingWithEmptyFallback(
+        model: String,
+        messages: List<OllamaMessage>,
+        options: OllamaOptions,
+        onPartial: (String) -> Unit
+    ): String {
+        return try {
+            executeStreamingChat(
+                model = model,
+                messages = messages,
+                options = options,
+                onPartial = onPartial
+            )
+        } catch (empty: EmptyOllamaStreamException) {
+            // Some remote/cloud-backed Ollama models can finish an NDJSON
+            // stream without any assistant message content even though the
+            // same /api/chat request succeeds in non-streaming mode.
+            // This fallback is a model transport compatibility retry only;
+            // it cannot execute tools or alter tool authority.
+            onPartial("")
+            executeChat(
+                model = model,
+                messages = messages,
+                options = options
+            )
         }
     }
 
@@ -223,7 +254,7 @@ class OllamaClient(
                     if (chunk.done == true) break
                 }
                 val text = accumulated.toString()
-                check(text.isNotBlank()) { "Ollama returned no message" }
+                if (text.isBlank()) throw EmptyOllamaStreamException()
                 return text
             }
         } finally {
