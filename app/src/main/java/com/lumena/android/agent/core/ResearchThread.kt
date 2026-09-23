@@ -11,6 +11,7 @@ enum class ResearchFollowUpKind {
     DEEPEN,
     VERIFY,
     COMPARE,
+    SOURCE_IDENTITY,
     APPLY
 }
 
@@ -55,6 +56,22 @@ object ResearchThreadResolver {
     )
     private val compareTerms = Regex(
         "(?iu)\\b(?:порівняй|порівняти|сравни|сравнить|compare|comparison|porównaj|porównać)\\b"
+    )
+    private val sourceIdentityTerms = Regex(
+        "(?iu)(?:" +
+            "\\b(?:яке|який|яка|що\\s+за)\\s+(?:джерел[оа]?|ресурс|сайт|сторінк[а-яіїєґ]*|посилання)\\b|" +
+            "\\b(?:джерело|ресурс|сайт|сторінк[а-яіїєґ]*|посилання)\\s*\\??$|" +
+            "\\bзвідки\\s+(?:це|ця|цей|дані|інформац[іяї])\\b|" +
+            "\\bwhat\\s+(?:source|site|resource|page|link)\\b|" +
+            "\\bwhere\\s+(?:is\\s+)?(?:this|that)\\s+from\\b|" +
+            "\\b(?:source|site|resource|page|link)\\s*\\??$|" +
+            "\\b(?:какой|какая|что\\s+за)\\s+(?:источник|ресурс|сайт|страниц[а-я]*|ссылка)\\b|" +
+            "\\b(?:источник|ресурс|сайт|страниц[а-я]*|ссылка)\\s*\\??$|" +
+            "\\bоткуда\\s+это\\b|" +
+            "\\b(?:jakie|która|które|co\\s+to\\s+za)\\s+(?:źródło|strona|serwis|link)\\b|" +
+            "\\b(?:źródło|strona|serwis|link)\\s*\\??$|" +
+            "\\bskąd\\s+to\\b" +
+        ")"
     )
     private val applyTerms = Regex(
         "(?iu)\\b(?:використай|застосуй|реалізуй|впровадь|додай\\s+у\\s+про[еє]кт|" +
@@ -160,6 +177,8 @@ object ResearchThreadResolver {
                     "verify the relevant claim with current source evidence; distinguish proof from model prose"
                 ResearchFollowUpKind.COMPARE ->
                     "compare the relevant alternatives using source evidence and explicit criteria"
+                ResearchFollowUpKind.SOURCE_IDENTITY ->
+                    "identify the concrete source/resource behind the relevant previous finding from observed tool evidence; give source name and URL when available; distinguish search-snippet sources from pages actually read; do not ask the user to resend a URL that is already present in the active research context"
                 else -> "continue the same research thread"
             }
         )
@@ -226,7 +245,8 @@ object ResearchThreadResolver {
                 ResearchFollowUpKind.CONTINUE,
                 ResearchFollowUpKind.NEXT,
                 ResearchFollowUpKind.ALTERNATIVE,
-                ResearchFollowUpKind.NTH
+                ResearchFollowUpKind.NTH,
+                ResearchFollowUpKind.SOURCE_IDENTITY
             )
         ) {
             return true
@@ -271,6 +291,9 @@ object ResearchThreadResolver {
         }
         if (continueTerms.containsMatchIn(text)) {
             return ResearchFollowUpKind.CONTINUE to null
+        }
+        if (sourceIdentityTerms.containsMatchIn(text)) {
+            return ResearchFollowUpKind.SOURCE_IDENTITY to null
         }
 
         // Very short deictic references such as "ще?" or "another?" are useful
