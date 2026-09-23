@@ -7,7 +7,8 @@ import kotlin.math.min
 data class OllamaRequestBudget(
     val options: OllamaOptions,
     val maxChars: Int,
-    val maxPerMessage: Int
+    val maxPerMessage: Int,
+    val maxInputTokens: Int = (maxChars / 2).coerceAtLeast(1)
 )
 
 object OllamaContextPolicy {
@@ -46,7 +47,9 @@ object OllamaContextPolicy {
                 temperature = temperature
             ),
             maxChars = maxChars,
-            maxPerMessage = maxPerMessage
+            maxPerMessage = maxPerMessage,
+            maxInputTokens = min(inputTokens, maxChars / 2)
+                .coerceAtLeast(1)
         )
     }
 
@@ -94,6 +97,32 @@ object OllamaContextPolicy {
             clippedSystem?.let(::add)
             addAll(recent)
         }
+    }
+
+    fun usage(
+        originalMessages: List<OllamaMessage>,
+        compactedMessages: List<OllamaMessage>,
+        budget: OllamaRequestBudget,
+        exactPromptTokens: Int? = null,
+        generatedTokens: Int? = null
+    ): ModelContextUsage {
+        val compactedChars = compactedMessages.sumOf { it.content.length }
+        val estimatedPromptTokens = if (compactedChars <= 0) {
+            0
+        } else {
+            ((compactedChars + 1) / 2).coerceAtLeast(1)
+        }
+        val exact = exactPromptTokens?.takeIf { it >= 0 }
+
+        return ModelContextUsage(
+            promptTokens = exact ?: estimatedPromptTokens,
+            promptTokensExact = exact != null,
+            inputBudgetTokens = budget.maxInputTokens,
+            requestedContextWindowTokens = budget.options.num_ctx,
+            reservedOutputTokens = budget.options.num_predict,
+            generatedTokens = generatedTokens?.takeIf { it >= 0 },
+            compacted = originalMessages != compactedMessages
+        )
     }
 
     private fun clipSystem(text: String, limit: Int): String {
