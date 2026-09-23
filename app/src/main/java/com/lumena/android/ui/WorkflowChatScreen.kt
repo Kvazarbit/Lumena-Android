@@ -76,6 +76,7 @@ import com.lumena.android.llama.EmbeddedLlamaRuntime
 import com.lumena.android.llama.LlamaHardwareProfile
 import com.lumena.android.ollama.ChatModelClient
 import com.lumena.android.ollama.LocalWorkflowAgent
+import com.lumena.android.ollama.ModelContextUsage
 import com.lumena.android.ollama.OllamaClient
 import com.lumena.android.ollama.OllamaMessage
 import com.lumena.android.ollama.PendingWorkflowTool
@@ -188,6 +189,7 @@ fun WorkflowChatScreen(
     var history by remember {
         mutableStateOf(listOf(systemMessage) + restored.history.map { OllamaMessage(it.role, it.content) })
     }
+    var contextUsage by remember { mutableStateOf<ModelContextUsage?>(null) }
     var busy by remember {
         mutableStateOf(
             restored.task?.status in setOf(
@@ -381,6 +383,7 @@ fun WorkflowChatScreen(
         taskApprovals.clear()
         currentTask = null
         history = listOf(systemMessage)
+        contextUsage = null
         bubbles.clear()
         bubbles += ChatBubble("assistant", "Новий чат. Що хочеш зробити?")
         busy = false
@@ -572,6 +575,21 @@ fun WorkflowChatScreen(
             }.onFailure {
                 models = emptyList()
                 status = "Ollama offline"
+            }
+        }
+    }
+
+    fun reportContextUsage(
+        taskId: String,
+        runToken: Long,
+        usage: ModelContextUsage
+    ) {
+        uiScope.launch {
+            if (
+                coordinator.isCurrent(runToken, taskId) &&
+                isCurrentTask(taskId)
+            ) {
+                contextUsage = usage
             }
         }
     }
