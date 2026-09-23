@@ -226,9 +226,10 @@ class OllamaClient(
 
         if (prompt == null && generated == null) return
 
+        val exactPrompt = prompt?.takeIf { it >= 0 }
         lastContextUsageSnapshot = current.copy(
-            promptTokens = prompt?.takeIf { it >= 0 } ?: current.promptTokens,
-            promptTokensExact = prompt != null && prompt >= 0,
+            promptTokens = exactPrompt ?: current.promptTokens,
+            promptTokensExact = exactPrompt != null || current.promptTokensExact,
             generatedTokens = generated?.takeIf { it >= 0 }
                 ?: current.generatedTokens
         )
