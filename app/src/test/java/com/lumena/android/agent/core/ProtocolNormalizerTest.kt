@@ -117,6 +117,46 @@ class ProtocolNormalizerTest {
     }
 
     @Test
+    fun nestedRegisteredNamespaceToolIsCanonicalized() {
+        val normalized = canonical(
+            """{"web":{"read":{"url":"https://www.binance.com/uk-UA/price/bitcoin"}}}"""
+        )
+
+        assertEquals(
+            NormalizationRule.NESTED_NAMESPACE_TOOL,
+            normalized.rule
+        )
+        val parsed = parser.parse(normalized.json) as AgentDecision.ToolCall
+        assertEquals("web.read", parsed.tool)
+        assertEquals(
+            "https://www.binance.com/uk-UA/price/bitcoin",
+            parsed.args["url"]
+        )
+        assertTrue(ToolRegistry.validate(parsed).allowed)
+    }
+
+    @Test
+    fun nestedUnknownNamespaceCannotCreateAuthority() {
+        val result = normalizer.normalize(
+            """{"shell":{"exec":{"cmd":"rm -rf /"}}}"""
+        )
+
+        assertTrue(result is NormalizationResult.Failure)
+        result as NormalizationResult.Failure
+        assertEquals(ProtocolFailureKind.UNKNOWN_ACTION, result.kind)
+    }
+
+    @Test
+    fun nestedNamespaceWithMultipleMethodsStaysNonExecutable() {
+        val result = normalizer.normalize(
+            """{"web":{"read":{"url":"https://example.org"},"search":{"query":"x"}}}"""
+        )
+
+        assertTrue(result is NormalizationResult.Failure)
+        assertFalse(result is NormalizationResult.Canonical)
+    }
+
+    @Test
     fun singleOpenAiStyleFunctionToolCallIsCanonicalized() {
         val normalized = canonical(
             """{"tool_calls":[{"type":"function","function":{"name":"web_search","arguments":{"query":"latest Python news","limit":3}}}]}"""
