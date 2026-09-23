@@ -20,7 +20,8 @@ enum class NormalizationRule {
     HERMES_TOOL_CALL,
     REGISTERED_SINGLE_KEY_TOOL,
     ARGS_ALIAS,
-    FENCED_JSON
+    FENCED_JSON,
+    SINGLE_FUNCTION_TOOL_CALL
 }
 
 sealed interface NormalizationResult {
@@ -152,6 +153,14 @@ class ProtocolNormalizer {
             )
         }
 
+        if (
+            obj["tool"] == null &&
+            obj["name"] == null &&
+            action.isNullOrBlank()
+        ) {
+            normalizeSingleFunctionWrapper(obj, envelope)?.let { return it }
+        }
+
         val registeredShorthand = obj.entries.filter {
             ToolRegistry.get(it.key) != null && it.value is Map<*, *>
         }
@@ -245,6 +254,98 @@ class ProtocolNormalizer {
         }
 
         return canonicalJson(canonical, envelope, rule)
+    }
+
+    private fun normalizeSingleFunctionWrapper(
+        obj: Map<String, Any?>,
+        envelope: Envelope
+    ): NormalizationResult? {
+        val wrapped: Map<*, *> = when {
+            obj.containsKey("tool_calls") -> {
+                val calls = obj["tool_calls"] as? List<*>
+                    ?: return NormalizationResult.Failure(
+                        ProtocolFailureKind.UNSUPPORTED_SHAPE,
+                        "tool_calls must be a JSON array"
+                    )
+                if (calls.size != 1) {
+                    return NormalizationResult.Failure(
+                        ProtocolFailureKind.AMBIGUOUS,
+                        "tool_calls must contain exactly one function call"
+                    )
+                }
+                val item = calls.single() as? Map<*, *>
+                    ?: return NormalizationResult.Failure(
+                        ProtocolFailureKind.UNSUPPORTED_SHAPE,
+                        "tool_calls item must be a JSON object"
+                    )
+                (item["function"] as? Map<*, *>) ?: item
+            }
+
+            obj.containsKey("tool_call") -> {
+                val item = obj["tool_call"] as? Map<*, *>
+                    ?: return NormalizationResult.Failure(
+                        ProtocolFailureKind.UNSUPPORTED_SHAPE,
+                        "tool_call must be a JSON object"
+                    )
+                (item["function"] as? Map<*, *>) ?: item
+            }
+
+            obj.containsKey("function") -> {
+                obj["function"] as? Map<*, *>
+                    ?: return NormalizationResult.Failure(
+                        ProtocolFailureKind.UNSUPPORTED_SHAPE,
+                        "function must be a JSON object"
+                    )
+            }
+
+            else -> return null
+        }
+
+        val proposedTool = wrapped["name"]?.toString()?.trim().orEmpty()
+        if (proposedTool.isBlank()) {
+            return NormalizationResult.Failure(
+                ProtocolFailureKind.UNSUPPORTED_SHAPE,
+                "function wrapper has no tool name"
+            )
+        }
+
+        val canonicalTool = ToolRegistry.canonicalize(proposedTool)
+        if (ToolRegistry.get(canonicalTool) == null) {
+            return NormalizationResult.Failure(
+                ProtocolFailureKind.UNKNOWN_ACTION,
+                "Unregistered tool in function wrapper: $proposedTool"
+            )
+        }
+
+        val rawArgsSource =
+            wrapped["arguments"] ?: wrapped["args"] ?: wrapped["parameters"] ?: emptyMap<String, Any?>()
+        val rawArgs = when (rawArgsSource) {
+            is Map<*, *> -> rawArgsSource
+            is String -> runCatching { mapAdapter.fromJson(rawArgsSource) }.getOrNull()
+                ?: return NormalizationResult.Failure(
+                    ProtocolFailureKind.SYNTAX,
+                    "Function arguments string is not a JSON object"
+                )
+            null -> emptyMap<String, Any?>()
+            else -> return NormalizationResult.Failure(
+                ProtocolFailureKind.UNSUPPORTED_SHAPE,
+                "Function arguments must be a JSON object"
+            )
+        }
+
+        val canonical = linkedMapOf<String, Any?>(
+            "tool" to canonicalTool,
+            "args" to rawArgs
+        )
+        obj["reason"]?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let {
+            canonical["reason"] = it
+        }
+
+        return canonicalJson(
+            canonical,
+            envelope,
+            NormalizationRule.SINGLE_FUNCTION_TOOL_CALL
+        )
     }
 
     private fun canonicalReply(
