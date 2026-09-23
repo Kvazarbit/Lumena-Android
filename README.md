@@ -54,6 +54,17 @@ Default workspace: `~/lumena-workspace`
 
 The bridge binds only to loopback and requires a bearer token.
 
+
+## Optional ChatGPT remote relay
+
+A separate outbound-only relay can let an authenticated ChatGPT/GitHub client
+invoke Lumena's public-web read tools through a dedicated private GitHub issue.
+The phone keeps the Termux bridge bound to 127.0.0.1; no inbound Internet port
+is opened. Remote v1 is intentionally limited to web.search, web.read,
+http.get, http.json and image.search.
+
+See [Remote relay setup and security](docs/remote-relay.md).
+
 ## Build
 
 Pull requests run agent-core unit tests before `assembleDebug`. A debug APK artifact is uploaded only after tests and Android build succeed.
