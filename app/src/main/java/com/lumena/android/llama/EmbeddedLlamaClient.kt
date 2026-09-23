@@ -91,6 +91,11 @@ class EmbeddedLlamaClient(
             }
             val content = if (message.content.length <= remaining) {
                 message.content
+            } else if (kept.isEmpty()) {
+                clipNewestContextText(
+                    message.content,
+                    remaining.coerceAtLeast(0)
+                )
             } else {
                 message.content.takeLast(remaining.coerceAtLeast(0))
             }

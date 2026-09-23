@@ -1,6 +1,7 @@
 package com.lumena.android.ollama
 
 import com.lumena.android.llama.LlamaRuntimeProfile
+import com.lumena.android.llama.clipNewestContextText
 import kotlin.math.min
 
 data class OllamaRequestBudget(
@@ -78,7 +79,11 @@ object OllamaContextPolicy {
                 if (requested > remaining) break
                 requested
             }
-            val clipped = message.content.takeLast(take)
+            val clipped = when {
+                message.content.length <= take -> message.content
+                recent.isEmpty() -> clipNewestContextText(message.content, take)
+                else -> message.content.takeLast(take)
+            }
             if (clipped.isEmpty()) continue
             recent += message.copy(content = clipped)
             remaining -= clipped.length
@@ -101,4 +106,5 @@ object OllamaContextPolicy {
         val tail = available - head
         return text.take(head) + marker + text.takeLast(tail)
     }
+
 }

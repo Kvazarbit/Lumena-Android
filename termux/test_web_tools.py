@@ -32,6 +32,9 @@ class WebToolsTest(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("web_test_bridge", Path(__file__).with_name("bridge.py"))
         self.b = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.b)
+        self.b.SEARCH_DIAGNOSTICS_FILE = Path(self.temp.name) / "web_search_diagnostics.json"
+        self.b.BRIDGE_RUN_ID = "fixture-run"
+        self.b.SEARCH_CACHE.clear()
         self.addCleanup(self.temp.cleanup)
         self.addCleanup(self.env.stop)
 
@@ -100,6 +103,115 @@ class WebToolsTest(unittest.TestCase):
         self.assertEqual("DEPENDENCY_EXHAUSTED", result["failureClass"])
         self.assertFalse(result["retryable"])
         self.assertEqual("web.search", result["dependency"])
+
+    def test_search_success_persists_safe_bounded_diagnostics(self):
+        with patch.object(
+                self.b,
+                "_search_provider",
+                return_value=[{
+                    "url": "https://example.org/news",
+                    "title": "Result",
+                    "snippet": "Evidence body that must not be persisted verbatim",
+                }],
+        ):
+            result = self.b.web_search(
+                {"query": "private diagnostic query text", "limit": 3},
+                request_id="req-search-success",
+            )
+
+        self.assertTrue(result["ok"])
+        stored = json.loads(self.b.SEARCH_DIAGNOSTICS_FILE.read_text(encoding="utf-8"))
+        self.assertEqual("success", stored["status"])
+        self.assertEqual("complete", stored["stage"])
+        self.assertEqual("duckduckgo-lite", stored["provider"])
+        self.assertEqual("req-search-success", stored["request_id"])
+        self.assertEqual("fixture-run", stored["bridge_run_id"])
+        self.assertEqual(1, stored["result_count"])
+        raw = self.b.SEARCH_DIAGNOSTICS_FILE.read_text(encoding="utf-8")
+        self.assertNotIn("private diagnostic query text", raw)
+        self.assertNotIn("Evidence body that must not be persisted verbatim", raw)
+
+    def test_search_exhaustion_persists_dependency_failure_without_query(self):
+        with patch.object(
+                self.b,
+                "_search_provider",
+                side_effect=ValueError("fixture provider unavailable"),
+        ):
+            result = self.b.web_search(
+                {"query": "sensitive search phrase"},
+                request_id="req-search-fail",
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual("SEARCH_EXHAUSTED", result["errorCode"])
+        stored = json.loads(self.b.SEARCH_DIAGNOSTICS_FILE.read_text(encoding="utf-8"))
+        self.assertEqual("dependency_exhausted", stored["status"])
+        self.assertEqual("SEARCH_EXHAUSTED", stored["error_code"])
+        self.assertEqual("req-search-fail", stored["request_id"])
+        self.assertIn("fixture provider unavailable", stored["last_error"])
+        self.assertNotIn(
+            "sensitive search phrase",
+            self.b.SEARCH_DIAGNOSTICS_FILE.read_text(encoding="utf-8"),
+        )
+
+    def test_previous_running_search_is_marked_interrupted_after_bridge_restart(self):
+        previous = {
+            "bridge_run_id": "old-run",
+            "status": "running",
+            "stage": "provider_request",
+            "provider": "bing-rss",
+            "request_id": "req-before-restart",
+            "updated_at": "2026-09-23T00:00:00+02:00",
+            "elapsed_ms": 1500,
+            "result_count": None,
+            "result_chars": None,
+            "error_code": None,
+            "last_error": None,
+        }
+        self.b.SEARCH_DIAGNOSTICS_FILE.write_text(
+            json.dumps(previous),
+            encoding="utf-8",
+        )
+        self.b.BRIDGE_RUN_ID = "new-run"
+
+        self.b._mark_interrupted_search_from_previous_run()
+
+        stored = json.loads(self.b.SEARCH_DIAGNOSTICS_FILE.read_text(encoding="utf-8"))
+        self.assertEqual("interrupted_before_result", stored["status"])
+        self.assertEqual("bridge_restart_observed", stored["stage"])
+        self.assertEqual("SEARCH_INTERRUPTED", stored["error_code"])
+        self.assertEqual("new-run", stored["detected_by_bridge_run_id"])
+        self.assertIn("cause is unknown", stored["last_error"])
+
+        health = self.b.execute_tool("health", {})
+        self.assertTrue(health["ok"])
+        self.assertIn(
+            "last_web_search_status=interrupted_before_result",
+            health["stdout"],
+        )
+        self.assertIn(
+            "last_web_search_request_id=req-before-restart",
+            health["stdout"],
+        )
+
+    def test_current_run_running_marker_is_not_mislabeled_interrupted(self):
+        current = {
+            "bridge_run_id": "fixture-run",
+            "status": "running",
+            "stage": "provider_request",
+            "provider": "duckduckgo-lite",
+            "request_id": "req-current",
+        }
+        self.b.SEARCH_DIAGNOSTICS_FILE.write_text(
+            json.dumps(current),
+            encoding="utf-8",
+        )
+
+        self.b._mark_interrupted_search_from_previous_run()
+
+        stored = json.loads(self.b.SEARCH_DIAGNOSTICS_FILE.read_text(encoding="utf-8"))
+        self.assertEqual("running", stored["status"])
+        self.assertEqual("fixture-run", stored["bridge_run_id"])
 
     def test_search_extracts_real_urls_unwraps_deduplicates_and_caches(self):
         html = '''<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.example.org%2Fguide%3Futm_source%3Dx">Python <b>guide</b></a>

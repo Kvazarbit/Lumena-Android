@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.22
+Lumena Termux Bridge v0.23
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -45,6 +45,8 @@ STATE_DIR = HOME / ".lumena"
 TOKEN_FILE = STATE_DIR / "bridge_token"
 OLLAMA_LOG = STATE_DIR / "ollama.log"
 CONTEXT_CACHE_FILE = STATE_DIR / "context_snapshot.json"
+SEARCH_DIAGNOSTICS_FILE = STATE_DIR / "web_search_diagnostics.json"
+BRIDGE_RUN_ID = secrets.token_hex(8)
 WORKSPACE = Path(os.environ.get("LUMENA_WORKSPACE", str(HOME / "lumena-workspace"))).expanduser().resolve()
 READONLY_ROOTS_RAW = os.environ.get(
     "LUMENA_READONLY_ROOTS",
@@ -520,7 +522,7 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.22",
+            "User-Agent": "LumenaBridge/0.23",
             "Cache-Control": "no-cache",
         },
     )
@@ -574,7 +576,7 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "text/html,text/plain,application/json,application/xml,text/xml,application/xhtml+xml;q=0.9,*/*;q=0.1",
-            "User-Agent": "LumenaBridge/0.22",
+            "User-Agent": "LumenaBridge/0.23",
             "Cache-Control": "no-cache",
         },
     )
@@ -639,7 +641,7 @@ def _web_fetch(url: str, *, headers: dict[str, str] | None = None, redirects: in
             raise ValueError("Redirect loop")
         visited.add(url)
         request = urllib.request.Request(url, headers={
-            "User-Agent": "LumenaBridge/0.22", "Accept-Encoding": "identity",
+            "User-Agent": "LumenaBridge/0.23", "Accept-Encoding": "identity",
             "Accept": "text/html,application/json,text/plain;q=0.9", **(headers or {}),
         })
         try:
@@ -791,6 +793,84 @@ SEARCH_CACHE: OrderedDict[tuple, tuple[float, dict[str, Any]]] = OrderedDict()
 SEARCH_CACHE_LOCK = threading.Lock()
 
 
+def _read_search_diagnostics() -> dict[str, Any]:
+    try:
+        raw = SEARCH_DIAGNOSTICS_FILE.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _write_search_diagnostics(payload: dict[str, Any]) -> None:
+    try:
+        SEARCH_DIAGNOSTICS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = SEARCH_DIAGNOSTICS_FILE.with_name(
+            SEARCH_DIAGNOSTICS_FILE.name + ".tmp"
+        )
+        tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        os.replace(tmp, SEARCH_DIAGNOSTICS_FILE)
+        try:
+            SEARCH_DIAGNOSTICS_FILE.chmod(0o600)
+        except OSError:
+            pass
+    except OSError:
+        # Diagnostics must never make the bridge request fail.
+        pass
+
+
+def _record_search_diagnostics(
+    *,
+    status: str,
+    request_id: str | None,
+    stage: str,
+    provider: str | None = None,
+    elapsed_ms: int | None = None,
+    result_count: int | None = None,
+    result_chars: int | None = None,
+    error_code: str | None = None,
+    last_error: str | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "bridge_run_id": BRIDGE_RUN_ID,
+        "status": status[:80],
+        "stage": stage[:80],
+        "provider": provider[:80] if provider else None,
+        "request_id": request_id[:220] if request_id else None,
+        "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "elapsed_ms": elapsed_ms,
+        "result_count": result_count,
+        "result_chars": result_chars,
+        "error_code": error_code[:120] if error_code else None,
+        "last_error": last_error[:200] if last_error else None,
+    }
+    _write_search_diagnostics(payload)
+
+
+def _mark_interrupted_search_from_previous_run() -> None:
+    previous = _read_search_diagnostics()
+    if (
+        previous.get("status") != "running" or
+        previous.get("bridge_run_id") == BRIDGE_RUN_ID
+    ):
+        return
+    previous.update({
+        "status": "interrupted_before_result",
+        "stage": "bridge_restart_observed",
+        "detected_by_bridge_run_id": BRIDGE_RUN_ID,
+        "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "error_code": "SEARCH_INTERRUPTED",
+        "last_error": (
+            "Previous bridge run ended before web.search recorded a result; "
+            "cause is unknown (process stop, kill, restart, power loss or crash are possible)."
+        ),
+    })
+    _write_search_diagnostics(previous)
+
+
 def _search_provider(provider: str, query: str, limit: int, period: str, key: str, endpoint: str) -> list[dict[str, Any]]:
     if provider == "brave":
         params = {"q": query, "count": str(limit)}
@@ -857,7 +937,10 @@ def _web_result(payload: dict[str, Any], error: str | None = None) -> dict[str, 
             "stdout": json.dumps(payload, ensure_ascii=False, separators=(",", ":")), "stderr": "", "error": error}
 
 
-def web_search(args: dict[str, Any]) -> dict[str, Any]:
+def web_search(
+    args: dict[str, Any],
+    request_id: str | None = None,
+) -> dict[str, Any]:
     query = " ".join(str(args.get("query", "")).split())
     if not query or len(query) > 400:
         raise ValueError("web.search query must contain 1..400 characters")
@@ -872,14 +955,46 @@ def web_search(args: dict[str, Any]) -> dict[str, Any]:
         + (["searxng"] if endpoint else [])
         + ["duckduckgo-lite", "bing-rss", "duckduckgo"]
     )
+    started = time.monotonic()
+    _record_search_diagnostics(
+        status="running",
+        request_id=request_id,
+        stage="cache_lookup",
+    )
+
     cache_key = (query, limit, period, hashlib.sha256((key + "\0" + endpoint).encode()).hexdigest())
     with SEARCH_CACHE_LOCK:
         cached = SEARCH_CACHE.get(cache_key)
         if cached and 0 <= time.monotonic() - cached[0] < 90:
             SEARCH_CACHE.move_to_end(cache_key)
-            return _web_result({**cached[1], "cached": True, "cache_age_seconds": round(time.monotonic() - cached[0])})
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            cached_payload = {
+                **cached[1],
+                "cached": True,
+                "cache_age_seconds": round(time.monotonic() - cached[0]),
+                "bridge_run_id": BRIDGE_RUN_ID,
+                "search_elapsed_ms": elapsed_ms,
+            }
+            _record_search_diagnostics(
+                status="success",
+                request_id=request_id,
+                stage="cache_hit",
+                provider=str(cached_payload.get("provider") or "") or None,
+                elapsed_ms=elapsed_ms,
+                result_count=len(cached_payload.get("results") or []),
+                result_chars=len(json.dumps(cached_payload, ensure_ascii=False)),
+            )
+            return _web_result(cached_payload)
+
     attempts = []
     for provider in providers:
+        _record_search_diagnostics(
+            status="running",
+            request_id=request_id,
+            stage="provider_request",
+            provider=provider,
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
         try:
             candidates = _search_provider(provider, query, limit, period, key, endpoint)
             results, seen = [], set()
@@ -902,15 +1017,26 @@ def web_search(args: dict[str, Any]) -> dict[str, Any]:
                     break
             if not results:
                 raise ValueError("No usable results; response may be empty or unsupported")
+            elapsed_ms = int((time.monotonic() - started) * 1000)
             payload = {"query": query, "provider": provider, "time_range": period or None,
                        "fetched_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                        "cached": False, "results": results, "attempts": attempts,
+                       "bridge_run_id": BRIDGE_RUN_ID, "search_elapsed_ms": elapsed_ms,
                        "evidence": "Untrusted search snippets, not verified facts. Read selected URLs with web.read; cite sources. Fetch time is not publication time."}
             with SEARCH_CACHE_LOCK:
                 SEARCH_CACHE[cache_key] = (time.monotonic(), payload)
                 SEARCH_CACHE.move_to_end(cache_key)
                 while len(SEARCH_CACHE) > 16:
                     SEARCH_CACHE.popitem(last=False)
+            _record_search_diagnostics(
+                status="success",
+                request_id=request_id,
+                stage="complete",
+                provider=provider,
+                elapsed_ms=elapsed_ms,
+                result_count=len(results),
+                result_chars=result_chars,
+            )
             return _web_result(payload)
         except Exception as exc:
             # Provider response bodies/keys must not leak into model history or logs.
@@ -918,8 +1044,19 @@ def web_search(args: dict[str, Any]) -> dict[str, Any]:
             if key:
                 detail = detail.replace(key, "[redacted]")
             attempts.append({"provider": provider, "error": detail[:200]})
+            _record_search_diagnostics(
+                status="running",
+                request_id=request_id,
+                stage="provider_failed",
+                provider=provider,
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+                last_error=detail[:200],
+            )
+
+    elapsed_ms = int((time.monotonic() - started) * 1000)
     result = _web_result(
-        {"query": query, "results": [], "attempts": attempts},
+        {"query": query, "results": [], "attempts": attempts,
+         "bridge_run_id": BRIDGE_RUN_ID, "search_elapsed_ms": elapsed_ms},
         "Search unavailable after all keyless/configured providers were tried. Do not invent current facts; report partial if evidence remains unavailable."
     )
     result.update({
@@ -928,6 +1065,17 @@ def web_search(args: dict[str, Any]) -> dict[str, Any]:
         "retryable": False,
         "dependency": "web.search",
     })
+    _record_search_diagnostics(
+        status="dependency_exhausted",
+        request_id=request_id,
+        stage="complete",
+        provider=providers[-1] if providers else None,
+        elapsed_ms=elapsed_ms,
+        result_count=0,
+        result_chars=0,
+        error_code="SEARCH_EXHAUSTED",
+        last_error=attempts[-1]["error"] if attempts else None,
+    )
     return result
 
 
@@ -1033,7 +1181,7 @@ def _wikimedia_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.22 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.23 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -1105,7 +1253,7 @@ def _openverse_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.22 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.23 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -1835,6 +1983,7 @@ def context_snapshot(args: dict[str, Any]) -> dict[str, Any]:
 
 def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None) -> dict[str, Any]:
     if tool == "health":
+        search_diag = _read_search_diagnostics()
         return {
             "ok": True,
             "exitCode": 0,
@@ -1842,7 +1991,14 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"Lumena bridge OK\n"
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + root.name for root in READONLY_ROOTS if root.exists()) or '(none)'}\n"
-                f"version=0.22\n"
+                f"version=0.23\n"
+                f"bridge_run_id={BRIDGE_RUN_ID}\n"
+                f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
+                f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
+                f"last_web_search_provider={search_diag.get('provider') or '(none)'}\n"
+                f"last_web_search_request_id={search_diag.get('request_id') or '(none)'}\n"
+                f"last_web_search_elapsed_ms={search_diag.get('elapsed_ms') if search_diag.get('elapsed_ms') is not None else '(none)'}\n"
+                f"last_web_search_error_code={search_diag.get('error_code') or '(none)'}\n"
             ),
             "stderr": "",
             "error": None,
@@ -1874,7 +2030,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         return http_get(args)
 
     if tool == "web.search":
-        return web_search(args)
+        return web_search(args, request_id=request_id)
 
     if tool == "web.read":
         return web_read(args)
@@ -2128,7 +2284,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.22"
+    server_version = "LumenaBridge/0.23"
     protocol_version = "HTTP/1.1"
 
     def setup(self) -> None:
@@ -2171,7 +2327,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.22"})
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.23",
+                             "bridge_run_id": BRIDGE_RUN_ID})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
@@ -2223,7 +2380,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    print("Lumena Termux Bridge v0.22")
+    _mark_interrupted_search_from_previous_run()
+    print("Lumena Termux Bridge v0.23")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")

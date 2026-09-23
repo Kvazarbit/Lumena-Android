@@ -11,6 +11,32 @@ data class ChatContextFit(
     val fits: Boolean
 )
 
+/**
+ * Preserve protocol/evidence framing at the head of the newest turn and the
+ * continuation contract at its tail. This is shared by Ollama and embedded
+ * llama.cpp pre-compaction so neither backend sees only the tail of a large
+ * TOOL_RESULT.
+ */
+internal fun clipNewestContextText(
+    text: String,
+    limit: Int
+): String {
+    if (limit <= 0) return ""
+    if (text.length <= limit) return text
+
+    val marker = "\n...[middle recent context omitted]...\n"
+    if (limit <= marker.length + 8) {
+        val head = (limit + 1) / 2
+        val tail = limit - head
+        return text.take(head) + text.takeLast(tail)
+    }
+
+    val available = limit - marker.length
+    val head = (available * 2) / 3
+    val tail = available - head
+    return text.take(head) + marker + text.takeLast(tail)
+}
+
 object ChatContextPolicy {
     fun fit(
         roles: Array<String>,

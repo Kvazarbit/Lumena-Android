@@ -105,6 +105,47 @@ class OllamaContextPolicyTest {
     }
 
     @Test
+    fun newestLargeWebToolResultPreservesFramingEvidenceAndContinuation() {
+        val stdout = buildString {
+            append("{\"provider\":\"bing-rss\",\"results\":[")
+            append("{\"url\":\"https://primary.example/article\",")
+            append("\"title\":\"Primary source\",\"snippet\":\"")
+            append("e".repeat(7_000))
+            append("\"}]}")
+        }
+        val toolResult = LocalWorkflowAgent.toolResultMessage(
+            tool = "web.search",
+            ok = true,
+            stdout = stdout,
+            stderr = "",
+            error = null
+        )
+        val budget = OllamaRequestBudget(
+            options = OllamaOptions(num_ctx = 2048, num_predict = 384),
+            maxChars = 2_200,
+            maxPerMessage = 1_800
+        )
+
+        val compacted = OllamaContextPolicy.compact(
+            listOf(
+                OllamaMessage("system", "SYS"),
+                toolResult
+            ),
+            budget
+        )
+
+        val latest = compacted.last().content
+        assertTrue(compacted.sumOf { it.content.length } <= budget.maxChars)
+        assertTrue(latest.startsWith("TOOL_RESULT for web.search:"))
+        assertTrue(latest.contains("ok=true"))
+        assertTrue(latest.contains("\"provider\":\"bing-rss\""))
+        assertTrue(latest.contains("https://primary.example/article"))
+        assertTrue(latest.contains("middle recent context omitted"))
+        assertTrue(latest.contains("Continue the SAME goal"))
+        assertTrue(latest.endsWith("or report partial JSON."))
+    }
+
+    @Test
     fun clippedSystemPreservesRulesAndDynamicTail() {
         val budget = OllamaRequestBudget(
             options = OllamaOptions(num_ctx = 2048, num_predict = 384),
