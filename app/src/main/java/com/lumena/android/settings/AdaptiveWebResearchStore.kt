@@ -362,7 +362,7 @@ object AdaptiveWebResearchStore {
                     append(percent(score.accessProbability))
                     append("; relevance≈")
                     append(percent(score.relevanceProbability))
-                    append("; utility=")
+                    append("; selectionUtility=")
                     append(percent(score.utility))
                     append("; calibration=")
                     append(percent(score.calibrationConfidence))
