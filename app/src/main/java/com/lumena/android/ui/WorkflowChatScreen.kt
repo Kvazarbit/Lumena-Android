@@ -682,6 +682,9 @@ fun WorkflowChatScreen(
                         else coordinator.updateModelText(runToken, text)
                     },
                     onToolTelemetry = { coordinator.updateToolTelemetry(runToken, it) },
+                    onContextUsage = {
+                        reportContextUsage(task.id, runToken, it)
+                    },
                     isApprovedForTask = ::isApprovedForTask,
                     onState = { acceptControl(task.id, runToken, it) }
                 )
@@ -823,6 +826,7 @@ fun WorkflowChatScreen(
                 inferenceBackend = inferenceBackend,
                 onBackend = {
                     inferenceBackend = it
+                    contextUsage = null
                     LumenaPreferences.saveInferenceBackend(context, it)
                 },
                 computeMode = computeMode,
@@ -851,11 +855,13 @@ fun WorkflowChatScreen(
                 ollamaUrl = ollamaUrl,
                 onOllamaUrl = {
                     ollamaUrl = it
+                    contextUsage = null
                     LumenaPreferences.saveOllamaUrl(context, it)
                 },
                 selectedModel = selectedModel,
                 onSelectedModel = {
                     selectedModel = it
+                    contextUsage = null
                     LumenaPreferences.saveSelectedModel(context, it)
                 },
                 models = models,
@@ -919,6 +925,9 @@ fun WorkflowChatScreen(
                             else coordinator.updateModelText(runToken, text)
                         },
                         onToolTelemetry = { coordinator.updateToolTelemetry(runToken, it) },
+                        onContextUsage = {
+                            reportContextUsage(taskId, runToken, it)
+                        },
                         isApprovedForTask = ::isApprovedForTask,
                         onState = { acceptControl(taskId, runToken, it) }
                     )
