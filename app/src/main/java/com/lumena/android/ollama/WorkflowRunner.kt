@@ -65,6 +65,10 @@ class WorkflowRunner(
     private val model: String,
     private val controller: AgentController = AgentController(),
     private val relevantMemoryProvider: (TaskState) -> List<String> = { emptyList() },
+    private val webStrategyAdviceProvider: (
+        TaskState,
+        List<OllamaMessage>
+    ) -> List<String> = { _, _ -> emptyList() },
     private val constitutionProvider: (TaskState) -> List<String> = { emptyList() },
     private val reflexAdviceProvider: (
         FailureEvent,
@@ -280,6 +284,27 @@ class WorkflowRunner(
                 )
             }
 
+            val webStrategyAdvice = try {
+                webStrategyAdviceProvider(
+                    state.task,
+                    current
+                )
+            } catch (failure: Exception) {
+                listOf(
+                    "JEV-like web calibration unavailable; use ordinary planner/tool policy and current verified evidence."
+                )
+            }
+            if (webStrategyAdvice.isNotEmpty()) {
+                onProgress(
+                    webStrategyAdvice
+                        .take(6)
+                        .joinToString(
+                            prefix = "WEB STRATEGY CALIBRATION · ${webStrategyAdvice.size}\n",
+                            separator = "\n"
+                        ) { "- ${it.take(900)}" }
+                )
+            }
+
             val relevantMemory = relevantMemoryProvider(state.task)
             if (relevantMemory.isNotEmpty()) {
                 onProgress(
@@ -294,7 +319,7 @@ class WorkflowRunner(
             val modelMessages = withDynamicContext(
                 current,
                 state,
-                relevantMemory,
+                webStrategyAdvice.take(4) + relevantMemory,
                 constitutionalGuidance
             )
             val replyResult = chatWithContextTelemetry(
