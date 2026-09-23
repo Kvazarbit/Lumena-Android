@@ -639,6 +639,25 @@ class AgentControllerTest {
     }
 
     @Test
+    fun singleFunctionMutationWrapperStillRequiresNormalConfirmation() {
+        val state = controller.initial(task())
+
+        val instruction = controller.interpret(
+            """{"tool_calls":[{"type":"function","function":{"name":"file.write","arguments":{"path":"demo.py","content":"print('ok')"}}}]}""",
+            state
+        )
+
+        assertTrue(instruction is ControllerInstruction.Execute)
+        instruction as ControllerInstruction.Execute
+        assertTrue(instruction.call.tool == "file.write")
+        assertTrue(instruction.requiresConfirmation)
+        assertTrue(
+            instruction.state.lastNormalizationRule ==
+                "SINGLE_FUNCTION_TOOL_CALL"
+        )
+    }
+
+    @Test
     fun knownActionReplyEnvelopeFinishesWithoutProtocolRetry() {
         val conversational = TaskState(
             id = "normalized-reply",
