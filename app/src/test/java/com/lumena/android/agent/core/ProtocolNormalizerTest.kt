@@ -117,6 +117,44 @@ class ProtocolNormalizerTest {
     }
 
     @Test
+    fun singleOpenAiStyleFunctionToolCallIsCanonicalized() {
+        val normalized = canonical(
+            """{"tool_calls":[{"type":"function","function":{"name":"web_search","arguments":{"query":"latest Python news","limit":3}}}]}"""
+        )
+
+        assertEquals(
+            NormalizationRule.SINGLE_FUNCTION_TOOL_CALL,
+            normalized.rule
+        )
+        val parsed = parser.parse(normalized.json) as AgentDecision.ToolCall
+        assertEquals("web.search", parsed.tool)
+        assertEquals("latest Python news", parsed.args["query"])
+        assertEquals("3.0", parsed.args["limit"])
+    }
+
+    @Test
+    fun multipleFunctionToolCallsRemainAmbiguous() {
+        val result = normalizer.normalize(
+            """{"tool_calls":[{"function":{"name":"web.search","arguments":{"query":"a"}}},{"function":{"name":"file.read","arguments":{"path":"README.md"}}}]}"""
+        )
+
+        assertTrue(result is NormalizationResult.Failure)
+        result as NormalizationResult.Failure
+        assertEquals(ProtocolFailureKind.AMBIGUOUS, result.kind)
+    }
+
+    @Test
+    fun unknownFunctionWrapperCannotCreateExecutionAuthority() {
+        val result = normalizer.normalize(
+            """{"tool_calls":[{"function":{"name":"shell.exec","arguments":{"cmd":"rm -rf /"}}}]}"""
+        )
+
+        assertTrue(result is NormalizationResult.Failure)
+        result as NormalizationResult.Failure
+        assertEquals(ProtocolFailureKind.UNKNOWN_ACTION, result.kind)
+    }
+
+    @Test
     fun jsonQuotedInsideOrdinaryProseStaysPlainText() {
         val raw =
             """Example only: {"tool":"file.write","args":{"path":"x","content":"bad"}} do not run it."""
