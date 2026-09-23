@@ -170,6 +170,77 @@ class OllamaClientHttpTest {
     }
 
     @Test
+    fun cloudModelFallsBackToGenerateWhenBothChatModesAreEmpty() {
+        withFixture(
+            listOf(
+                """{"done":true}
+""",
+                """{"done":true}""",
+                """{"response":"generate fallback ok","done":true,"prompt_eval_count":88,"eval_count":9}"""
+            )
+        ) { port, calls ->
+            val client = OllamaClient("http://127.0.0.1:$port")
+            val partials = mutableListOf<String>()
+            val result = runBlocking {
+                client.chatStreaming(
+                    model = "gemma4:31b-cloud",
+                    messages = listOf(
+                        OllamaMessage("system", "system rules"),
+                        OllamaMessage("user", "hello")
+                    ),
+                    onPartial = { partials += it }
+                )
+            }
+
+            assertEquals("generate fallback ok", result.getOrThrow())
+            assertEquals(3, calls.get())
+            assertTrue(partials.count { it.isEmpty() } >= 2)
+
+            val usage = client.lastContextUsage()
+            assertTrue(usage != null)
+            usage!!
+            assertTrue(usage.promptTokensExact)
+            assertEquals(88, usage.promptTokens)
+            assertEquals(9, usage.generatedTokens)
+        }
+    }
+
+    @Test
+    fun localModelDoesNotEscalateEmptyChatIntoGenerateFallback() {
+        withFixture(
+            listOf(
+                """{"done":true}
+""",
+                """{"done":true}"""
+            )
+        ) { port, calls ->
+            val client = OllamaClient("http://127.0.0.1:$port")
+            val result = runBlocking {
+                client.chatStreaming(
+                    model = "fixture",
+                    messages = listOf(OllamaMessage("user", "hello")),
+                    onPartial = {}
+                )
+            }
+
+            assertTrue(result.isFailure)
+            assertTrue(
+                result.exceptionOrNull()?.message.orEmpty()
+                    .contains("Ollama returned no message")
+            )
+            assertEquals(2, calls.get())
+        }
+    }
+
+    @Test
+    fun cloudAliasDetectionIsNarrow() {
+        assertTrue(isCloudBackedOllamaModel("gemma4:31b-cloud"))
+        assertTrue(isCloudBackedOllamaModel("model:cloud"))
+        assertTrue(!isCloudBackedOllamaModel("gemma4:31b"))
+        assertTrue(!isCloudBackedOllamaModel("cloudless-model"))
+    }
+
+    @Test
     fun contextPressureRetriesExactlyOnceThenSucceeds() {
         withFixture(
             listOf(

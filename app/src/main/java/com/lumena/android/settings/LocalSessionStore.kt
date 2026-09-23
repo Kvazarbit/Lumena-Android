@@ -39,7 +39,8 @@ data class LocalSessionSnapshot(
     val history: List<PersistedHistoryMessage> = emptyList(),
     val task: TaskState? = null,
     val pending: PersistedPendingTool? = null,
-    val inputDraft: String = ""
+    val inputDraft: String = "",
+    val researchGoal: String? = null
 )
 
 /**
@@ -109,7 +110,9 @@ object LocalSessionStore {
                     )
                 }
             ),
-            inputDraft = snapshot.inputDraft.take(MAX_DRAFT_CHARS)
+            inputDraft = snapshot.inputDraft.take(MAX_DRAFT_CHARS),
+            researchGoal = snapshot.researchGoal
+                ?.take(MAX_DRAFT_CHARS)
         )
         prefs(context).edit().putString(KEY_SNAPSHOT, adapter.toJson(bounded)).apply()
         // History mirrors only bounded, app-private context. Workspace files are never copied/rolled back.

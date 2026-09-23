@@ -51,8 +51,27 @@ data class OllamaChatResponse(
     val eval_count: Int? = null
 )
 
+data class OllamaGenerateRequest(
+    val model: String,
+    val prompt: String,
+    val stream: Boolean = false,
+    val keep_alive: String = "10m",
+    val options: OllamaOptions = OllamaOptions()
+)
+
+data class OllamaGenerateResponse(
+    val response: String? = null,
+    val done: Boolean? = null,
+    val error: String? = null,
+    val prompt_eval_count: Int? = null,
+    val eval_count: Int? = null
+)
+
 private class EmptyOllamaStreamException :
     IllegalStateException("Ollama stream completed without assistant message content")
+
+private class EmptyOllamaChatException :
+    IllegalStateException("Ollama returned no message")
 
 internal fun ollamaChunkError(chunk: OllamaChatResponse): String? =
     chunk.error?.trim()?.takeIf { it.isNotEmpty() }
@@ -77,6 +96,13 @@ internal fun isOllamaTransportTimeout(error: Throwable): Boolean =
     error is SocketTimeoutException ||
         error.message.orEmpty().contains("timeout", ignoreCase = true) ||
         error.message.orEmpty().contains("timed out", ignoreCase = true)
+
+internal fun isCloudBackedOllamaModel(model: String): Boolean {
+    val lower = model.trim().lowercase()
+    return lower.contains(":cloud") ||
+        lower.endsWith("-cloud") ||
+        lower.contains("/cloud/")
+}
 
 data class OllamaModel(
     val name: String
@@ -119,6 +145,8 @@ class OllamaClient(
         .build()
     private val requestAdapter = moshi.adapter(OllamaChatRequest::class.java)
     private val responseAdapter = moshi.adapter(OllamaChatResponse::class.java)
+    private val generateRequestAdapter = moshi.adapter(OllamaGenerateRequest::class.java)
+    private val generateResponseAdapter = moshi.adapter(OllamaGenerateResponse::class.java)
     private val tagsAdapter = moshi.adapter(OllamaTagsResponse::class.java)
     private val jsonType = "application/json; charset=utf-8".toMediaType()
 
@@ -220,10 +248,24 @@ class OllamaClient(
     }
 
     private fun recordActualUsage(response: OllamaChatResponse) {
-        val current = lastContextUsageSnapshot ?: return
-        val prompt = response.prompt_eval_count
-        val generated = response.eval_count
+        recordActualUsage(
+            prompt = response.prompt_eval_count,
+            generated = response.eval_count
+        )
+    }
 
+    private fun recordActualUsage(response: OllamaGenerateResponse) {
+        recordActualUsage(
+            prompt = response.prompt_eval_count,
+            generated = response.eval_count
+        )
+    }
+
+    private fun recordActualUsage(
+        prompt: Int?,
+        generated: Int?
+    ) {
+        val current = lastContextUsageSnapshot ?: return
         if (prompt == null && generated == null) return
 
         val exactPrompt = prompt?.takeIf { it >= 0 }
@@ -252,14 +294,29 @@ class OllamaClient(
             // Some remote/cloud-backed Ollama models can finish an NDJSON
             // stream without any assistant message content even though the
             // same /api/chat request succeeds in non-streaming mode.
-            // This fallback is a model transport compatibility retry only;
-            // it cannot execute tools or alter tool authority.
+            // This fallback is transport compatibility only; every returned
+            // model string still goes through the same protocol parser,
+            // ToolRegistry, ToolGate and confirmation boundary.
             onPartial("")
-            executeChat(
-                model = model,
-                messages = messages,
-                options = options
-            )
+            try {
+                executeChat(
+                    model = model,
+                    messages = messages,
+                    options = options
+                )
+            } catch (emptyChat: EmptyOllamaChatException) {
+                if (!isCloudBackedOllamaModel(model)) throw emptyChat
+
+                // Observed with cloud aliases: /api/chat may return an empty
+                // assistant message while /api/generate for the same model
+                // succeeds. Keep this third attempt cloud-only and bounded.
+                onPartial("")
+                executeGenerateFallback(
+                    model = model,
+                    messages = messages,
+                    options = options
+                )
+            }
         }
     }
 
@@ -358,7 +415,72 @@ class OllamaClient(
                         }
                         val text = parsed.message?.content
                             ?.takeIf { value -> value.isNotBlank() }
-                            ?: error("Ollama returned no message")
+                            ?: throw EmptyOllamaChatException()
+                        if (continuation.isActive) continuation.resume(text)
+                    }
+                } catch (t: Throwable) {
+                    if (continuation.isActive) continuation.resumeWithException(t)
+                }
+            }
+        })
+    }
+
+
+    private suspend fun executeGenerateFallback(
+        model: String,
+        messages: List<OllamaMessage>,
+        options: OllamaOptions
+    ): String = suspendCancellableCoroutine { continuation ->
+        val prompt = buildString {
+            append(
+                "Continue the following chat. Preserve SYSTEM instructions as system " +
+                    "instructions. Return only the assistant's next public response.\n\n"
+            )
+            messages.forEach { message ->
+                append("<<<")
+                append(message.role.uppercase())
+                append(">>>\n")
+                append(message.content)
+                append("\n\n")
+            }
+            append("<<<ASSISTANT>>>\n")
+        }
+
+        val payload = generateRequestAdapter.toJson(
+            OllamaGenerateRequest(
+                model = model,
+                prompt = prompt,
+                stream = false,
+                options = options
+            )
+        )
+        val request = Request.Builder()
+            .url(base.newBuilder().addPathSegments("api/generate").build())
+            .post(payload.toRequestBody(jsonType))
+            .build()
+        val call = client.newCall(request)
+        continuation.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (continuation.isActive) continuation.resumeWithException(e)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                try {
+                    response.use {
+                        val body = it.body?.string().orEmpty()
+                        if (!it.isSuccessful) {
+                            error("Ollama generate HTTP ${it.code}: $body")
+                        }
+                        val parsed = generateResponseAdapter.fromJson(body)
+                            ?: error("Ollama generate returned unreadable response")
+                        parsed.error?.trim()?.takeIf { value -> value.isNotEmpty() }?.let { message ->
+                            error("Ollama generate response error: $message")
+                        }
+                        recordActualUsage(parsed)
+                        val text = parsed.response
+                            ?.takeIf { value -> value.isNotBlank() }
+                            ?: error("Ollama cloud generate fallback returned no response")
                         if (continuation.isActive) continuation.resume(text)
                     }
                 } catch (t: Throwable) {
