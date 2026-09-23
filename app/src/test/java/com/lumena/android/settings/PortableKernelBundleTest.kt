@@ -1,6 +1,20 @@
 package com.lumena.android.settings
 
+import com.lumena.android.agent.core.ConstitutionAuthority
 import com.lumena.android.agent.core.ConstitutionCapsule
+import com.lumena.android.agent.core.ConstitutionDnaManifest
+import com.lumena.android.agent.core.ConstitutionEvidenceKind
+import com.lumena.android.agent.core.ConstitutionEvidenceRef
+import com.lumena.android.agent.core.ConstitutionGenomePolicy
+import com.lumena.android.agent.core.ConstitutionGenomeState
+import com.lumena.android.agent.core.ConstitutionProvenance
+import com.lumena.android.agent.core.ConstitutionRule
+import com.lumena.android.agent.core.ConstitutionRuleKind
+import com.lumena.android.agent.core.ConstitutionRuleStatus
+import com.lumena.android.agent.core.ConstitutionScope
+import com.lumena.android.agent.core.ConstitutionScopeKind
+import com.lumena.android.agent.core.ConstitutionSourceKind
+import com.lumena.android.agent.core.ConstitutionStance
 import com.lumena.android.agent.core.CoreDna
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -8,6 +22,79 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PortableKernelBundleTest {
+
+    private fun projectScope() = ConstitutionScope(
+        kind = ConstitutionScopeKind.PROJECT,
+        key = "project-a"
+    )
+
+    private fun learnedConstitutionRule(): ConstitutionRule {
+        var state = ConstitutionGenomeState()
+        val proposed = ConstitutionGenomePolicy.propose(
+            source = ConstitutionProvenance(
+                sourceKind = ConstitutionSourceKind.MODEL,
+                sourceId = "proposal",
+                modelId = "model-a",
+                projectId = "project-a",
+                taskId = "task-1",
+                at = 100
+            ),
+            claimKey = "path-recovery",
+            stance = ConstitutionStance.AFFIRM,
+            kind = ConstitutionRuleKind.RECOVERY,
+            statement = "Rediscover project paths before retrying a drifted read.",
+            rationale = "Repeated verified local recovery pattern.",
+            scope = projectScope()
+        )
+        state = ConstitutionGenomePolicy.add(state, proposed)
+
+        listOf(
+            Triple("e1", "task-1", 200L),
+            Triple("e2", "task-2", 300L),
+            Triple("e3", "task-3", 400L)
+        ).forEach { (id, taskId, at) ->
+            state = ConstitutionGenomePolicy.recordEvidence(
+                state = state,
+                ruleId = proposed.id,
+                evidence = ConstitutionEvidenceRef(
+                    id = id,
+                    kind = ConstitutionEvidenceKind.TOOL_RESULT,
+                    locallyVerified = true,
+                    taskId = taskId,
+                    projectId = "project-a",
+                    at = at
+                ),
+                provenance = ConstitutionProvenance(
+                    sourceKind = ConstitutionSourceKind.TOOL_RESULT,
+                    sourceId = "result-$id",
+                    modelId = if (taskId == "task-3") "model-b" else "model-a",
+                    projectId = "project-a",
+                    taskId = taskId,
+                    at = at
+                )
+            )
+        }
+
+        return state.rules.single { it.id == proposed.id }
+    }
+
+    private fun portableUserConstraint(): ConstitutionRule =
+        ConstitutionGenomePolicy.propose(
+            source = ConstitutionProvenance(
+                sourceKind = ConstitutionSourceKind.USER,
+                sourceId = "user-turn",
+                projectId = "project-a",
+                taskId = "task-user",
+                at = 500
+            ),
+            claimKey = "project-output-mode",
+            stance = ConstitutionStance.AFFIRM,
+            kind = ConstitutionRuleKind.USER_CONSTRAINT,
+            statement = "Keep project output text-only.",
+            rationale = "Direct user constraint.",
+            scope = projectScope()
+        )
+
     private fun positive(
         signature: String = "a".repeat(64),
         tool: String = "file.read",
@@ -275,7 +362,7 @@ class PortableKernelBundleTest {
             localExecutionExamples = listOf(example)
         )
 
-        assertEquals(2, payload.schemaVersion)
+        assertEquals(3, payload.schemaVersion)
         assertEquals(1, payload.executionExamples.size)
         val seed = payload.executionExamples.single()
         assertEquals("RECOVERY", seed.kind)
@@ -379,5 +466,189 @@ class PortableKernelBundleTest {
 
         PortableKernelCodec.encode(payload)
     }
+
+    @Test
+    fun exportCarriesLearnedAndUserConstraintAsDormantConstitutionSeeds() {
+        val learned = learnedConstitutionRule()
+        val user = portableUserConstraint()
+
+        val payload = PortableKernelPolicy.buildPayload(
+            localAnchors = listOf(positive()),
+            localRules = emptyList(),
+            imported = null,
+            exportedAt = 1_000,
+            sourceAppVersionCode = 29,
+            sourceDeviceHash = PortableKernelPolicy.hash("device"),
+            localConstitutionRules = listOf(
+                learned,
+                user
+            ) + ConstitutionDnaManifest.hardInvariants()
+        )
+
+        assertEquals(3, payload.schemaVersion)
+        assertEquals(2, payload.constitutionalSeeds.size)
+        assertTrue(
+            payload.constitutionalSeeds.none {
+                it.originAuthority ==
+                    ConstitutionAuthority.HARD_GUARD.name
+            }
+        )
+
+        val learnedSeed = payload.constitutionalSeeds.first {
+            it.sourceStatus == ConstitutionRuleStatus.LEARNED.name
+        }
+        assertEquals(
+            PortableKernelPolicy.LOCAL_REVALIDATION,
+            learnedSeed.activationRequirement
+        )
+        assertEquals(
+            ConstitutionAuthority.ADVISORY.name,
+            learnedSeed.originAuthority
+        )
+        assertTrue(learnedSeed.evidenceIds.isNotEmpty())
+        assertEquals(
+            setOf("model-a", "model-b"),
+            learnedSeed.contributorModelIds.toSet()
+        )
+
+        val userSeed = payload.constitutionalSeeds.first {
+            it.sourceStatus ==
+                ConstitutionRuleStatus.ACTIVE_USER_CONSTRAINT.name
+        }
+        assertEquals(
+            PortableKernelPolicy.USER_RECONFIRMATION,
+            userSeed.activationRequirement
+        )
+        assertEquals(
+            ConstitutionAuthority.USER_CONSTRAINT.name,
+            userSeed.originAuthority
+        )
+    }
+
+    @Test
+    fun portableConstitutionAdviceRequiresRevalidationOrUserReconfirmation() {
+        val payload = PortableKernelPolicy.buildPayload(
+            localAnchors = emptyList(),
+            localRules = emptyList(),
+            imported = null,
+            exportedAt = 1_000,
+            sourceAppVersionCode = 29,
+            sourceDeviceHash = PortableKernelPolicy.hash("device"),
+            localConstitutionRules = listOf(
+                learnedConstitutionRule(),
+                portableUserConstraint()
+            )
+        )
+
+        val learnedAdvice = PortableKernelPolicy.advice(
+            payload = payload,
+            query = "path recovery drifted read",
+            limit = 4
+        )
+        assertTrue(
+            learnedAdvice.any {
+                it.contains("PORTABLE LEARNED CONSTITUTION") &&
+                    it.contains("local revalidation required") &&
+                    it.contains("not permission")
+            }
+        )
+
+        val userAdvice = PortableKernelPolicy.advice(
+            payload = payload,
+            query = "project output text only",
+            limit = 4
+        )
+        assertTrue(
+            userAdvice.any {
+                it.contains("PORTABLE USER CONSTRAINT RECORD") &&
+                    it.contains("user reconfirmation required") &&
+                    it.contains("not permission")
+            }
+        )
+    }
+
+    @Test
+    fun schemaTwoBundleRemainsReadableButIsNotCurrentSchema() {
+        val legacy = PortableKernelPayload(
+            schemaVersion = 2,
+            coreDnaVersion = CoreDna.VERSION,
+            constitutionCapsuleVersion = ConstitutionCapsule.VERSION,
+            coordinatorContractVersion =
+                PortableKernelPolicy.COORDINATOR_CONTRACT_VERSION,
+            exportedAt = 1_000,
+            sourceAppVersionCode = 29,
+            sourceDeviceHash =
+                PortableKernelPolicy.hash("schema-two-device"),
+            executionExamples = listOf(
+                PortableExecutionExampleSeed(
+                    id = "legacy-ex",
+                    kind = CoordinatorExampleKind.RECOVERY.name,
+                    sourceSessionHash = "abcdef1234567890",
+                    tools = listOf("file.read"),
+                    targets = listOf("path=README.md"),
+                    evidenceIds = listOf("e1"),
+                    updatedAt = 900,
+                    surprise = 0.5
+                )
+            )
+        )
+
+        val decoded = PortableKernelCodec.decode(
+            PortableKernelCodec.encode(legacy)
+        )
+
+        assertEquals(2, decoded.schemaVersion)
+        assertTrue(decoded.constitutionalSeeds.isEmpty())
+        assertFalse(
+            PortableKernelPolicy.versionsMatchCurrentRuntime(decoded)
+        )
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun preSchemaThreePayloadCannotSmuggleConstitutionSeeds() {
+        val learned = learnedConstitutionRule()
+        val seed = PortableKernelPolicy.buildPayload(
+            localAnchors = emptyList(),
+            localRules = emptyList(),
+            imported = null,
+            exportedAt = 1_000,
+            sourceAppVersionCode = 29,
+            sourceDeviceHash = PortableKernelPolicy.hash("device"),
+            localConstitutionRules = listOf(learned)
+        ).constitutionalSeeds.single()
+
+        PortableKernelCodec.encode(
+            PortableKernelPayload(
+                schemaVersion = 2,
+                coreDnaVersion = CoreDna.VERSION,
+                constitutionCapsuleVersion =
+                    ConstitutionCapsule.VERSION,
+                coordinatorContractVersion =
+                    PortableKernelPolicy.COORDINATOR_CONTRACT_VERSION,
+                exportedAt = 1_000,
+                sourceAppVersionCode = 29,
+                sourceDeviceHash =
+                    PortableKernelPolicy.hash("legacy"),
+                constitutionalSeeds = listOf(seed)
+            )
+        )
+    }
+
+    @Test
+    fun hardManifestIsNeverExportedAsPortableConstitution() {
+        val payload = PortableKernelPolicy.buildPayload(
+            localAnchors = emptyList(),
+            localRules = emptyList(),
+            imported = null,
+            exportedAt = 1_000,
+            sourceAppVersionCode = 29,
+            sourceDeviceHash = PortableKernelPolicy.hash("device"),
+            localConstitutionRules =
+                ConstitutionDnaManifest.hardInvariants()
+        )
+
+        assertTrue(payload.constitutionalSeeds.isEmpty())
+    }
+
 
 }
