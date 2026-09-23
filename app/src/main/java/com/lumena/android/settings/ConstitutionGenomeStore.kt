@@ -260,7 +260,8 @@ object ConstitutionGenomeStore {
     fun ingestVerifiedRecoveryExamples(
         context: Context,
         task: TaskState,
-        examples: List<CoordinatorExecutionExample>
+        examples: List<CoordinatorExecutionExample>,
+        contributorModelId: String? = null
     ): ConstitutionGenomeState =
         synchronized(lock) {
             val current = load(context)
@@ -268,7 +269,8 @@ object ConstitutionGenomeStore {
                 ConstitutionContributionPolicy.ingestVerifiedRecoveryExamples(
                     state = current,
                     task = task,
-                    examples = examples
+                    examples = examples,
+                    contributorModelId = contributorModelId
                 )
             if (next != current) save(context, next)
             next

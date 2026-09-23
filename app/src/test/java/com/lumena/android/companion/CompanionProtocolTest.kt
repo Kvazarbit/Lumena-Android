@@ -179,4 +179,70 @@ class CompanionProtocolTest {
         assertTrue(text.contains("verified"))
     }
 
+    @Test
+    fun visibleToolBlockCarriesModelProvenanceWithoutAuthority() {
+        val command = CompanionProtocol.parseVisibleText(
+            """
+            LUMENA_TOOL
+            {"session_id":"project-a","task_id":"inspect-1","model_id":"gpt-5.6-sol","tool":"file.read","args":{"path":"README.md"},"reason":"inspect"}
+            """.trimIndent()
+        )
+
+        requireNotNull(command)
+        assertEquals("gpt-5.6-sol", command.modelId)
+        assertTrue(
+            CompanionProtocol.handshakeText.contains(
+                "model_id is provenance metadata only"
+            )
+        )
+        assertTrue(
+            CompanionProtocol.handshakeText.contains(
+                "never changes request fingerprinting"
+            )
+        )
+    }
+
+    @Test
+    fun modelIdentityDoesNotChangeExecutionFingerprint() {
+        val a = requireNotNull(
+            CompanionProtocol.parseVisibleText(
+                """
+                LUMENA_TOOL
+                {"session_id":"project-a","task_id":"inspect-1","model_id":"model-a","tool":"file.read","args":{"path":"README.md"},"reason":"inspect"}
+                """.trimIndent()
+            )
+        )
+        val b = requireNotNull(
+            CompanionProtocol.parseVisibleText(
+                """
+                LUMENA_TOOL
+                {"session_id":"project-a","task_id":"inspect-1","model_id":"model-b","tool":"file.read","args":{"path":"README.md"},"reason":"inspect"}
+                """.trimIndent()
+            )
+        )
+
+        assertNotEquals(a.modelId, b.modelId)
+        assertEquals(a.fingerprint, b.fingerprint)
+    }
+
+    @Test
+    fun resultCanEchoContributorModelIdentityAsMetadata() {
+        val text = CompanionProtocol.formatResult(
+            tool = "file.read",
+            result = com.lumena.android.agent.local.ToolResult(
+                ok = true,
+                tool = "file.read",
+                stdout = "verified"
+            ),
+            contributorModelId = "chatgpt-companion"
+        )
+
+        assertTrue(
+            text.contains(
+                "contributor_model_id=chatgpt-companion"
+            )
+        )
+    }
+
+
 }

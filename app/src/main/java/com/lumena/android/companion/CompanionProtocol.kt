@@ -17,13 +17,15 @@ data class CompanionCommand(
     val rawJson: String,
     val fingerprint: String,
     val sessionId: String? = null,
-    val taskId: String? = null
+    val taskId: String? = null,
+    val modelId: String? = null
 )
 
 object CompanionProtocol {
     const val TOOL_MARKER = "LUMENA_TOOL"
     const val RESULT_MARKER = "LUMENA_RESULT"
     const val COORDINATOR_CONTRACT_VERSION = PortableKernelPolicy.COORDINATOR_CONTRACT_VERSION
+    const val DEFAULT_COMPANION_MODEL_ID = "chatgpt-companion"
 
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
@@ -53,11 +55,13 @@ object CompanionProtocol {
         When you actually need a local tool, output a block in exactly this form and nothing else in that block:
 
         LUMENA_TOOL
-        {"session_id":"project-7f3a","task_id":"inspect-repo-01","tool":"workspace.list","args":{},"reason":"Discover the real workspace and read-only roots before choosing paths"}
+        {"session_id":"project-7f3a","task_id":"inspect-repo-01","model_id":"chatgpt","tool":"workspace.list","args":{},"reason":"Discover the real workspace and read-only roots before choosing paths"}
 
         Keep session_id stable for one project/workstream and task_id stable for one concrete objective.
         Reuse those IDs across all tool calls that belong to the same work so Lumena can build verified
-        execution examples across steps. IDs are context only; they never grant permission.
+        execution examples across steps. model_id is provenance metadata only: it may identify the planning
+        model/channel, but it never changes request fingerprinting, grants permission, approval, or execution
+        authority. IDs are context only; they never grant permission.
 
         Available tools:
         health, system.time, system.info, context.snapshot, process.status,
@@ -130,6 +134,9 @@ object CompanionProtocol {
             val taskId = normalizeCoordinatorId(
                 obj["task_id"]?.toString().orEmpty()
             )
+            val modelId = normalizeCoordinatorId(
+                obj["model_id"]?.toString().orEmpty()
+            )
             CompanionCommand(
                 decision = PlannerDecision(ToolRequest(tool, args), reason),
                 rawJson = json,
@@ -140,7 +147,8 @@ object CompanionProtocol {
                     taskId = taskId
                 ),
                 sessionId = sessionId,
-                taskId = taskId
+                taskId = taskId,
+                modelId = modelId
             )
         }.getOrNull()
     }
@@ -152,6 +160,7 @@ object CompanionProtocol {
         memoryHints: List<String> = emptyList(),
         sessionId: String? = null,
         taskId: String? = null,
+        contributorModelId: String? = null,
         episodeEventId: String? = null
     ): String = buildString {
         appendLine(RESULT_MARKER)
@@ -159,6 +168,9 @@ object CompanionProtocol {
         appendLine("ok=${result.ok}")
         sessionId?.takeIf { it.isNotBlank() }?.let { appendLine("session_id=${it.take(128)}") }
         taskId?.takeIf { it.isNotBlank() }?.let { appendLine("task_id=${it.take(128)}") }
+        contributorModelId
+            ?.takeIf { it.isNotBlank() }
+            ?.let { appendLine("contributor_model_id=${it.take(160)}") }
         episodeEventId?.takeIf { it.isNotBlank() }?.let { appendLine("episode_event_id=${it.take(160)}") }
         result.exitCode?.let { appendLine("exit_code=$it") }
         experienceRef
