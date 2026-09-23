@@ -20,7 +20,8 @@ data class CoordinatorEpisodeEvent(
     val ok: Boolean,
     val experienceId: String?,
     val at: Long,
-    val surprise: Double
+    val surprise: Double,
+    val modelId: String? = null
 )
 
 data class CoordinatorEpisodeState(
@@ -43,7 +44,8 @@ data class CoordinatorExecutionExample(
     val evidenceIds: List<String>,
     val updatedAt: Long,
     val surprise: Double,
-    val text: String
+    val text: String,
+    val contributorModelIds: List<String> = emptyList()
 )
 
 /**
@@ -257,7 +259,11 @@ object CoordinatorExperiencePolicy {
             evidenceIds = evidenceIds,
             updatedAt = segment.maxOf { it.at },
             surprise = segment.maxOf { it.surprise },
-            text = text
+            text = text,
+            contributorModelIds = segment
+                .mapNotNull { it.modelId }
+                .distinct()
+                .take(8)
         )
     }
 
@@ -325,6 +331,7 @@ object CoordinatorExperienceStore {
         request: ToolRequest,
         result: ToolResult,
         experienceId: String?,
+        modelId: String? = null,
         now: Long = System.currentTimeMillis()
     ): CoordinatorEpisodeEvent? = synchronized(lock) {
         if (result.outcomeUnknown) return@synchronized null
@@ -334,6 +341,9 @@ object CoordinatorExperienceStore {
 
         val safeSessionId = stableId(sessionId)
         val safeTaskId = taskId?.takeIf { it.isNotBlank() }?.let(::stableId)
+        val safeModelId = modelId
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::stableId)
         val state = load(context)
         val target = targetOf(request)
         val surprise = CoordinatorExperiencePolicy.surprise(
@@ -362,7 +372,8 @@ object CoordinatorExperienceStore {
             ok = result.ok,
             experienceId = experienceId?.take(160),
             at = now,
-            surprise = surprise
+            surprise = surprise,
+            modelId = safeModelId
         )
         val next = CoordinatorExperiencePolicy.record(state, event)
         save(context, next)
