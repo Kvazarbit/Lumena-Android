@@ -395,8 +395,8 @@ object ConstitutionGenomePolicy {
         val merged = existing.copy(
             provenance = (existing.provenance + proposal.provenance)
                 .distinctBy {
-                    "${it.sourceKind}|${it.sourceId}|${it.projectId.orEmpty()}|" +
-                        "${it.taskId.orEmpty()}|${it.at}"
+                    "${it.sourceKind}|${it.sourceId}|${it.modelId.orEmpty()}|" +
+                        "${it.projectId.orEmpty()}|${it.taskId.orEmpty()}|${it.at}"
                 }
                 .takeLast(MAX_PROVENANCE),
             evidenceRefs = (existing.evidenceRefs + proposal.evidenceRefs)
@@ -446,7 +446,9 @@ object ConstitutionGenomePolicy {
                     .distinctBy { it.id }
                     .takeLast(MAX_EVIDENCE),
                 provenance = (current.provenance + provenance)
-                    .distinctBy { "${it.sourceKind}|${it.sourceId}|${it.at}" }
+                    .distinctBy {
+                        "${it.sourceKind}|${it.sourceId}|${it.modelId.orEmpty()}|${it.at}"
+                    }
                     .takeLast(MAX_PROVENANCE),
                 updatedAt = maxOf(current.updatedAt, evidence.at, provenance.at),
                 revision = current.revision + 1
@@ -459,7 +461,9 @@ object ConstitutionGenomePolicy {
                 .distinctBy { it.id }
                 .takeLast(MAX_EVIDENCE),
             provenance = (current.provenance + provenance)
-                .distinctBy { "${it.sourceKind}|${it.sourceId}|${it.at}" }
+                .distinctBy {
+                    "${it.sourceKind}|${it.sourceId}|${it.modelId.orEmpty()}|${it.at}"
+                }
                 .takeLast(MAX_PROVENANCE),
             updatedAt = maxOf(current.updatedAt, evidence.at, provenance.at),
             revision = current.revision + 1
