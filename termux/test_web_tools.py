@@ -1,4 +1,5 @@
 """Offline network fixtures and real loopback framing regressions; no API keys needed."""
+import gzip
 import http.client
 import importlib.util
 import io
@@ -17,10 +18,18 @@ from unittest.mock import patch, Mock
 class Response(io.BytesIO):
     status = 200
 
-    def __init__(self, body, kind="text/html; charset=utf-8"):
-        super().__init__(body.encode())
+    def __init__(
+        self,
+        body,
+        kind="text/html; charset=utf-8",
+        content_encoding=None,
+    ):
+        payload = body if isinstance(body, bytes) else body.encode()
+        super().__init__(payload)
         self.headers = Message()
         self.headers["Content-Type"] = kind
+        if content_encoding:
+            self.headers["Content-Encoding"] = content_encoding
 
 
 class WebToolsTest(unittest.TestCase):
@@ -315,6 +324,74 @@ class WebToolsTest(unittest.TestCase):
                 data = self.payload(self.b.web_search({"query": "query 17"}))
             self.assertFalse(data["cached"])
             self.assertEqual(19, provider.call_count)
+
+    def test_gzip_web_response_is_decoded_before_html_parsing(self):
+        html = (
+            "<html><head><title>Python Blogs</title></head>"
+            "<body><main><h1>Python news</h1><p>"
+            + ("Release notes and community updates. " * 20)
+            + "</p></main></body></html>"
+        )
+        compressed = gzip.compress(html.encode("utf-8"))
+        response = Response(
+            compressed,
+            "text/html; charset=utf-8",
+            content_encoding="gzip",
+        )
+        with patch.object(
+                self.b,
+                "_validated_public_https_url",
+                side_effect=lambda url: url,
+        ), patch.object(
+                self.b.PUBLIC_HTTPS_OPENER,
+                "open",
+                return_value=response,
+        ):
+            data = self.payload(
+                self.b.web_read({"url": "https://www.python.org/blogs/"})
+            )
+
+        self.assertEqual("Python Blogs", data["title"])
+        self.assertIn("Python news", data["text"])
+        self.assertIn("Release notes and community updates", data["text"])
+        self.assertNotIn("\ufffd", data["text"])
+
+    def test_gzip_magic_is_decoded_even_without_content_encoding_header(self):
+        html = "<main><p>" + ("Readable Python source. " * 20) + "</p></main>"
+        response = Response(gzip.compress(html.encode("utf-8")))
+        with patch.object(
+                self.b,
+                "_validated_public_https_url",
+                side_effect=lambda url: url,
+        ), patch.object(
+                self.b.PUBLIC_HTTPS_OPENER,
+                "open",
+                return_value=response,
+        ):
+            url, kind, body = self.b._web_fetch("https://example.org/article")
+
+        self.assertEqual("https://example.org/article", url)
+        self.assertEqual("text/html", kind)
+        self.assertIn("Readable Python source", body)
+
+    def test_gzip_decoded_size_limit_blocks_decompression_bomb(self):
+        compressed = gzip.compress(b"x" * (self.b.MAX_HTTP_JSON + 1024))
+        response = Response(
+            compressed,
+            "text/html; charset=utf-8",
+            content_encoding="gzip",
+        )
+        with patch.object(
+                self.b,
+                "_validated_public_https_url",
+                side_effect=lambda url: url,
+        ), patch.object(
+                self.b.PUBLIC_HTTPS_OPENER,
+                "open",
+                return_value=response,
+        ):
+            with self.assertRaisesRegex(ValueError, "decoded response exceeds"):
+                self.b._web_fetch("https://example.org/huge")
 
     def test_read_extracts_article_limits_output_and_preserves_source_metadata(self):
         html = '<html><head><title>Actual title</title><meta property="article:published_time" content="2026-09-01"></head>' \
