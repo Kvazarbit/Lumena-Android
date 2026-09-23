@@ -274,7 +274,7 @@ class AgentController(
         val canonical = decision.copy(tool = validation.canonicalTool)
 
         if (state.recoveryHint != null &&
-            state.semanticRecoverySpent >= budget.maxSemanticRecoveries
+            state.semanticRecoverySpent >= semanticRecoveryLimit(state, canonical)
         ) {
             val report = "Частково виконано. Ліміт семантичного відновлення вичерпано без нових перевірених доказів."
             return ControllerInstruction.Finish(
@@ -291,7 +291,7 @@ class AgentController(
 
         val actionFamily = RecoveryPolicy.actionFamily(canonical)
         val familyFailures = state.actionFamilyFailures[actionFamily] ?: 0
-        if (familyFailures >= budget.maxActionFamilyFailures) {
+        if (familyFailures >= actionFamilyFailureLimit(state, canonical)) {
             return protocolRetry(
                 state,
                 "Action family $actionFamily already failed $familyFailures times in this task. " +
@@ -726,8 +726,8 @@ class AgentController(
         val recoveryState = RecoveryState(
             familyFailures = familyCount,
             semanticRecoverySpent = semanticSpent,
-            maxFamilyFailures = budget.maxActionFamilyFailures,
-            maxSemanticRecoveries = budget.maxSemanticRecoveries
+            maxFamilyFailures = actionFamilyFailureLimit(nextState, call),
+            maxSemanticRecoveries = semanticRecoveryLimit(nextState, call)
         )
         val decision = ConstitutionKernel.decide(
             event = event,
@@ -899,6 +899,32 @@ class AgentController(
                 )
         }
     }
+
+    private fun actionFamilyFailureLimit(
+        state: AgentControlState,
+        call: AgentDecision.ToolCall
+    ): Int =
+        if (
+            state.intent == TaskIntent.PUBLIC_WEB &&
+            ToolRegistry.canonicalize(call.tool) == "web.read"
+        ) {
+            budget.maxWebSourceFailures
+        } else {
+            budget.maxActionFamilyFailures
+        }
+
+    private fun semanticRecoveryLimit(
+        state: AgentControlState,
+        call: AgentDecision.ToolCall
+    ): Int =
+        if (
+            state.intent == TaskIntent.PUBLIC_WEB &&
+            ToolRegistry.canonicalize(call.tool) == "web.read"
+        ) {
+            budget.maxWebSourceFailures
+        } else {
+            budget.maxSemanticRecoveries
+        }
 
     private fun requiresToolEvidence(intent: TaskIntent): Boolean =
         intent in setOf(
