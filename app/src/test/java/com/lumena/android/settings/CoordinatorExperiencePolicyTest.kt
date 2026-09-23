@@ -14,7 +14,8 @@ class CoordinatorExperiencePolicyTest {
         ok: Boolean,
         at: Long,
         surprise: Double = 0.8,
-        evidence: String? = "ev-$id"
+        evidence: String? = "ev-$id",
+        modelId: String? = null
     ) = CoordinatorEpisodeEvent(
         id = id,
         sessionId = session,
@@ -24,7 +25,8 @@ class CoordinatorExperiencePolicyTest {
         ok = ok,
         experienceId = evidence,
         at = at,
-        surprise = surprise
+        surprise = surprise,
+        modelId = modelId
     )
 
     @Test
@@ -369,6 +371,59 @@ class CoordinatorExperiencePolicyTest {
         )
 
         assertEquals(listOf("target"), filtered.map { it.id })
+    }
+
+
+    @Test
+    fun recoveryExampleCarriesAllContributingModelIds() {
+        var state = CoordinatorEpisodeState()
+        state = CoordinatorExperiencePolicy.record(
+            state,
+            event(
+                "m1",
+                "project",
+                "file.read",
+                "path=a.txt",
+                false,
+                100,
+                modelId = "model-a"
+            ).copy(taskId = "task-a")
+        )
+        state = CoordinatorExperiencePolicy.record(
+            state,
+            event(
+                "m2",
+                "project",
+                "workspace.list",
+                "",
+                true,
+                200,
+                modelId = "model-b"
+            ).copy(taskId = "task-a")
+        )
+        state = CoordinatorExperiencePolicy.record(
+            state,
+            event(
+                "m3",
+                "project",
+                "file.read",
+                "path=a.txt",
+                true,
+                300,
+                modelId = "model-b"
+            ).copy(taskId = "task-a")
+        )
+
+        val recovery = CoordinatorExperiencePolicy.examples(
+            state = state,
+            query = "",
+            limit = 8
+        ).first { it.kind == CoordinatorExampleKind.RECOVERY }
+
+        assertEquals(
+            listOf("model-a", "model-b"),
+            recovery.contributorModelIds
+        )
     }
 
 
