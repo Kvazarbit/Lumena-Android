@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import sys
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -9,6 +10,7 @@ MODULE_PATH = Path(__file__).with_name("remote_relay.py")
 SPEC = importlib.util.spec_from_file_location("lumena_remote_relay", MODULE_PATH)
 relay = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
+sys.modules[SPEC.name] = relay
 SPEC.loader.exec_module(relay)
 
 
