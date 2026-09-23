@@ -119,19 +119,33 @@ object ConstitutionContributionPolicy {
 
         if (evidence.isEmpty()) return null
 
-        return ConstitutionGenomePolicy.propose(
-            source = ConstitutionProvenance(
-                sourceKind = ConstitutionSourceKind.PROJECT_ARTIFACT,
-                sourceId = "coordinator-example:" + safeId(example.id),
-                modelId = contributorModelId
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let(::safeId),
-                projectId = task.projectId
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let(::safeId),
-                taskId = safeId(task.id),
-                at = example.updatedAt
-            ),
+        val contributorModels = (
+            example.contributorModelIds +
+                listOfNotNull(contributorModelId)
+            )
+            .mapNotNull { raw ->
+                raw.takeIf { it.isNotBlank() }?.let(::safeId)
+            }
+            .distinct()
+            .take(8)
+
+        val sourceId = "coordinator-example:" + safeId(example.id)
+        val projectId = task.projectId
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::safeId)
+        val taskId = safeId(task.id)
+
+        val firstSource = ConstitutionProvenance(
+            sourceKind = ConstitutionSourceKind.PROJECT_ARTIFACT,
+            sourceId = sourceId,
+            modelId = contributorModels.firstOrNull(),
+            projectId = projectId,
+            taskId = taskId,
+            at = example.updatedAt
+        )
+
+        val proposed = ConstitutionGenomePolicy.propose(
+            source = firstSource,
             claimKey = claimKey,
             stance = ConstitutionStance.AFFIRM,
             kind = ConstitutionRuleKind.RECOVERY,
@@ -149,6 +163,21 @@ object ConstitutionContributionPolicy {
             ),
             identitySeed =
                 "verified-recovery|" + scope.stableKey() + "|" + claimKey
+        )
+
+        if (contributorModels.size <= 1) return proposed
+
+        return proposed.copy(
+            provenance = contributorModels.map { modelId ->
+                ConstitutionProvenance(
+                    sourceKind = ConstitutionSourceKind.PROJECT_ARTIFACT,
+                    sourceId = sourceId,
+                    modelId = modelId,
+                    projectId = projectId,
+                    taskId = taskId,
+                    at = example.updatedAt
+                )
+            }
         )
     }
 
