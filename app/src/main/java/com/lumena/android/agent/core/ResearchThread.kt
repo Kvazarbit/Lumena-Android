@@ -79,7 +79,18 @@ object ResearchThreadResolver {
         // URL. Otherwise "verify this online" would incorrectly start a new
         // research root instead of continuing the active one.
         val classified = classifyFollowUp(trimmed, thread != null)
-        if (thread != null && classified.first != ResearchFollowUpKind.NONE) {
+        val explicitResearchGoal = isExplicitResearchGoal(trimmed)
+        val relationalFollowUp =
+            classified.first != ResearchFollowUpKind.NONE &&
+                (
+                    !explicitResearchGoal ||
+                        clearlyReferencesActiveThread(
+                            text = trimmed,
+                            kind = classified.first
+                        )
+                    )
+
+        if (thread != null && relationalFollowUp) {
             val kind = classified.first
             val ordinal = classified.second
             val context = contextMessage(thread, kind, ordinal, trimmed)
@@ -109,7 +120,7 @@ object ResearchThreadResolver {
             )
         }
 
-        if (isExplicitResearchGoal(trimmed)) {
+        if (explicitResearchGoal) {
             val next = ResearchThreadState(rootGoal = trimmed.take(8_000))
             return ResearchThreadResolution(
                 goal = trimmed,
@@ -205,6 +216,28 @@ object ResearchThreadResolver {
         } else {
             thread
         }
+    }
+
+    private fun clearlyReferencesActiveThread(
+        text: String,
+        kind: ResearchFollowUpKind
+    ): Boolean {
+        if (kind in setOf(
+                ResearchFollowUpKind.CONTINUE,
+                ResearchFollowUpKind.NEXT,
+                ResearchFollowUpKind.ALTERNATIVE,
+                ResearchFollowUpKind.NTH
+            )
+        ) {
+            return true
+        }
+
+        return Regex(
+            "(?iu)\\b(?:це|цей|ця|цю|цього|того|той|попередн[а-яіїєґ]*|" +
+                "знайден[а-яіїєґ]*|отриман[а-яіїєґ]*|вище|this|it|that|those|" +
+                "previous|above|same|found|these|это|этот|того|предыдущ[а-я]*|" +
+                "to|ten|ta|tego|poprzedn[iaey]*|powyżej)\\b"
+        ).containsMatchIn(text)
     }
 
     private fun classifyFollowUp(
