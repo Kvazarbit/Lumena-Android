@@ -47,10 +47,21 @@ class FollowUpGoalTest {
         assertEquals("там немає ліміту, бо ти працюєш", meta.goal)
         assertEquals(research, meta.researchGoal)
 
-        val followUp = ResearchGoalAnchor.resolve(
-            text = "а друга новина?",
+        val contextComplaint = ResearchGoalAnchor.resolve(
+            text = "ти що забув контекст, я шукав в інтернеті",
             previousGoal = meta.goal,
             researchGoal = meta.researchGoal
+        )
+        assertEquals(
+            "ти що забув контекст, я шукав в інтернеті",
+            contextComplaint.goal
+        )
+        assertEquals(research, contextComplaint.researchGoal)
+
+        val followUp = ResearchGoalAnchor.resolve(
+            text = "а друга новина?",
+            previousGoal = contextComplaint.goal,
+            researchGoal = contextComplaint.researchGoal
         )
         assertEquals(research, followUp.goal)
         assertEquals(research, followUp.researchGoal)
