@@ -128,7 +128,7 @@ private fun LocalEntryCard(
                 entry.distinctLocalContexts > 0
             ) {
                 Text(
-                    "Local verified evidence: ${entry.localEvidenceCount} · distinct contexts: ${entry.distinctLocalContexts}",
+                    "Local verified evidence: ${entry.localEvidenceCount} · contexts: ${entry.distinctLocalContexts} · tasks: ${entry.distinctTaskCount} · projects: ${entry.distinctProjectCount}",
                     style = MaterialTheme.typography.labelSmall
                 )
             }
