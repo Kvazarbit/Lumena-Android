@@ -179,6 +179,8 @@ class ConstitutionGenomeInspectorTest {
 
         assertEquals(3, entry.localEvidenceCount)
         assertEquals(3, entry.distinctLocalContexts)
+        assertEquals(3, entry.distinctTaskCount)
+        assertEquals(1, entry.distinctProjectCount)
         assertEquals(
             setOf("model-a", "model-b"),
             entry.contributorModelIds.toSet()
