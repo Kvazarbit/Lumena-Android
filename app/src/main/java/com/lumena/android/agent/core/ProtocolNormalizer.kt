@@ -19,6 +19,7 @@ enum class NormalizationRule {
     REGISTERED_ACTION_ALIAS,
     HERMES_TOOL_CALL,
     REGISTERED_SINGLE_KEY_TOOL,
+    NESTED_NAMESPACE_TOOL,
     ARGS_ALIAS,
     FENCED_JSON,
     SINGLE_FUNCTION_TOOL_CALL
@@ -159,6 +160,7 @@ class ProtocolNormalizer {
             action.isNullOrBlank()
         ) {
             normalizeSingleFunctionWrapper(obj, envelope)?.let { return it }
+            normalizeNestedNamespaceTool(obj, envelope)?.let { return it }
         }
 
         val registeredShorthand = obj.entries.filter {
@@ -254,6 +256,44 @@ class ProtocolNormalizer {
         }
 
         return canonicalJson(canonical, envelope, rule)
+    }
+
+    private fun normalizeNestedNamespaceTool(
+        obj: Map<String, Any?>,
+        envelope: Envelope
+    ): NormalizationResult? {
+        if (obj.size != 1) return null
+
+        val outer = obj.entries.single()
+        val namespace = outer.key.trim().lowercase()
+        if (namespace.isBlank()) return null
+
+        val nested = outer.value as? Map<*, *> ?: return null
+        if (nested.size != 1) return null
+
+        val inner = nested.entries.single()
+        val method = inner.key?.toString()?.trim()?.lowercase().orEmpty()
+        val rawArgs = inner.value as? Map<*, *> ?: return null
+        if (method.isBlank()) return null
+
+        val proposedTool = "$namespace.$method"
+        val canonicalTool = ToolRegistry.canonicalize(proposedTool)
+        if (ToolRegistry.get(canonicalTool) == null) {
+            return NormalizationResult.Failure(
+                ProtocolFailureKind.UNKNOWN_ACTION,
+                "Unregistered nested namespace tool: $proposedTool"
+            )
+        }
+
+        val canonical = linkedMapOf<String, Any?>(
+            "tool" to canonicalTool,
+            "args" to rawArgs
+        )
+        return canonicalJson(
+            canonical,
+            envelope,
+            NormalizationRule.NESTED_NAMESPACE_TOOL
+        )
     }
 
     private fun normalizeSingleFunctionWrapper(
