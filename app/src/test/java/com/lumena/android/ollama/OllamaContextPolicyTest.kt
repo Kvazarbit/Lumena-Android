@@ -146,6 +146,47 @@ class OllamaContextPolicyTest {
     }
 
     @Test
+    fun usageTelemetryDistinguishesEstimateFromExactServerCount() {
+        val original = listOf(
+            OllamaMessage("system", "S".repeat(2_000)),
+            OllamaMessage("user", "U".repeat(2_000))
+        )
+        val budget = OllamaRequestBudget(
+            options = OllamaOptions(num_ctx = 2048, num_predict = 384),
+            maxChars = 2_000,
+            maxPerMessage = 1_200,
+            maxInputTokens = 800
+        )
+        val compacted = OllamaContextPolicy.compact(original, budget)
+
+        val estimated = OllamaContextPolicy.usage(
+            originalMessages = original,
+            compactedMessages = compacted,
+            budget = budget
+        )
+        assertFalse(estimated.promptTokensExact)
+        assertEquals(
+            (compacted.sumOf { it.content.length } + 1) / 2,
+            estimated.promptTokens
+        )
+        assertEquals(800, estimated.inputBudgetTokens)
+        assertTrue(estimated.compacted)
+        assertTrue(estimated.compactLabel().startsWith("CTX ~"))
+
+        val exact = OllamaContextPolicy.usage(
+            originalMessages = original,
+            compactedMessages = compacted,
+            budget = budget,
+            exactPromptTokens = 612,
+            generatedTokens = 42
+        )
+        assertTrue(exact.promptTokensExact)
+        assertEquals(612, exact.promptTokens)
+        assertEquals(42, exact.generatedTokens)
+        assertEquals("CTX 612/800 · 77%", exact.compactLabel())
+    }
+
+    @Test
     fun clippedSystemPreservesRulesAndDynamicTail() {
         val budget = OllamaRequestBudget(
             options = OllamaOptions(num_ctx = 2048, num_predict = 384),
