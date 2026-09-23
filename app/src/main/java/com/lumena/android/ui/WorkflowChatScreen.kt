@@ -416,6 +416,11 @@ fun WorkflowChatScreen(
         val session = ExperienceLandscapeStore.session(context, inferenceBackend,
             if (inferenceBackend == "embedded") ggufPath else selectedModel, computeMode,
             "$bridgeUrl|$ollamaUrl")
+        val constitutionContributorModelId = if (inferenceBackend == "embedded") {
+            "embedded:" + ggufDisplayName.ifBlank { "gguf" }
+        } else {
+            "ollama:" + selectedModel.ifBlank { "unknown" }
+        }
         return WorkflowRunner(modelClient(), bridgeOrNull(), modelNameForRun(),
             relevantMemoryProvider = { task ->
                 val advice = try {
@@ -505,7 +510,8 @@ fun WorkflowChatScreen(
                         taskId = task.id,
                         request = request,
                         result = result,
-                        experienceId = eventId
+                        experienceId = eventId,
+                        modelId = constitutionContributorModelId
                     )
                 }
                 val coordinatorFailure = coordinatorResult.exceptionOrNull()
@@ -523,7 +529,8 @@ fun WorkflowChatScreen(
                             ConstitutionGenomeStore.ingestVerifiedRecoveryExamples(
                                 context = context,
                                 task = task,
-                                examples = examples
+                                examples = examples,
+                                contributorModelId = constitutionContributorModelId
                             )
                         }.exceptionOrNull()
                     } else {
