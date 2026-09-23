@@ -17,6 +17,59 @@ import org.junit.Test
 
 class WorkflowRunnerTest {
     @Test
+    fun contextTelemetryIsPublishedBeforeAndAfterModelCall() = runBlocking {
+        val estimated = ModelContextUsage(
+            promptTokens = 120,
+            promptTokensExact = false,
+            inputBudgetTokens = 1000,
+            requestedContextWindowTokens = 2048,
+            reservedOutputTokens = 384
+        )
+        val exact = estimated.copy(
+            promptTokens = 98,
+            promptTokensExact = true,
+            generatedTokens = 12
+        )
+        val modelClient = object : ChatModelClient, ModelContextTelemetrySource {
+            override suspend fun chat(
+                model: String,
+                messages: List<OllamaMessage>
+            ): Result<String> =
+                Result.success("""{"reply":"ok"}""")
+
+            override fun estimateContextUsage(
+                messages: List<OllamaMessage>
+            ): ModelContextUsage = estimated
+
+            override fun lastContextUsage(): ModelContextUsage = exact
+        }
+        val seen = mutableListOf<ModelContextUsage>()
+        val task = TaskState(
+            id = "context-telemetry",
+            projectId = null,
+            goal = "Поясни коротко, що таке Python",
+            status = TaskStatus.WAITING_MODEL
+        )
+
+        val outcome = WorkflowRunner(
+            modelClient = modelClient,
+            bridge = null,
+            model = "fixture"
+        ).run(
+            history = listOf(OllamaMessage("user", task.goal)),
+            task = task,
+            onContextUsage = { seen += it }
+        )
+
+        assertTrue(outcome is WorkflowOutcome.Finished)
+        assertEquals(2, seen.size)
+        assertFalse(seen.first().promptTokensExact)
+        assertTrue(seen.last().promptTokensExact)
+        assertEquals(98, seen.last().promptTokens)
+        assertEquals(12, seen.last().generatedTokens)
+    }
+
+    @Test
     fun failedMandatoryWebPreflightAllowsOneVariantThenDegradesPartial() = runBlocking {
         val modelCalls = AtomicInteger(0)
         val modelClient = object : ChatModelClient {
