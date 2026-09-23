@@ -270,6 +270,36 @@ class AdaptiveWebResearchTest {
     }
 
     @Test
+    fun underExploredRouteGetsBoundedOptimismWithoutChangingPosterior() {
+        val candidate = WebStrategyCandidate(
+            id = "read:unseen.example",
+            kind = WebStrategyKind.READ_DIRECT,
+            tool = "web.read",
+            host = "unseen.example",
+            guidance = "read"
+        )
+
+        val score = JevLikeWebCalibrationRanker.rank(
+            candidates = listOf(candidate),
+            observations = emptyList(),
+            now = now
+        ).best()!!
+
+        // Posterior stays explicitly uncertain.
+        assertEquals(0.5, score.accessProbability, 0.0001)
+        assertEquals(0.5, score.relevanceProbability, 0.0001)
+        assertFalse(score.calibrated)
+        assertEquals(0, score.evidenceCount)
+
+        // Selection utility is optimistic enough to permit bounded exploration,
+        // but it remains a score only and carries no authority.
+        val posteriorOnlyUtility =
+            0.5 * (0.55 + 0.45 * 0.5) * (0.85 + 0.15 * 0.5)
+        assertTrue(score.utility > posteriorOnlyUtility)
+        assertTrue(score.utility <= 1.0)
+    }
+
+    @Test
     fun olderEvidenceDecaysRelativeToRecentEvidence() {
         val candidate = WebStrategyCandidate(
             id = "read:changing.example",
