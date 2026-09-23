@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.24
+Lumena Termux Bridge v0.25
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -12,6 +12,8 @@ from __future__ import annotations
 import ipaddress
 import hashlib
 import http.client
+import gzip
+import io
 import json
 import os
 import platform
@@ -29,6 +31,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import OrderedDict
 from html.parser import HTMLParser
@@ -514,6 +517,47 @@ def _validated_public_https_url(raw_url: str) -> str:
     return urllib.parse.urlunsplit(parsed)
 
 
+def _decode_bounded_http_body(
+    raw: bytes,
+    headers: Any,
+    *,
+    label: str,
+) -> bytes:
+    """Decode one HTTP content-encoding without exceeding the response budget."""
+    encoding = str(headers.get("Content-Encoding") or "").strip().lower()
+    if not encoding or encoding == "identity":
+        # Be defensive about intermediaries that keep gzip bytes but drop the
+        # Content-Encoding header. The gzip magic is unambiguous.
+        if raw.startswith(b"\x1f\x8b"):
+            encoding = "gzip"
+        else:
+            return raw
+
+    if "," in encoding:
+        raise ValueError(f"{label} uses unsupported stacked content encoding: {encoding}")
+
+    if encoding == "gzip":
+        try:
+            with gzip.GzipFile(fileobj=io.BytesIO(raw), mode="rb") as stream:
+                decoded = stream.read(MAX_HTTP_JSON + 1)
+        except (OSError, EOFError) as exc:
+            raise ValueError(f"{label} returned invalid gzip content") from exc
+    elif encoding == "deflate":
+        try:
+            inflater = zlib.decompressobj()
+            decoded = inflater.decompress(raw, MAX_HTTP_JSON + 1)
+            if len(decoded) <= MAX_HTTP_JSON:
+                decoded += inflater.flush(MAX_HTTP_JSON + 1 - len(decoded))
+        except zlib.error as exc:
+            raise ValueError(f"{label} returned invalid deflate content") from exc
+    else:
+        raise ValueError(f"{label} uses unsupported content encoding: {encoding}")
+
+    if len(decoded) > MAX_HTTP_JSON:
+        raise ValueError(f"{label} decoded response exceeds 2 MiB limit")
+    return decoded
+
+
 def http_json(args: dict[str, Any]) -> dict[str, Any]:
     url = _validated_public_https_url(str(args.get("url", "")).strip())
     timeout = _bounded_int(args.get("timeout"), 10, 1, 20)
@@ -522,7 +566,8 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.24",
+            "Accept-Encoding": "identity",
+            "User-Agent": "LumenaBridge/0.25",
             "Cache-Control": "no-cache",
         },
     )
@@ -546,6 +591,11 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
         raw = response.read(MAX_HTTP_JSON + 1)
         if len(raw) > MAX_HTTP_JSON:
             raise ValueError("JSON response exceeds 2 MiB limit")
+        raw = _decode_bounded_http_body(
+            raw,
+            response.headers,
+            label="JSON response",
+        )
 
         charset = response.headers.get_content_charset() or "utf-8"
         text = raw.decode(charset, errors="replace")
@@ -576,7 +626,8 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         method="GET",
         headers={
             "Accept": "text/html,text/plain,application/json,application/xml,text/xml,application/xhtml+xml;q=0.9,*/*;q=0.1",
-            "User-Agent": "LumenaBridge/0.24",
+            "Accept-Encoding": "identity",
+            "User-Agent": "LumenaBridge/0.25",
             "Cache-Control": "no-cache",
         },
     )
@@ -614,6 +665,11 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         raw = response.read(MAX_HTTP_JSON + 1)
         if len(raw) > MAX_HTTP_JSON:
             raise ValueError("HTTP response exceeds 2 MiB limit")
+        raw = _decode_bounded_http_body(
+            raw,
+            response.headers,
+            label="HTTP response",
+        )
 
         charset = response.headers.get_content_charset() or "utf-8"
         body = raw.decode(charset, errors="replace")
@@ -647,7 +703,7 @@ def _web_fetch(
             raise ValueError("Redirect loop")
         visited.add(url)
         request = urllib.request.Request(url, headers={
-            "User-Agent": "LumenaBridge/0.24", "Accept-Encoding": "identity",
+            "User-Agent": "LumenaBridge/0.25", "Accept-Encoding": "identity",
             "Accept": "text/html,application/json,text/plain;q=0.9", **(headers or {}),
         })
         try:
@@ -680,6 +736,11 @@ def _web_fetch(
             raw = response.read(MAX_HTTP_JSON + 1)
             if len(raw) > MAX_HTTP_JSON:
                 raise ValueError("Web response exceeds 2 MiB")
+            raw = _decode_bounded_http_body(
+                raw,
+                response.headers,
+                label="Web response",
+            )
             charset = response.headers.get_content_charset() or "utf-8"
             try:
                 text = raw.decode(charset, errors="replace")
@@ -1167,6 +1228,11 @@ def _read_json_response(
         raw = response.read(MAX_HTTP_JSON + 1)
         if len(raw) > MAX_HTTP_JSON:
             raise ValueError(f"{provider} response exceeds 2 MiB limit")
+        raw = _decode_bounded_http_body(
+            raw,
+            response.headers,
+            label=f"{provider} response",
+        )
 
     try:
         payload = json.loads(raw.decode("utf-8"))
@@ -1200,7 +1266,8 @@ def _wikimedia_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.24 (local Android assistant)",
+            "Accept-Encoding": "identity",
+            "User-Agent": "LumenaBridge/0.25 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -1272,7 +1339,7 @@ def _openverse_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.24 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.25 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -2010,7 +2077,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"Lumena bridge OK\n"
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + root.name for root in READONLY_ROOTS if root.exists()) or '(none)'}\n"
-                f"version=0.24\n"
+                f"version=0.25\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
                 f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
@@ -2303,7 +2370,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.24"
+    server_version = "LumenaBridge/0.25"
     protocol_version = "HTTP/1.1"
 
     def setup(self) -> None:
@@ -2346,7 +2413,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.24",
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.25",
                              "bridge_run_id": BRIDGE_RUN_ID})
             return
         self._json(404, {"ok": False, "error": "Not found"})
@@ -2400,7 +2467,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     _mark_interrupted_search_from_previous_run()
-    print("Lumena Termux Bridge v0.24")
+    print("Lumena Termux Bridge v0.25")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")
