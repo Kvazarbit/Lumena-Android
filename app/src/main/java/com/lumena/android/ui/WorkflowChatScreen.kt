@@ -773,6 +773,7 @@ fun WorkflowChatScreen(
             modelLabel = modelLabel,
             backendLabel = backendLabel,
             busy = busy,
+            contextUsage = contextUsage,
             onHistory = { onOpenHistory?.invoke() },
             onNew = { clearConversation() },
             onMore = {
@@ -805,6 +806,7 @@ fun WorkflowChatScreen(
             pendingApproval = pending != null,
             nowMs = nowMs,
             expanded = progressExpanded,
+            contextUsage = contextUsage,
             onToggle = { progressExpanded = !progressExpanded },
             onStop = { stopCurrentTask() }
         )
@@ -994,6 +996,7 @@ private fun ModernChatHeader(
     modelLabel: String,
     backendLabel: String,
     busy: Boolean,
+    contextUsage: ModelContextUsage?,
     onHistory: () -> Unit,
     onNew: () -> Unit,
     onMore: () -> Unit,
@@ -1021,6 +1024,14 @@ private fun ModernChatHeader(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1
             )
+            contextUsage?.let { usage ->
+                Text(
+                    usage.compactLabel(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
         }
         Surface(
             modifier = Modifier.clickable(onClick = onNew),
@@ -1041,6 +1052,7 @@ private fun CompactAgentStatus(
     pendingApproval: Boolean,
     nowMs: Long,
     expanded: Boolean,
+    contextUsage: ModelContextUsage?,
     onToggle: () -> Unit,
     onStop: () -> Unit
 ) {
@@ -1090,6 +1102,35 @@ private fun CompactAgentStatus(
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
             }
             if (expanded) {
+                contextUsage?.let { usage ->
+                    Text(
+                        buildString {
+                            append("Context · prompt ")
+                            append(if (usage.promptTokensExact) "" else "≈")
+                            append(usage.promptTokens)
+                            append(" tok · input budget ")
+                            append(usage.inputBudgetTokens)
+                            append(" · requested window ")
+                            append(usage.requestedContextWindowTokens)
+                            append(" · output reserve ")
+                            append(usage.reservedOutputTokens)
+                            usage.generatedTokens?.let { generated ->
+                                append(" · generated ")
+                                append(generated)
+                            }
+                            if (usage.compacted) append(" · compacted")
+                        },
+                        modifier = Modifier.padding(top = 6.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "Input budget is Lumena's request budget; a cloud provider's hard context limit may differ.",
+                        modifier = Modifier.padding(top = 2.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 coordinator.progress.takeLast(8).forEach {
                     Text(
                         it,
