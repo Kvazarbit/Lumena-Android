@@ -76,6 +76,32 @@ class TaskIntentRouterTest {
     }
 
     @Test
+    fun publicWebPreflightDistillsUkrainianPresentationInstructions() {
+        val profile = TaskIntentRouter.route(
+            "Знайди в інтернеті останні новини Python сьогодні і коротко підсумуй їх з посиланнями на джерела."
+        )
+
+        assertEquals(TaskIntent.PUBLIC_WEB, profile.intent)
+        assertEquals("web.search", profile.preflight?.tool)
+        assertEquals(
+            "останні новини Python сьогодні",
+            profile.preflight?.args?.get("query")
+        )
+    }
+
+    @Test
+    fun retryPrefixDoesNotPolluteSearchEngineQuery() {
+        val profile = TaskIntentRouter.route(
+            "спробуй інший підхід до запиту: Знайди в інтернеті останні новини Python сьогодні і коротко підсумуй їх з посиланнями на джерела."
+        )
+
+        assertEquals(
+            "останні новини Python сьогодні",
+            profile.preflight?.args?.get("query")
+        )
+    }
+
+    @Test
     fun ordinaryConversationStaysGeneral() {
         val profile = TaskIntentRouter.route("поясни мені різницю між RAM і SSD")
 
