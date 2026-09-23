@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import com.lumena.android.agent.core.ConstitutionAuthority
 import com.lumena.android.agent.core.ConstitutionCapsule
+import com.lumena.android.agent.core.ConstitutionGenomePolicy
 import com.lumena.android.agent.core.ConstitutionRule
 import com.lumena.android.agent.core.ConstitutionRuleKind
 import com.lumena.android.agent.core.ConstitutionRuleStatus
