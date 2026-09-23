@@ -215,7 +215,20 @@ object EvidenceGraphReducer {
             sources = nextSources
         )
 
+        val nextStatement =
+            if (
+                baseClaim.verificationState ==
+                    EvidenceVerificationState.DISCOVERED &&
+                observation.sourceKind !=
+                    EvidenceSourceKind.SEARCH_SNIPPET
+            ) {
+                observation.statement.trim().take(2_000)
+            } else {
+                baseClaim.statement
+            }
+
         val nextClaim = baseClaim.copy(
+            statement = nextStatement,
             verificationState = nextVerification,
             supportSourceIds = supportDistinct.takeLast(32),
             contradictionSourceIds = contradictDistinct.takeLast(32),
