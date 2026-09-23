@@ -136,6 +136,20 @@ class ProtocolNormalizerTest {
     }
 
     @Test
+    fun nestedRegisteredMutationStillRequiresNormalToolGateConfirmation() {
+        val normalized = canonical(
+            """{"file":{"write":{"path":"notes.txt","content":"x"}}}"""
+        )
+
+        val parsed = parser.parse(normalized.json) as AgentDecision.ToolCall
+        assertEquals("file.write", parsed.tool)
+
+        val validation = ToolRegistry.validate(parsed)
+        assertTrue(validation.allowed)
+        assertTrue(validation.requiresConfirmation)
+    }
+
+    @Test
     fun nestedUnknownNamespaceCannotCreateAuthority() {
         val result = normalizer.normalize(
             """{"shell":{"exec":{"cmd":"rm -rf /"}}}"""
