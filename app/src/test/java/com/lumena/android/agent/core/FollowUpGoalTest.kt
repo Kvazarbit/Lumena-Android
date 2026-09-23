@@ -27,6 +27,45 @@ class FollowUpGoalTest {
         }
     }
 
+    @Test fun researchAnchorSurvivesInterveningMetaChat() {
+        val research =
+            "Знайди в інтернеті останні новини саме про мову програмування Python"
+
+        val first = ResearchGoalAnchor.resolve(
+            text = research,
+            previousGoal = null,
+            researchGoal = null
+        )
+        assertEquals(research, first.goal)
+        assertEquals(research, first.researchGoal)
+
+        val meta = ResearchGoalAnchor.resolve(
+            text = "там немає ліміту, бо ти працюєш",
+            previousGoal = first.goal,
+            researchGoal = first.researchGoal
+        )
+        assertEquals("там немає ліміту, бо ти працюєш", meta.goal)
+        assertEquals(research, meta.researchGoal)
+
+        val followUp = ResearchGoalAnchor.resolve(
+            text = "а друга новина?",
+            previousGoal = meta.goal,
+            researchGoal = meta.researchGoal
+        )
+        assertEquals(research, followUp.goal)
+        assertEquals(research, followUp.researchGoal)
+    }
+
+    @Test fun newsReferenceDoesNotInventResearchGoalWithoutHistory() {
+        val result = ResearchGoalAnchor.resolve(
+            text = "а друга новина?",
+            previousGoal = null,
+            researchGoal = null
+        )
+        assertEquals("а друга новина?", result.goal)
+        assertNull(result.researchGoal)
+    }
+
     @Test fun explicitNewGoalAndMissingHistoryArePreserved() {
         assertEquals("повтори", FollowUpGoal.resolve("повтори", null))
         assertEquals("повтори тест файлу", FollowUpGoal.resolve("повтори тест файлу", "старе завдання"))
