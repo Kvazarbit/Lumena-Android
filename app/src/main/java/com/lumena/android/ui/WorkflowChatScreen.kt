@@ -88,7 +88,8 @@ import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.settings.ContextCheckpointStore
 import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.FollowUpGoal
-import com.lumena.android.agent.core.ResearchGoalAnchor
+import com.lumena.android.agent.core.ResearchThreadResolver
+import com.lumena.android.agent.core.ResearchThreadState
 import com.lumena.android.agent.core.ReflexRuntimeAdvice
 import com.lumena.android.settings.ContextGenomeStats
 import com.lumena.android.settings.ContextGenomeStore
@@ -191,7 +192,14 @@ fun WorkflowChatScreen(
         mutableStateOf(listOf(systemMessage) + restored.history.map { OllamaMessage(it.role, it.content) })
     }
     var contextUsage by remember { mutableStateOf<ModelContextUsage?>(null) }
-    var researchGoal by remember { mutableStateOf(restored.researchGoal) }
+    var researchThread by remember {
+        mutableStateOf(
+            restored.researchThread
+                ?: restored.researchGoal?.let { legacy ->
+                    ResearchThreadState(rootGoal = legacy)
+                }
+        )
+    }
     var busy by remember {
         mutableStateOf(
             restored.task?.status in setOf(
@@ -310,7 +318,8 @@ fun WorkflowChatScreen(
                     )
                 },
                 inputDraft = input,
-                researchGoal = researchGoal
+                researchGoal = researchThread?.rootGoal,
+                researchThread = researchThread
             )
         )
     }
@@ -360,7 +369,11 @@ fun WorkflowChatScreen(
 
         val storedPending = restoredPendingFrom(stored.pending)
         if (storedPending?.plan?.request != pending?.plan?.request) pending = storedPending
-        if (stored.researchGoal != researchGoal) researchGoal = stored.researchGoal
+        val storedThread = stored.researchThread
+            ?: stored.researchGoal?.let { legacy ->
+                ResearchThreadState(rootGoal = legacy)
+            }
+        if (storedThread != researchThread) researchThread = storedThread
 
         busy = stored.task?.status in setOf(
             TaskStatus.PLANNING, TaskStatus.WAITING_MODEL, TaskStatus.EXECUTING, TaskStatus.VERIFYING
@@ -388,7 +401,7 @@ fun WorkflowChatScreen(
         currentTask = null
         history = listOf(systemMessage)
         contextUsage = null
-        researchGoal = null
+        researchThread = null
         bubbles.clear()
         bubbles += ChatBubble("assistant", "Новий чат. Що хочеш зробити?")
         busy = false
@@ -635,6 +648,10 @@ fun WorkflowChatScreen(
                 taskApprovals.remove(taskId)
             }
         }
+        researchThread = ResearchThreadResolver.observeHistory(
+            history = history,
+            thread = researchThread
+        )
         busy = currentTask?.status in setOf(
             TaskStatus.PLANNING, TaskStatus.WAITING_MODEL, TaskStatus.EXECUTING, TaskStatus.VERIFYING
         )
@@ -656,13 +673,13 @@ fun WorkflowChatScreen(
 
         input = ""
         val previous = currentTask
-        val anchored = ResearchGoalAnchor.resolve(
+        val resolution = ResearchThreadResolver.resolve(
             text = text,
             previousGoal = previous?.goal,
-            researchGoal = researchGoal
+            thread = researchThread
         )
-        val resolvedGoal = anchored.goal
-        researchGoal = anchored.researchGoal
+        val resolvedGoal = resolution.goal
+        researchThread = resolution.thread
         val task = TaskState(
             id = UUID.randomUUID().toString(),
             projectId = null,
@@ -681,8 +698,22 @@ fun WorkflowChatScreen(
             listOf(OllamaMessage("user", "HISTORICAL TASK CHECKPOINT; verify current state before acting. " +
                 "Earlier tool success is not proof for this new task.\n" + ContextKernel.capsule(previous.kernel, 1200)))
             else emptyList()
-        val turnHistory = history + previousContext + OllamaMessage("user",
-            if (resolvedGoal != text) "$text\nМета дослідження: $resolvedGoal" else text)
+        val researchContext = resolution.contextMessage
+            ?.takeIf { it.isNotBlank() }
+            ?.let { listOf(OllamaMessage("user", it)) }
+            .orEmpty()
+        val turnHistory =
+            history +
+                previousContext +
+                researchContext +
+                OllamaMessage(
+                    "user",
+                    if (resolvedGoal != text) {
+                        "$text\nResolved research task:\n$resolvedGoal"
+                    } else {
+                        text
+                    }
+                )
         history = turnHistory
         busy = true
         persistSession()

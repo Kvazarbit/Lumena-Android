@@ -2,6 +2,7 @@ package com.lumena.android.settings
 
 import android.content.Context
 import com.lumena.android.agent.core.AgentControlState
+import com.lumena.android.agent.core.ResearchThreadState
 import com.lumena.android.agent.core.TaskState
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -40,7 +41,10 @@ data class LocalSessionSnapshot(
     val task: TaskState? = null,
     val pending: PersistedPendingTool? = null,
     val inputDraft: String = "",
-    val researchGoal: String? = null
+    // Compatibility field for Step 7E snapshots. New code persists the full
+    // bounded researchThread and mirrors rootGoal here for safe migration.
+    val researchGoal: String? = null,
+    val researchThread: ResearchThreadState? = null
 )
 
 /**
@@ -111,8 +115,21 @@ object LocalSessionStore {
                 }
             ),
             inputDraft = snapshot.inputDraft.take(MAX_DRAFT_CHARS),
-            researchGoal = snapshot.researchGoal
+            researchGoal = snapshot.researchThread
+                ?.rootGoal
                 ?.take(MAX_DRAFT_CHARS)
+                ?: snapshot.researchGoal?.take(MAX_DRAFT_CHARS),
+            researchThread = snapshot.researchThread?.copy(
+                rootGoal = snapshot.researchThread.rootGoal.take(MAX_DRAFT_CHARS),
+                discoveredUrls = snapshot.researchThread.discoveredUrls
+                    .map { it.take(2_000) }
+                    .distinct()
+                    .takeLast(24),
+                readUrls = snapshot.researchThread.readUrls
+                    .map { it.take(2_000) }
+                    .distinct()
+                    .takeLast(16)
+            )
         )
         prefs(context).edit().putString(KEY_SNAPSHOT, adapter.toJson(bounded)).apply()
         // History mirrors only bounded, app-private context. Workspace files are never copied/rolled back.
