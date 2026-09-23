@@ -2,7 +2,12 @@ package com.lumena.android.settings
 
 import android.content.Context
 import android.os.Build
+import com.lumena.android.agent.core.ConstitutionAuthority
 import com.lumena.android.agent.core.ConstitutionCapsule
+import com.lumena.android.agent.core.ConstitutionRule
+import com.lumena.android.agent.core.ConstitutionRuleKind
+import com.lumena.android.agent.core.ConstitutionRuleStatus
+import com.lumena.android.agent.core.ConstitutionStance
 import com.lumena.android.agent.core.CoreDna
 import com.lumena.android.agent.core.ToolRegistry
 import com.squareup.moshi.Moshi
@@ -40,6 +45,22 @@ data class PortableExecutionExampleSeed(
     val surprise: Double
 )
 
+data class PortableConstitutionSeed(
+    val id: String,
+    val claimKey: String,
+    val stance: String,
+    val kind: String,
+    val originAuthority: String,
+    val sourceStatus: String,
+    val sourceScopeHash: String,
+    val statement: String,
+    val rationale: String,
+    val evidenceIds: List<String>,
+    val contributorModelIds: List<String>,
+    val updatedAt: Long,
+    val activationRequirement: String
+)
+
 data class PortableKernelPayload(
     val schemaVersion: Int = PortableKernelPolicy.SCHEMA_VERSION,
     val coreDnaVersion: String,
@@ -51,7 +72,8 @@ data class PortableKernelPayload(
     val requiresLocalRevalidation: Boolean = true,
     val positiveExperience: List<PortableExperienceSeed> = emptyList(),
     val dormantRules: List<PortableRuleSeed> = emptyList(),
-    val executionExamples: List<PortableExecutionExampleSeed> = emptyList()
+    val executionExamples: List<PortableExecutionExampleSeed> = emptyList(),
+    val constitutionalSeeds: List<PortableConstitutionSeed> = emptyList()
 )
 
 data class PortableKernelEnvelope(
@@ -63,6 +85,7 @@ data class PortableKernelImportResult(
     val positiveExperience: Int,
     val dormantRules: Int,
     val executionExamples: Int,
+    val constitutionalSeeds: Int = 0,
     val sourceDeviceHash: String,
     val sourceCoreDnaVersion: String,
     val sourceCapsuleVersion: String,
@@ -70,12 +93,15 @@ data class PortableKernelImportResult(
 )
 
 object PortableKernelPolicy {
-    const val SCHEMA_VERSION = 2
-    val SUPPORTED_SCHEMA_VERSIONS = setOf(1, 2)
+    const val SCHEMA_VERSION = 3
+    val SUPPORTED_SCHEMA_VERSIONS = setOf(1, 2, 3)
     const val COORDINATOR_CONTRACT_VERSION = "lumena-coordinator-v2"
     const val MAX_EXPERIENCE = 256
     const val MAX_DORMANT_RULES = 128
     const val MAX_EXECUTION_EXAMPLES = 128
+    const val MAX_CONSTITUTION_SEEDS = 128
+    const val LOCAL_REVALIDATION = "LOCAL_REVALIDATION"
+    const val USER_RECONFIRMATION = "USER_RECONFIRMATION"
 
     fun buildPayload(
         localAnchors: List<ExperienceAnchor>,
@@ -84,7 +110,8 @@ object PortableKernelPolicy {
         exportedAt: Long,
         sourceAppVersionCode: Long,
         sourceDeviceHash: String,
-        localExecutionExamples: List<CoordinatorExecutionExample> = emptyList()
+        localExecutionExamples: List<CoordinatorExecutionExample> = emptyList(),
+        localConstitutionRules: List<ConstitutionRule> = emptyList()
     ): PortableKernelPayload {
         val localPositive = localAnchors
             .asSequence()
@@ -149,6 +176,21 @@ object PortableKernelPolicy {
             imported?.executionExamples.orEmpty() + localPortableExamples
         ).take(MAX_EXECUTION_EXAMPLES)
 
+        val localConstitutionSeeds = localConstitutionRules
+            .asSequence()
+            .filter { rule ->
+                (rule.status == ConstitutionRuleStatus.LEARNED &&
+                    rule.authority == ConstitutionAuthority.ADVISORY) ||
+                    (rule.status == ConstitutionRuleStatus.ACTIVE_USER_CONSTRAINT &&
+                        rule.authority == ConstitutionAuthority.USER_CONSTRAINT)
+            }
+            .map(::toPortableConstitutionSeed)
+            .toList()
+
+        val constitutionalSeeds = mergeConstitutionSeeds(
+            imported?.constitutionalSeeds.orEmpty() + localConstitutionSeeds
+        ).take(MAX_CONSTITUTION_SEEDS)
+
         return PortableKernelPayload(
             coreDnaVersion = CoreDna.VERSION,
             constitutionCapsuleVersion = ConstitutionCapsule.VERSION,
@@ -159,7 +201,8 @@ object PortableKernelPolicy {
             requiresLocalRevalidation = true,
             positiveExperience = experience,
             dormantRules = dormant,
-            executionExamples = executionExamples
+            executionExamples = executionExamples,
+            constitutionalSeeds = constitutionalSeeds
         )
     }
 
@@ -212,7 +255,26 @@ object PortableKernelPolicy {
                 )
             }
 
-        return (experienceCandidates + executionCandidates)
+        val constitutionCandidates = payload.constitutionalSeeds
+            .asSequence()
+            .map { seed ->
+                val searchable = tokenize(
+                    seed.claimKey + " " + seed.statement + " " + seed.rationale
+                )
+                val overlap = searchable.count { it in tokens }
+                AdviceCandidate(
+                    line = formatConstitutionSeed(seed),
+                    overlap = overlap,
+                    updatedAt = seed.updatedAt,
+                    weight = if (seed.originAuthority == ConstitutionAuthority.USER_CONSTRAINT.name) {
+                        1.0
+                    } else {
+                        (seed.evidenceIds.size.coerceAtMost(8) / 8.0)
+                    }
+                )
+            }
+
+        return (experienceCandidates + executionCandidates + constitutionCandidates)
             .filter { tokens.isEmpty() || it.overlap > 0 }
             .sortedWith(
                 compareByDescending<AdviceCandidate> {
@@ -242,6 +304,12 @@ object PortableKernelPolicy {
         require(payload.positiveExperience.size <= MAX_EXPERIENCE)
         require(payload.dormantRules.size <= MAX_DORMANT_RULES)
         require(payload.executionExamples.size <= MAX_EXECUTION_EXAMPLES)
+        require(payload.constitutionalSeeds.size <= MAX_CONSTITUTION_SEEDS)
+        if (payload.schemaVersion < 3) {
+            require(payload.constitutionalSeeds.isEmpty()) {
+                "Constitution seeds require portable-kernel schema v3"
+            }
+        }
 
         payload.positiveExperience.forEach { seed ->
             require(seed.signature.length in 8..128)
@@ -283,10 +351,42 @@ object PortableKernelPolicy {
             require(example.updatedAt > 0)
             require(example.surprise in 0.0..1.0)
         }
+
+        payload.constitutionalSeeds.forEach { seed ->
+            require(seed.id.length in 1..128)
+            require(seed.claimKey.length in 1..160)
+            require(seed.stance in ConstitutionStance.entries.map { it.name })
+            require(seed.kind in ConstitutionRuleKind.entries.map { it.name })
+            require(
+                seed.originAuthority == ConstitutionAuthority.ADVISORY.name ||
+                    seed.originAuthority == ConstitutionAuthority.USER_CONSTRAINT.name
+            ) { "Portable constitution cannot carry HARD_GUARD authority" }
+            require(
+                seed.sourceStatus == ConstitutionRuleStatus.LEARNED.name ||
+                    seed.sourceStatus == ConstitutionRuleStatus.ACTIVE_USER_CONSTRAINT.name
+            )
+            require(seed.sourceScopeHash.matches(Regex("[0-9a-f]{16,64}")))
+            require(seed.statement.length in 1..700)
+            require(seed.rationale.length in 1..900)
+            require(seed.evidenceIds.size <= 16)
+            require(seed.evidenceIds.all { it.length in 1..160 })
+            require(seed.contributorModelIds.size <= 8)
+            require(seed.contributorModelIds.all { it.length in 1..160 })
+            require(seed.updatedAt > 0)
+            if (seed.originAuthority == ConstitutionAuthority.USER_CONSTRAINT.name) {
+                require(seed.sourceStatus == ConstitutionRuleStatus.ACTIVE_USER_CONSTRAINT.name)
+                require(seed.activationRequirement == USER_RECONFIRMATION)
+            } else {
+                require(seed.sourceStatus == ConstitutionRuleStatus.LEARNED.name)
+                require(seed.activationRequirement == LOCAL_REVALIDATION)
+                require(seed.evidenceIds.isNotEmpty())
+            }
+        }
     }
 
     fun versionsMatchCurrentRuntime(payload: PortableKernelPayload): Boolean =
-        payload.coreDnaVersion == CoreDna.VERSION &&
+        payload.schemaVersion == SCHEMA_VERSION &&
+            payload.coreDnaVersion == CoreDna.VERSION &&
             payload.constitutionCapsuleVersion == ConstitutionCapsule.VERSION &&
             payload.coordinatorContractVersion == COORDINATOR_CONTRACT_VERSION
 
@@ -322,6 +422,52 @@ object PortableKernelPolicy {
             )
     }
 
+    private fun toPortableConstitutionSeed(
+        rule: ConstitutionRule
+    ): PortableConstitutionSeed {
+        val userConstraint =
+            rule.authority == ConstitutionAuthority.USER_CONSTRAINT
+        return PortableConstitutionSeed(
+            id = rule.id.take(128),
+            claimKey = rule.claimKey.take(160),
+            stance = rule.stance.name,
+            kind = rule.kind.name,
+            originAuthority = rule.authority.name,
+            sourceStatus = rule.status.name,
+            sourceScopeHash = hash(rule.scope.stableKey()).take(32),
+            statement = sanitize(rule.statement, 700),
+            rationale = sanitize(rule.rationale, 900),
+            evidenceIds = rule.evidenceRefs
+                .map { it.id.take(160) }
+                .distinct()
+                .take(16),
+            contributorModelIds = rule.provenance
+                .mapNotNull { it.modelId }
+                .map { sanitize(it, 160) }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .take(8),
+            updatedAt = rule.updatedAt,
+            activationRequirement = if (userConstraint) {
+                USER_RECONFIRMATION
+            } else {
+                LOCAL_REVALIDATION
+            }
+        )
+    }
+
+    private fun mergeConstitutionSeeds(
+        seeds: List<PortableConstitutionSeed>
+    ): List<PortableConstitutionSeed> =
+        seeds
+            .filter { it.id.isNotBlank() }
+            .groupBy { it.id }
+            .values
+            .map { same ->
+                same.maxByOrNull { it.updatedAt } ?: same.first()
+            }
+            .sortedByDescending { it.updatedAt }
+
     private fun mergeExecutionExamples(
         seeds: List<PortableExecutionExampleSeed>
     ): List<PortableExecutionExampleSeed> =
@@ -343,6 +489,20 @@ object PortableKernelPolicy {
                 compareByDescending<PortableExecutionExampleSeed> { it.updatedAt }
                     .thenByDescending { it.surprise }
             )
+
+    private fun formatConstitutionSeed(
+        seed: PortableConstitutionSeed
+    ): String {
+        val statement = sanitize(seed.statement, 420)
+        val why = sanitize(seed.rationale, 320)
+        return if (seed.originAuthority == ConstitutionAuthority.USER_CONSTRAINT.name) {
+            "PORTABLE USER CONSTRAINT RECORD (source-device record; user reconfirmation required before activation; not permission) · " +
+                "[${seed.claimKey}] $statement · WHY: $why"
+        } else {
+            "PORTABLE LEARNED CONSTITUTION (source-device rule; local revalidation required; advisory, not permission) · " +
+                "[${seed.claimKey}] $statement · WHY: $why"
+        }
+    }
 
     private fun formatExecutionExample(
         seed: PortableExecutionExampleSeed
@@ -432,6 +592,9 @@ object PortableKernelStore {
             query = "",
             limit = 32
         )
+        val constitutionRules = ConstitutionGenomePolicy.view(
+            ConstitutionGenomeStore.load(app)
+        ).rules
         val imported = loadImportedOrNull(app)
         val versionCode = app.packageManager
             .getPackageInfo(app.packageName, 0)
@@ -446,7 +609,8 @@ object PortableKernelStore {
                 exportedAt = now,
                 sourceAppVersionCode = versionCode,
                 sourceDeviceHash = sourceDeviceHash,
-                localExecutionExamples = executionExamples
+                localExecutionExamples = executionExamples,
+                localConstitutionRules = constitutionRules
             )
         )
     }
@@ -464,6 +628,7 @@ object PortableKernelStore {
             positiveExperience = payload.positiveExperience.size,
             dormantRules = payload.dormantRules.size,
             executionExamples = payload.executionExamples.size,
+            constitutionalSeeds = payload.constitutionalSeeds.size,
             sourceDeviceHash = payload.sourceDeviceHash,
             sourceCoreDnaVersion = payload.coreDnaVersion,
             sourceCapsuleVersion = payload.constitutionCapsuleVersion,
