@@ -389,6 +389,80 @@ class AgentControllerTest {
     }
 
     @Test
+    fun publicWebCanTrySeveralDistinctReadOnlySourcesBeforePartial() {
+        val webTask = TaskState(
+            id = "web-source-fallback",
+            projectId = null,
+            goal = "Знайди в інтернеті останні новини Python сьогодні",
+            status = TaskStatus.WAITING_MODEL,
+            maxSteps = 8
+        )
+        var state = controller.initial(webTask)
+        val search = AgentDecision.ToolCall(
+            "web.search",
+            mapOf("query" to "останні новини Python сьогодні")
+        )
+        state = controller.afterTool(
+            state = state,
+            call = search,
+            ok = true,
+            stdout = """{"results":[{"url":"https://a.example"},{"url":"https://b.example"},{"url":"https://c.example"},{"url":"https://d.example"}]}""",
+            stderr = "",
+            error = null
+        ).state
+
+        val urls = listOf(
+            "https://a.example",
+            "https://b.example",
+            "https://c.example",
+            "https://d.example"
+        )
+
+        urls.take(3).forEachIndexed { index, url ->
+            val execute = controller.interpret(
+                """{"tool":"web.read","args":{"url":"$url"},"reason":"try alternate source"}""",
+                state
+            )
+            assertTrue("source index=$index should still be executable", execute is ControllerInstruction.Execute)
+            execute as ControllerInstruction.Execute
+            val transition = controller.afterTool(
+                state = execute.state,
+                call = execute.call,
+                ok = false,
+                stdout = "",
+                stderr = "",
+                error = if (index == 0) {
+                    "ValueError: Page requires human verification; use another source"
+                } else {
+                    "ValueError: Public HTTPS transport failed (TimeoutError)"
+                }
+            )
+            assertTrue(transition.partialReason == null)
+            assertTrue(transition.stopReason == null)
+            state = transition.state
+        }
+
+        val fourth = controller.interpret(
+            """{"tool":"web.read","args":{"url":"${urls[3]}"},"reason":"last bounded alternate source"}""",
+            state
+        )
+        assertTrue(fourth is ControllerInstruction.Execute)
+        fourth as ControllerInstruction.Execute
+        val exhausted = controller.afterTool(
+            state = fourth.state,
+            call = fourth.call,
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "ValueError: Public HTTPS transport failed (TimeoutError)"
+        )
+
+        assertTrue(exhausted.partialReason != null)
+        assertTrue(exhausted.state.task.status == TaskStatus.PARTIAL)
+        assertTrue(exhausted.state.actionFamilyFailures["web.read"] == 4)
+    }
+
+    @Test
     fun imageGoalCannotFinishBeforeImageSearch() {
         val visualTask = TaskState(
             id = "img",
