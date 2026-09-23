@@ -24,6 +24,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.lumena.android.settings.ExperienceLandscapeStore
 import com.lumena.android.settings.PortableKernelStore
+import com.lumena.android.settings.ConstitutionGenomeInspectorPolicy
+import com.lumena.android.settings.ConstitutionGenomeStore
+import com.lumena.android.settings.ConstitutionInspectorSnapshot
 import com.lumena.android.settings.LandscapeRuleStatus
 import com.lumena.android.settings.LandscapeSnapshot
 import com.lumena.android.agent.core.CoreDna
@@ -48,6 +51,8 @@ internal fun ExperienceLandscapePanel(busy: Boolean, refreshKey: String) {
     var selectedVersion by remember { mutableStateOf<Long?>(null) }
     var portabilityBusy by remember { mutableStateOf(false) }
     var portabilityStatus by remember { mutableStateOf<String?>(null) }
+    var constitutionInspectorExpanded by rememberSaveable { mutableStateOf(false) }
+    var constitutionInspectorError by remember { mutableStateOf<String?>(null) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
@@ -130,6 +135,30 @@ internal fun ExperienceLandscapePanel(busy: Boolean, refreshKey: String) {
             }
         }
     }
+    val constitutionInspector by produceState<ConstitutionInspectorSnapshot?>(
+        null,
+        constitutionInspectorExpanded,
+        busy,
+        refreshKey,
+        revision
+    ) {
+        if (constitutionInspectorExpanded) {
+            try {
+                value = withContext(Dispatchers.IO) {
+                    ConstitutionGenomeInspectorPolicy.build(
+                        localState = ConstitutionGenomeStore.load(context),
+                        imported = PortableKernelStore.importedPayload(context)
+                    )
+                }
+                constitutionInspectorError = null
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                constitutionInspectorError =
+                    "Не вдалося прочитати Constitution Genome: ${failure.message}"
+            }
+        }
+    }
     fun edit(action: () -> Unit) {
         if (busy || editing) return
         editing = true
@@ -194,6 +223,30 @@ internal fun ExperienceLandscapePanel(busy: Boolean, refreshKey: String) {
                 }
             }
         }
+        TextButton(
+            onClick = {
+                constitutionInspectorExpanded =
+                    !constitutionInspectorExpanded
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                (if (constitutionInspectorExpanded) "▾ " else "▸ ") +
+                    "Constitution Genome Inspector"
+            )
+        }
+        if (constitutionInspectorExpanded) {
+            constitutionInspectorError?.let {
+                Text(it, color = MaterialTheme.colorScheme.error)
+            }
+            val inspector = constitutionInspector
+            if (inspector == null && constitutionInspectorError == null) {
+                Text("Завантаження Constitution Genome…")
+            } else if (inspector != null) {
+                ConstitutionGenomeInspectorPanel(inspector)
+            }
+        }
+
         Text("${CoreDna.principles.size} інженерних правил проєкту. Це початкові принципи, без приписаних успіхів. Короткі коди мають явне значення; модель не повинна вгадувати їх.", style = MaterialTheme.typography.bodySmall)
         CoreDna.principles.forEach { rule -> Text("${rule.id} · ${rule.title}", style = MaterialTheme.typography.bodySmall) }
         Text("Оцінюються виконання інструментів, а не досягнення всієї мети. Поради не змінюють дозволи та обов’язкові перевірки.",
