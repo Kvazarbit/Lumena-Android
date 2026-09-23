@@ -45,7 +45,8 @@ class ConstitutionContributionPolicyTest {
             "",
             "path=secret-a"
         ),
-        updatedAt: Long = 100
+        updatedAt: Long = 100,
+        contributorModelIds: List<String> = emptyList()
     ) = CoordinatorExecutionExample(
         id = id,
         kind = CoordinatorExampleKind.RECOVERY,
@@ -55,7 +56,8 @@ class ConstitutionContributionPolicyTest {
         evidenceIds = evidenceIds,
         updatedAt = updatedAt,
         surprise = 1.0,
-        text = "RECOVERY EXAMPLE arbitrary rendered text"
+        text = "RECOVERY EXAMPLE arbitrary rendered text",
+        contributorModelIds = contributorModelIds
     )
 
     @Test
@@ -422,4 +424,104 @@ class ConstitutionContributionPolicyTest {
             state.rules.single().status
         )
     }
+    @Test
+    fun samePatternAcrossModelsAndTasksKeepsBothModelProvenances() {
+        var state = ConstitutionGenomeState()
+
+        val first = requireNotNull(
+            ConstitutionContributionPolicy.verifiedRecoveryRule(
+                task = task("task-a"),
+                example = recovery(
+                    id = "model-a-example",
+                    evidenceIds = listOf("a1", "a2"),
+                    updatedAt = 100,
+                    contributorModelIds = listOf("model-a")
+                )
+            )
+        )
+        state = ConstitutionGenomePolicy.contributeVerifiedAdvisory(
+            state,
+            first
+        )
+
+        val second = requireNotNull(
+            ConstitutionContributionPolicy.verifiedRecoveryRule(
+                task = task("task-b"),
+                example = recovery(
+                    id = "model-b-example",
+                    evidenceIds = listOf("b1", "b2"),
+                    updatedAt = 200,
+                    contributorModelIds = listOf("model-b")
+                )
+            )
+        )
+        state = ConstitutionGenomePolicy.contributeVerifiedAdvisory(
+            state,
+            second
+        )
+
+        val learned = state.rules.single()
+        assertEquals(
+            ConstitutionRuleStatus.LEARNED,
+            learned.status
+        )
+        assertEquals(
+            setOf("model-a", "model-b"),
+            learned.provenance.mapNotNull { it.modelId }.toSet()
+        )
+        assertEquals(
+            ConstitutionAuthority.ADVISORY,
+            learned.authority
+        )
+    }
+
+    @Test
+    fun modelDiversityInsideOneTaskDoesNotReplaceContextDiversity() {
+        var state = ConstitutionGenomeState()
+        val sharedTask = task("same-task")
+
+        val first = requireNotNull(
+            ConstitutionContributionPolicy.verifiedRecoveryRule(
+                task = sharedTask,
+                example = recovery(
+                    id = "one",
+                    evidenceIds = listOf("e1", "e2"),
+                    updatedAt = 100,
+                    contributorModelIds = listOf("model-a")
+                )
+            )
+        )
+        state = ConstitutionGenomePolicy.contributeVerifiedAdvisory(
+            state,
+            first
+        )
+
+        val second = requireNotNull(
+            ConstitutionContributionPolicy.verifiedRecoveryRule(
+                task = sharedTask,
+                example = recovery(
+                    id = "two",
+                    evidenceIds = listOf("e3", "e4"),
+                    updatedAt = 200,
+                    contributorModelIds = listOf("model-b")
+                )
+            )
+        )
+        state = ConstitutionGenomePolicy.contributeVerifiedAdvisory(
+            state,
+            second
+        )
+
+        val rule = state.rules.single()
+        assertNotEquals(
+            ConstitutionRuleStatus.LEARNED,
+            rule.status
+        )
+        assertEquals(
+            setOf("model-a", "model-b"),
+            rule.provenance.mapNotNull { it.modelId }.toSet()
+        )
+    }
+
+
 }
