@@ -632,7 +632,13 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         }
 
 
-def _web_fetch(url: str, *, headers: dict[str, str] | None = None, redirects: int = 3) -> tuple[str, str, str]:
+def _web_fetch(
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    redirects: int = 3,
+    timeout_seconds: int = 8,
+) -> tuple[str, str, str]:
     """Bounded public HTTPS GET. Credentials never cross a redirect."""
     visited: set[str] = set()
     for hop in range(redirects + 1):
@@ -645,7 +651,10 @@ def _web_fetch(url: str, *, headers: dict[str, str] | None = None, redirects: in
             "Accept": "text/html,application/json,text/plain;q=0.9", **(headers or {}),
         })
         try:
-            response = PUBLIC_HTTPS_OPENER.open(request, timeout=8)
+            response = PUBLIC_HTTPS_OPENER.open(
+                request,
+                timeout=max(1, min(int(timeout_seconds), 20)),
+            )
         except urllib.error.HTTPError as exc:
             location = exc.headers.get("Location", "")
             status = exc.code
@@ -1080,7 +1089,17 @@ def web_search(
 
 
 def web_read(args: dict[str, Any]) -> dict[str, Any]:
-    url, kind, body = _web_fetch(str(args.get("url", "")).strip())
+    raw_url = str(args.get("url", "")).strip()
+    try:
+        url, kind, body = _web_fetch(raw_url)
+    except ValueError as exc:
+        # A single mechanical retry is safe for read-only GETs and handles
+        # transient mobile-network stalls without spending an agent semantic
+        # recovery. Challenge/CAPTCHA/HTTP errors are not retried here.
+        if "Public HTTPS transport failed (TimeoutError)" not in str(exc):
+            raise
+        url, kind, body = _web_fetch(raw_url, timeout_seconds=12)
+
     limit = _bounded_int(args.get("max_chars"), 6000, 500, 12000)
     title, published = "", None
     if kind in {"text/html", "application/xhtml+xml"}:
