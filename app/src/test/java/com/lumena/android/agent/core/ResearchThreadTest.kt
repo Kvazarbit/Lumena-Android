@@ -110,6 +110,50 @@ class ResearchThreadTest {
     }
 
     @Test
+    fun sourceIdentityFollowUpUsesActiveResearchEvidenceUniversally() {
+        val thread = ResearchThreadState(
+            rootGoal = "Знайди актуальну ціну активу в інтернеті",
+            discoveredUrls = listOf(
+                "https://example.com/market/asset",
+                "https://second.example/asset"
+            ),
+            readUrls = listOf(
+                "https://example.com/market/asset"
+            )
+        )
+
+        val phrasings = listOf(
+            "що за ресурс?",
+            "яке джерело?",
+            "what source?",
+            "откуда это?",
+            "skąd to?"
+        )
+
+        phrasings.forEach { followUp ->
+            val resolved = ResearchThreadResolver.resolve(
+                text = followUp,
+                previousGoal = "коротка попередня мета",
+                thread = thread
+            )
+
+            assertEquals(
+                "Failed for phrasing: $followUp",
+                ResearchFollowUpKind.SOURCE_IDENTITY,
+                resolved.followUpKind
+            )
+            assertEquals(thread, resolved.thread)
+            assertTrue(
+                resolved.goal.contains("identify the concrete source/resource")
+            )
+            val context = resolved.contextMessage.orEmpty()
+            assertTrue(context.contains("https://example.com/market/asset"))
+            assertTrue(context.contains("https://second.example/asset"))
+            assertTrue(context.contains("already_read_urls"))
+        }
+    }
+
+    @Test
     fun verifyCompareAndDeepenReuseSameResearchThread() {
         val thread = ResearchThreadState(
             rootGoal = "Знайди актуальні benchmark-и llama.cpp Vulkan на Android"
