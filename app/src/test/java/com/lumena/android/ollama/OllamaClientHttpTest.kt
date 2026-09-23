@@ -108,6 +108,31 @@ class OllamaClientHttpTest {
     }
 
     @Test
+    fun emptyStreamingResponseFallsBackToNonStreamingChatOnce() {
+        withFixture(
+            listOf(
+                """{"done":true}
+""",
+                """{"message":{"role":"assistant","content":"fallback ok"},"done":true}"""
+            )
+        ) { port, calls ->
+            val client = OllamaClient("http://127.0.0.1:$port")
+            val partials = mutableListOf<String>()
+            val result = runBlocking {
+                client.chatStreaming(
+                    model = "fixture",
+                    messages = listOf(OllamaMessage("user", "hello")),
+                    onPartial = { partials += it }
+                )
+            }
+
+            assertEquals("fallback ok", result.getOrThrow())
+            assertEquals(2, calls.get())
+            assertTrue(partials.contains(""))
+        }
+    }
+
+    @Test
     fun contextPressureRetriesExactlyOnceThenSucceeds() {
         withFixture(
             listOf(
