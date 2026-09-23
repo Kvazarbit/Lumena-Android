@@ -111,7 +111,8 @@ class OllamaClientHttpTest {
     fun finalOllamaUsageCountsReplaceThePreflightEstimate() {
         withFixture(
             listOf(
-                """{"message":{"role":"assistant","content":"ok"},"done":true,"prompt_eval_count":321,"eval_count":17}
+                """{"message":{"role":"assistant","content":"ok"},"done":false,"prompt_eval_count":321}
+{"done":true,"eval_count":17}
 """
             )
         ) { port, calls ->
