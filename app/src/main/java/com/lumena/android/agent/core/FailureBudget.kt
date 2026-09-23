@@ -6,6 +6,10 @@ data class FailureBudget(
     val maxPythonFailures: Int = 3,
     val maxSemanticRecoveries: Int = 2,
     val maxActionFamilyFailures: Int = 2,
+    // Public-web source reading is read-only and individual sites commonly
+    // challenge or time out. Allow a few distinct source alternatives without
+    // relaxing mutation, model, protocol, or identical-call budgets.
+    val maxWebSourceFailures: Int = 4,
     val maxTotalSteps: Int = 12
 )
 
