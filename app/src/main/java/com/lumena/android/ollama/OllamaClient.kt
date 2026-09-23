@@ -46,7 +46,9 @@ data class OllamaChatRequest(
 data class OllamaChatResponse(
     val message: OllamaMessage? = null,
     val done: Boolean? = null,
-    val error: String? = null
+    val error: String? = null,
+    val prompt_eval_count: Int? = null,
+    val eval_count: Int? = null
 )
 
 private class EmptyOllamaStreamException :
@@ -101,7 +103,7 @@ interface ChatModelClient {
 class OllamaClient(
     baseUrl: String,
     private val runtimeProfile: LlamaRuntimeProfile? = null
-) : ChatModelClient {
+) : ChatModelClient, ModelContextTelemetrySource {
     private val base = normalizeLoopbackBaseUrl(baseUrl)
         ?: throw IllegalArgumentException("Ollama URL must use localhost/127.0.0.1 over http")
 
@@ -119,6 +121,23 @@ class OllamaClient(
     private val responseAdapter = moshi.adapter(OllamaChatResponse::class.java)
     private val tagsAdapter = moshi.adapter(OllamaTagsResponse::class.java)
     private val jsonType = "application/json; charset=utf-8".toMediaType()
+
+    @Volatile
+    private var lastContextUsageSnapshot: ModelContextUsage? = null
+
+    override fun estimateContextUsage(messages: List<OllamaMessage>): ModelContextUsage {
+        val budget = OllamaContextPolicy.budget(runtimeProfile, retry = false)
+        val compacted = OllamaContextPolicy.compact(messages, budget)
+        return OllamaContextPolicy.usage(
+            originalMessages = messages,
+            compactedMessages = compacted,
+            budget = budget
+        )
+    }
+
+    override fun lastContextUsage(): ModelContextUsage? =
+        lastContextUsageSnapshot
+
 
     suspend fun listModels(): Result<List<String>> = withContext(Dispatchers.IO) {
         runCatching {
@@ -150,10 +169,10 @@ class OllamaClient(
             require(model.isNotBlank()) { "Choose an Ollama model first" }
             val normalBudget = OllamaContextPolicy.budget(runtimeProfile, retry = false)
             val text = try {
-                executeStreamingWithEmptyFallback(
+                executeWithBudget(
                     model = model,
-                    messages = OllamaContextPolicy.compact(messages, normalBudget),
-                    options = normalBudget.options,
+                    originalMessages = messages,
+                    budget = normalBudget,
                     onPartial = onPartial
                 )
             } catch (first: Throwable) {
@@ -162,10 +181,10 @@ class OllamaClient(
 
                 onPartial("")
                 val retryBudget = OllamaContextPolicy.budget(runtimeProfile, retry = true)
-                executeStreamingWithEmptyFallback(
+                executeWithBudget(
                     model = model,
-                    messages = OllamaContextPolicy.compact(messages, retryBudget),
-                    options = retryBudget.options,
+                    originalMessages = messages,
+                    budget = retryBudget,
                     onPartial = onPartial
                 )
             }
@@ -175,6 +194,44 @@ class OllamaClient(
         } catch (t: Throwable) {
             Result.failure(t)
         }
+    }
+
+    private suspend fun executeWithBudget(
+        model: String,
+        originalMessages: List<OllamaMessage>,
+        budget: OllamaRequestBudget,
+        onPartial: (String) -> Unit
+    ): String {
+        val compacted = OllamaContextPolicy.compact(
+            originalMessages,
+            budget
+        )
+        lastContextUsageSnapshot = OllamaContextPolicy.usage(
+            originalMessages = originalMessages,
+            compactedMessages = compacted,
+            budget = budget
+        )
+        return executeStreamingWithEmptyFallback(
+            model = model,
+            messages = compacted,
+            options = budget.options,
+            onPartial = onPartial
+        )
+    }
+
+    private fun recordActualUsage(response: OllamaChatResponse) {
+        val current = lastContextUsageSnapshot ?: return
+        val prompt = response.prompt_eval_count
+        val generated = response.eval_count
+
+        if (prompt == null && generated == null) return
+
+        lastContextUsageSnapshot = current.copy(
+            promptTokens = prompt?.takeIf { it >= 0 } ?: current.promptTokens,
+            promptTokensExact = prompt != null && prompt >= 0,
+            generatedTokens = generated?.takeIf { it >= 0 }
+                ?: current.generatedTokens
+        )
     }
 
     private suspend fun executeStreamingWithEmptyFallback(
@@ -242,6 +299,7 @@ class OllamaClient(
                     val line = source.readUtf8Line() ?: break
                     if (line.isBlank()) continue
                     val chunk = responseAdapter.fromJson(line) ?: continue
+                    recordActualUsage(chunk)
                     ollamaChunkError(chunk)?.let { message ->
                         error("Ollama stream error: $message")
                     }
@@ -293,6 +351,7 @@ class OllamaClient(
                         if (!it.isSuccessful) error("Ollama HTTP ${it.code}: $body")
                         val parsed = responseAdapter.fromJson(body)
                             ?: error("Ollama returned unreadable response")
+                        recordActualUsage(parsed)
                         ollamaChunkError(parsed)?.let { message ->
                             error("Ollama response error: $message")
                         }
