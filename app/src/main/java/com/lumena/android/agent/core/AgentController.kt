@@ -797,7 +797,8 @@ class AgentController(
     fun dynamicContext(
         state: AgentControlState,
         relevantMemory: List<String> = emptyList(),
-        constitutionalGuidance: List<String> = emptyList()
+        constitutionalGuidance: List<String> = emptyList(),
+        verifiedEvidence: List<String> = emptyList()
     ): String {
         return ContextBuilder(
             maxMemoryItems = 6,
@@ -807,6 +808,7 @@ class AgentController(
             project = null,
             relevantMemory = relevantMemory,
             constitutionalGuidance = constitutionalGuidance,
+            verifiedEvidence = verifiedEvidence,
             allowedTools = null,
             plan = state.plan,
             verificationRequirement = state.verificationReason,
