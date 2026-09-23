@@ -69,6 +69,7 @@ class WorkflowRunner(
         TaskState,
         List<OllamaMessage>
     ) -> List<String> = { _, _ -> emptyList() },
+    private val evidenceProvider: (TaskState) -> List<String> = { emptyList() },
     private val constitutionProvider: (TaskState) -> List<String> = { emptyList() },
     private val reflexAdviceProvider: (
         FailureEvent,
@@ -305,6 +306,27 @@ class WorkflowRunner(
                 )
             }
 
+            val evidenceContext = try {
+                evidenceProvider(state.task)
+            } catch (failure: Exception) {
+                onProgress(
+                    "EVIDENCE GRAPH CONTEXT · unavailable (" +
+                        (failure::class.simpleName ?: "error") +
+                        ")"
+                )
+                emptyList()
+            }
+            if (evidenceContext.isNotEmpty()) {
+                onProgress(
+                    evidenceContext
+                        .take(6)
+                        .joinToString(
+                            prefix = "EVIDENCE GRAPH CONTEXT · ${evidenceContext.size}\n",
+                            separator = "\n"
+                        ) { "- ${it.take(900)}" }
+                )
+            }
+
             val relevantMemory = relevantMemoryProvider(state.task)
             if (relevantMemory.isNotEmpty()) {
                 onProgress(
@@ -320,7 +342,8 @@ class WorkflowRunner(
                 current,
                 state,
                 webStrategyAdvice.take(4) + relevantMemory,
-                constitutionalGuidance
+                constitutionalGuidance,
+                evidenceContext.take(6)
             )
             val replyResult = chatWithContextTelemetry(
                 messages = modelMessages,
@@ -737,14 +760,16 @@ class WorkflowRunner(
         history: List<OllamaMessage>,
         state: AgentControlState,
         relevantMemory: List<String>,
-        constitutionalGuidance: List<String>
+        constitutionalGuidance: List<String>,
+        verifiedEvidence: List<String>
     ): List<OllamaMessage> {
         val staticSystem = history.firstOrNull { it.role == "system" }?.content
             ?: LocalWorkflowAgent.systemPrompt
         val dynamic = controller.dynamicContext(
             state,
             relevantMemory = relevantMemory,
-            constitutionalGuidance = constitutionalGuidance
+            constitutionalGuidance = constitutionalGuidance,
+            verifiedEvidence = verifiedEvidence
         )
         val compactGoal = state.task.goal
             .replace(Regex("[\\r\\n]+"), " ")
