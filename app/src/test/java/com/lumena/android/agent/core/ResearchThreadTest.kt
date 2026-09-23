@@ -74,6 +74,25 @@ class ResearchThreadTest {
     }
 
     @Test
+    fun selfContainedNewWebGoalReplacesOldThreadEvenIfItContainsCompareVerb() {
+        val old = ResearchThreadState(
+            rootGoal = "Знайди документацію Vulkan memory allocator online"
+        )
+        val newGoal =
+            "порівняй актуальні ціни онлайн GPU A і GPU B"
+
+        val resolved = ResearchThreadResolver.resolve(
+            text = newGoal,
+            previousGoal = old.rootGoal,
+            thread = old
+        )
+
+        assertEquals(newGoal, resolved.goal)
+        assertEquals(newGoal, resolved.thread?.rootGoal)
+        assertEquals(ResearchFollowUpKind.NONE, resolved.followUpKind)
+    }
+
+    @Test
     fun ordinalFollowUpWorksForArbitraryResearchItems() {
         val thread = ResearchThreadState(
             rootGoal = "Search online for three Vulkan memory allocator approaches"
