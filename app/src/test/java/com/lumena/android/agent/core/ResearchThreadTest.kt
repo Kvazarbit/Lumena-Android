@@ -125,9 +125,13 @@ class ResearchThreadTest {
         val phrasings = listOf(
             "що за ресурс?",
             "яке джерело?",
+            ", що за сторінка?",
             "what source?",
+            "what page?",
             "откуда это?",
-            "skąd to?"
+            "что за страница?",
+            "skąd to?",
+            "co to za strona?"
         )
 
         phrasings.forEach { followUp ->
