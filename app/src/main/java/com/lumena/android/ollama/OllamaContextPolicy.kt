@@ -80,7 +80,7 @@ object OllamaContextPolicy {
             }
             val clipped = when {
                 message.content.length <= take -> message.content
-                recent.isEmpty() -> clipRecent(message.content, take)
+                recent.isEmpty() -> clipNewestContextText(message.content, take)
                 else -> message.content.takeLast(take)
             }
             if (clipped.isEmpty()) continue
@@ -106,26 +106,4 @@ object OllamaContextPolicy {
         return text.take(head) + marker + text.takeLast(tail)
     }
 
-    /**
-     * The newest tool-result/user turn carries protocol framing at the start
-     * (TOOL_RESULT, ok/error/provider and the first evidence rows) and the
-     * continuation contract at the end. Keeping only the tail can make a valid
-     * tool result look like arbitrary text to the next model turn.
-     */
-    private fun clipRecent(text: String, limit: Int): String {
-        if (limit <= 0) return ""
-        if (text.length <= limit) return text
-
-        val marker = "\n...[middle recent context omitted]...\n"
-        if (limit <= marker.length + 8) {
-            val head = (limit + 1) / 2
-            val tail = limit - head
-            return text.take(head) + text.takeLast(tail)
-        }
-
-        val available = limit - marker.length
-        val head = (available * 2) / 3
-        val tail = available - head
-        return text.take(head) + marker + text.takeLast(tail)
-    }
 }
