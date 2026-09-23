@@ -86,6 +86,7 @@ import com.lumena.android.ollama.WorkflowRunner
 import com.lumena.android.settings.LocalSessionSnapshot
 import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.settings.ContextCheckpointStore
+import com.lumena.android.settings.AdaptiveWebResearchStore
 import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.FollowUpGoal
 import com.lumena.android.agent.core.ResearchThreadResolver
@@ -437,6 +438,7 @@ fun WorkflowChatScreen(
         val session = ExperienceLandscapeStore.session(context, inferenceBackend,
             if (inferenceBackend == "embedded") ggufPath else selectedModel, computeMode,
             "$bridgeUrl|$ollamaUrl")
+        val researchGoalSnapshot = researchThread?.rootGoal
         val constitutionContributorModelId = if (inferenceBackend == "embedded") {
             "embedded:" + ggufDisplayName.ifBlank { "gguf" }
         } else {
@@ -476,6 +478,24 @@ fun WorkflowChatScreen(
                     )
                     .distinct()
                     .take(8)
+            },
+            webStrategyAdviceProvider = { task, modelHistory ->
+                val researchGoal =
+                    researchGoalSnapshot
+                        ?.takeIf { it.isNotBlank() }
+                        ?: task.goal
+                try {
+                    AdaptiveWebResearchStore.advice(
+                        context = context,
+                        researchGoal = researchGoal,
+                        history = modelHistory,
+                        limit = 3
+                    )
+                } catch (_: Exception) {
+                    listOf(
+                        "JEV-like web calibration unavailable; continue with ordinary verified web research."
+                    )
+                }
             },
             constitutionProvider = { task ->
                 ConstitutionGenomeStore.relevant(
@@ -520,6 +540,20 @@ fun WorkflowChatScreen(
             },
             onToolExperience = { task, request, result, elapsedMs ->
                 val eventId = ExperienceMemoryStore.record(context, request, result)
+
+                // Advisory projection only. Failure here must never erase or
+                // block the older verified experience stores below.
+                runCatching {
+                    AdaptiveWebResearchStore.record(
+                        context = context,
+                        task = task,
+                        request = request,
+                        result = result,
+                        elapsedMs = elapsedMs,
+                        evidenceId = eventId
+                    )
+                }
+
                 val episodeSessionId = task.projectId
                     ?.takeIf { it.isNotBlank() }
                     ?: task.id
