@@ -329,6 +329,40 @@ class WebToolsTest(unittest.TestCase):
         for unwanted in ("MENU", "DO_NOT_EXECUTE", "FOOTER"):
             self.assertNotIn(unwanted, data["text"])
 
+    def test_web_read_retries_timeout_once_then_succeeds(self):
+        html = "<main><h1>Recovered</h1><p>" + ("Evidence. " * 40) + "</p></main>"
+        with patch.object(
+                self.b,
+                "_web_fetch",
+                side_effect=[
+                    ValueError("Public HTTPS transport failed (TimeoutError)"),
+                    ("https://example.org/article", "text/html", html),
+                ],
+        ) as fetch:
+            data = self.payload(
+                self.b.web_read({"url": "https://example.org/article"})
+            )
+
+        self.assertEqual("https://example.org/article", data["url"])
+        self.assertEqual(2, fetch.call_count)
+        self.assertEqual(
+            12,
+            fetch.call_args_list[1].kwargs["timeout_seconds"],
+        )
+
+    def test_web_read_does_not_retry_human_verification(self):
+        with patch.object(
+                self.b,
+                "_web_fetch",
+                side_effect=ValueError(
+                    "Page requires human verification; use another source"
+                ),
+        ) as fetch:
+            with self.assertRaisesRegex(ValueError, "human verification"):
+                self.b.web_read({"url": "https://example.org/article"})
+
+        self.assertEqual(1, fetch.call_count)
+
     def test_read_does_not_report_empty_javascript_shell_as_success(self):
         with patch.object(self.b, "_web_fetch", return_value=("https://example.org", "text/html", "<script>content()</script>")):
             with self.assertRaisesRegex(ValueError, "too little"):
