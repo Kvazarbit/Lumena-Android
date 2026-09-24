@@ -3,6 +3,9 @@ package com.lumena.android.settings
 import android.content.Context
 import android.util.AtomicFile
 import com.lumena.android.agent.core.EvidenceClaimNode
+import com.lumena.android.agent.core.EvidenceClaimCandidateProvenance
+import com.lumena.android.agent.core.EvidenceClaimProposal
+import com.lumena.android.agent.core.EvidenceGraphClaimPolicy
 import com.lumena.android.agent.core.EvidenceGraphReducer
 import com.lumena.android.agent.core.EvidenceGraphState
 import com.lumena.android.agent.core.EvidenceObservation
@@ -347,6 +350,7 @@ object EvidenceGraphStore {
         "lumena_evidence_graph.json"
     private const val MAX_CLAIMS = 512
     private const val MAX_SOURCES = 512
+    private const val MAX_CANDIDATES = 256
 
     private val lock = Any()
 
@@ -419,6 +423,35 @@ object EvidenceGraphStore {
 
             observations
         }
+
+    fun proposeModelClaim(
+        context: Context,
+        claimKey: String,
+        statement: String,
+        sourceIds: List<String>,
+        projectId: String?,
+        projectRelevance: Double,
+        now: Long = System.currentTimeMillis()
+    ) = synchronized(lock) {
+        val current = load(context)
+        val update = EvidenceGraphClaimPolicy.propose(
+            state = current,
+            proposal = EvidenceClaimProposal(
+                claimKey = claimKey,
+                statement = statement,
+                sourceIds = sourceIds,
+                provenance =
+                    EvidenceClaimCandidateProvenance.MODEL_PROPOSAL,
+                proposedAt = now,
+                projectId = projectId,
+                projectRelevance = projectRelevance
+            )
+        )
+        if (update.accepted && update.state != current) {
+            save(context, trim(update.state))
+        }
+        update
+    }
 
     fun relevant(
         context: Context,
@@ -516,9 +549,19 @@ object EvidenceGraphStore {
             .filter { it.id in retainedSourceIds }
             .sortedByDescending { it.lastObservedAt }
 
+        val retainedCandidates = state.candidates
+            .sortedByDescending { it.proposedAt }
+            .filter { candidate ->
+                candidate.sourceIds.all {
+                    it in retainedSourceIds
+                }
+            }
+            .take(MAX_CANDIDATES)
+
         return state.copy(
             claims = retainedClaims,
-            sources = retainedSources
+            sources = retainedSources,
+            candidates = retainedCandidates
         )
     }
 
