@@ -89,6 +89,7 @@ import com.lumena.android.settings.ContextCheckpointStore
 import com.lumena.android.settings.AdaptiveWebResearchStore
 import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.FollowUpGoal
+import com.lumena.android.agent.core.ProjectContextResolver
 import com.lumena.android.agent.core.ResearchThreadResolver
 import com.lumena.android.agent.core.ResearchThreadState
 import com.lumena.android.agent.core.ReflexRuntimeAdvice
@@ -744,9 +745,21 @@ fun WorkflowChatScreen(
         )
         val resolvedGoal = resolution.goal
         researchThread = resolution.thread
+        val referenceUsesPreviousTask =
+            previous != null &&
+                FollowUpGoal.isReference(text) &&
+                previous.goal == resolvedGoal
+        val projectId = ProjectContextResolver.resolve(
+            text = text,
+            previousProjectId = previous?.projectId,
+            carryForward =
+                referenceUsesPreviousTask ||
+                    resolution.followUpKind.name !=
+                    "NONE"
+        )
         val task = TaskState(
             id = UUID.randomUUID().toString(),
-            projectId = null,
+            projectId = projectId,
             goal = resolvedGoal,
             status = TaskStatus.WAITING_MODEL
         )
@@ -754,10 +767,6 @@ fun WorkflowChatScreen(
         currentTask = task
         bubbles += ChatBubble("user", text)
 
-        val referenceUsesPreviousTask =
-            previous != null &&
-                FollowUpGoal.isReference(text) &&
-                previous.goal == resolvedGoal
         val previousContext = if (referenceUsesPreviousTask)
             listOf(OllamaMessage("user", "HISTORICAL TASK CHECKPOINT; verify current state before acting. " +
                 "Earlier tool success is not proof for this new task.\n" + ContextKernel.capsule(previous.kernel, 1200)))
