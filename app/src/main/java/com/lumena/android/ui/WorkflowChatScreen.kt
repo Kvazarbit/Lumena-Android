@@ -90,7 +90,6 @@ import com.lumena.android.settings.AdaptiveWebResearchStore
 import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.FollowUpGoal
 import com.lumena.android.agent.core.ProjectContextResolver
-import com.lumena.android.agent.core.ResearchFollowUpKind
 import com.lumena.android.agent.core.ResearchThreadResolver
 import com.lumena.android.agent.core.ResearchThreadState
 import com.lumena.android.agent.core.ReflexRuntimeAdvice
@@ -755,8 +754,8 @@ fun WorkflowChatScreen(
             previousProjectId = previous?.projectId,
             carryForward =
                 referenceUsesPreviousTask ||
-                    resolution.followUpKind !=
-                    ResearchFollowUpKind.NONE
+                    resolution.followUpKind.name !=
+                    "NONE"
         )
         val task = TaskState(
             id = UUID.randomUUID().toString(),
