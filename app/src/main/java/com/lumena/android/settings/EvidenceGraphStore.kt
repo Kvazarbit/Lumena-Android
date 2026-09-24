@@ -3,6 +3,8 @@ package com.lumena.android.settings
 import android.content.Context
 import android.util.AtomicFile
 import com.lumena.android.agent.core.EvidenceClaimNode
+import com.lumena.android.agent.core.EvidenceApplicationUpdate
+import com.lumena.android.agent.core.EvidenceProjectApplicationPolicy
 import com.lumena.android.agent.core.EvidenceClaimCandidateProvenance
 import com.lumena.android.agent.core.EvidenceClaimProposal
 import com.lumena.android.agent.core.EvidenceGraphClaimPolicy
@@ -351,6 +353,7 @@ object EvidenceGraphStore {
     private const val MAX_CLAIMS = 512
     private const val MAX_SOURCES = 512
     private const val MAX_CANDIDATES = 256
+    private const val MAX_APPLICATIONS = 256
 
     private val lock = Any()
 
@@ -446,6 +449,52 @@ object EvidenceGraphStore {
                 projectId = projectId,
                 projectRelevance = projectRelevance
             )
+        )
+        if (update.accepted && update.state != current) {
+            save(context, trim(update.state))
+        }
+        update
+    }
+
+    fun bindClaimToProject(
+        context: Context,
+        claimKey: String,
+        projectId: String,
+        target: String,
+        now: Long = System.currentTimeMillis()
+    ): EvidenceApplicationUpdate = synchronized(lock) {
+        val current = load(context)
+        val update = EvidenceProjectApplicationPolicy.bind(
+            state = current,
+            claimKey = claimKey,
+            projectId = projectId,
+            target = target,
+            now = now
+        )
+        if (update.accepted && update.state != current) {
+            save(context, trim(update.state))
+        }
+        update
+    }
+
+    fun recordProjectOutcome(
+        context: Context,
+        bindingId: String,
+        taskProjectId: String,
+        request: ToolRequest,
+        result: ToolResult,
+        evidenceId: String?,
+        now: Long = System.currentTimeMillis()
+    ): EvidenceApplicationUpdate = synchronized(lock) {
+        val current = load(context)
+        val update = EvidenceProjectApplicationPolicy.observeToolResult(
+            state = current,
+            bindingId = bindingId,
+            taskProjectId = taskProjectId,
+            request = request,
+            result = result,
+            evidenceId = evidenceId,
+            now = now
         )
         if (update.accepted && update.state != current) {
             save(context, trim(update.state))
@@ -558,10 +607,22 @@ object EvidenceGraphStore {
             }
             .take(MAX_CANDIDATES)
 
+        val retainedClaimKeys = retainedClaims
+            .map { it.claimKey }
+            .toSet()
+
+        val retainedApplications = state.applications
+            .sortedByDescending { it.updatedAt }
+            .filter {
+                it.claimKey in retainedClaimKeys
+            }
+            .take(MAX_APPLICATIONS)
+
         return state.copy(
             claims = retainedClaims,
             sources = retainedSources,
-            candidates = retainedCandidates
+            candidates = retainedCandidates,
+            applications = retainedApplications
         )
     }
 

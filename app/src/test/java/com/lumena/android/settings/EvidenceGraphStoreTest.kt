@@ -1,6 +1,8 @@
 package com.lumena.android.settings
 
 import com.lumena.android.agent.core.EvidenceClaimNode
+import com.lumena.android.agent.core.EvidenceApplicationBinding
+import com.lumena.android.agent.core.EvidenceApplicationStatus
 import com.lumena.android.agent.core.EvidenceClaimCandidate
 import com.lumena.android.agent.core.EvidenceClaimCandidateProvenance
 import com.lumena.android.agent.core.EvidenceClaimCandidateStatus
@@ -99,6 +101,42 @@ class EvidenceGraphStoreTest {
         )
 
         assertTrue(decoded.candidates.isEmpty())
+    }
+
+    @Test
+    fun codecRoundTripPreservesProjectApplicationBindings() {
+        val binding = EvidenceApplicationBinding(
+            id = "binding-1",
+            claimKey = "android-workmanager-persistent",
+            projectId = "lumena",
+            target = "app/worker.py",
+            status = EvidenceApplicationStatus.APPLIED,
+            createdAt = now,
+            updatedAt = now + 1,
+            artifactEvidenceIds = listOf("patch-ok")
+        )
+        val state = EvidenceGraphState(
+            applications = listOf(binding)
+        )
+
+        val decoded = EvidenceGraphCodec.decode(
+            EvidenceGraphCodec.encode(state)
+        )
+
+        assertEquals(state, decoded)
+        assertEquals(
+            EvidenceApplicationStatus.APPLIED,
+            decoded.applications.single().status
+        )
+    }
+
+    @Test
+    fun legacyEvidenceJsonWithoutApplicationsLoadsEmptyApplicationList() {
+        val decoded = EvidenceGraphCodec.decode(
+            """{"schemaVersion":1,"claims":[],"sources":[],"candidates":[]}"""
+        )
+
+        assertTrue(decoded.applications.isEmpty())
     }
 
     @Test
