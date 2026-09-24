@@ -90,6 +90,7 @@ import com.lumena.android.settings.AdaptiveWebResearchStore
 import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.FollowUpGoal
 import com.lumena.android.agent.core.ProjectContextResolver
+import com.lumena.android.agent.core.PreviousTaskOutcomeContext
 import com.lumena.android.agent.core.ResearchThreadResolver
 import com.lumena.android.agent.core.ResearchThreadState
 import com.lumena.android.agent.core.ReflexRuntimeAdvice
@@ -705,9 +706,18 @@ fun WorkflowChatScreen(
                 coordinator.pauseForApproval(runToken)
             }
             is WorkflowOutcome.Failed -> {
-                history = outcome.history
+                val failedTask = outcome.control.task
+                history =
+                    outcome.history +
+                        OllamaMessage(
+                            "user",
+                            PreviousTaskOutcomeContext.failure(
+                                task = failedTask,
+                                message = outcome.message
+                            )
+                        )
                 pending = null
-                currentTask = outcome.control.task
+                currentTask = failedTask
                 bubbles += ChatBubble("error", outcome.message)
                 coordinator.finish(runToken, "Failed")
                 taskApprovals.remove(taskId)
