@@ -62,18 +62,13 @@ object FollowUpGoal {
         if (normalized.length > 320) return false
 
         val retryDirective = Regex(
-            "(?iu)^(?:повтори|повторити|продовж|продовжуй|спробуй\s+ще\s+раз|" +
-                "повторить|продолжи|продолжай|попробуй\s+ещ[её]\s+раз|" +
-                "repeat|retry|try\s+again|continue|resume|" +
-                "powtórz|powtorz|spróbuj\s+ponownie|sprobuj\s+ponownie|kontynuuj)\b"
+            """(?iu)^(?:повтори|повторити|продовж|продовжуй|спробуй\s+ще\s+раз|повторить|продолжи|продолжай|попробуй\s+ещ[её]\s+раз|repeat|retry|try\s+again|continue|resume|powtórz|powtorz|spróbuj\s+ponownie|sprobuj\s+ponownie|kontynuuj)\b"""
         )
         val priorObject = Regex(
-            "(?iu)\b(?:завдан(?:ня|ню|нням)|запит(?:у|ом)?|задач[а-я]*|" +
-                "task|request|goal|zadani[ea]|zapytani[ea])\b"
+            """(?iu)\b(?:завдан(?:ня|ню|нням)|запит(?:у|ом)?|задач[а-я]*|task|request|goal|zadani[ea]|zapytani[ea])\b"""
         )
         val priorPointer = Regex(
-            "(?iu)\b(?:вище|попередн[а-яіїєґ]*|раніш[еє]|предыдущ[а-я]*|выше|" +
-                "above|previous|earlier|poprzedn[iaey]*|powyżej)\b"
+            """(?iu)\b(?:вище|попередн[а-яіїєґ]*|раніш[еє]|предыдущ[а-я]*|выше|above|previous|earlier|poprzedn[iaey]*|powyżej)\b"""
         )
 
         return retryDirective.containsMatchIn(normalized) &&
