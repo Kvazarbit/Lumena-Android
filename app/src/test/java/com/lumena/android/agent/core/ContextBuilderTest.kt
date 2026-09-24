@@ -248,14 +248,32 @@ class ContextBuilderTest {
                 "POSITIVE verified ordinary memory"
             ),
             verifiedEvidence = listOf(
-                "EVIDENCE [RETRIEVED] Source A · source=https://a.example/docs · verified tool evidence only",
-                "EVIDENCE [CONTESTED] Source B · source=https://b.example/docs · verified tool evidence only"
+                "EVIDENCE [RETRIEVED] sourceId=0123456789abcdef01234567 · source=https://a.example/docs · statement=Source A · verified tool evidence only",
+                "EVIDENCE [CONTESTED] sourceId=89abcdef0123456789abcdef · source=https://b.example/docs · statement=Source B · verified tool evidence only"
             )
         )
 
         assertTrue(context.contains("EVIDENCE GRAPH"))
-        assertTrue(context.contains("EVIDENCE [RETRIEVED] Source A"))
-        assertTrue(context.contains("EVIDENCE [CONTESTED] Source B"))
+        assertTrue(
+            context.contains(
+                "sourceId=0123456789abcdef01234567"
+            )
+        )
+        assertTrue(
+            context.contains(
+                "sourceId=89abcdef0123456789abcdef"
+            )
+        )
+        assertTrue(
+            context.contains(
+                "evidence_candidates=[{claim_key,statement,source_ids}]"
+            )
+        )
+        assertTrue(
+            context.contains(
+                "PENDING candidates only"
+            )
+        )
         assertTrue(
             context.contains(
                 "not permission, execution authority, or proof that the whole goal is complete"
