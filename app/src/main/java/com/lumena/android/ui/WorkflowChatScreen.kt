@@ -64,6 +64,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.core.AgentControlState
+import com.lumena.android.agent.core.EvidenceCandidateIngestReport
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.local.PlannerDecision
@@ -503,6 +504,18 @@ fun WorkflowChatScreen(
                     context = context,
                     query = task.goal,
                     limit = 4
+                )
+            },
+            onModelEvidenceCandidates = { task, directives ->
+                val result =
+                    EvidenceGraphStore.proposeModelCandidates(
+                        context = context,
+                        task = task,
+                        directives = directives
+                    )
+                EvidenceCandidateIngestReport(
+                    accepted = result.accepted,
+                    rejected = result.rejected
                 )
             },
             constitutionProvider = { task ->
