@@ -88,6 +88,7 @@ import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.settings.ContextCheckpointStore
 import com.lumena.android.settings.AdaptiveWebResearchStore
 import com.lumena.android.agent.core.ContextKernel
+import com.lumena.android.agent.core.EvidenceApplicationStatus
 import com.lumena.android.agent.core.FollowUpGoal
 import com.lumena.android.agent.core.ProjectContextResolver
 import com.lumena.android.agent.core.PreviousTaskOutcomeContext
@@ -587,15 +588,45 @@ fun WorkflowChatScreen(
                                 result = result
                             )
                         }
-                        runCatching {
-                            EvidenceGraphStore.recordMatchingProjectOutcomes(
-                                context = context,
-                                taskProjectId = projectId,
-                                request = request,
-                                result = result,
-                                evidenceId = eventId
-                            )
-                        }
+                        val projectOutcomes =
+                            runCatching {
+                                EvidenceGraphStore
+                                    .recordMatchingProjectOutcomes(
+                                        context = context,
+                                        taskProjectId = projectId,
+                                        request = request,
+                                        result = result,
+                                        evidenceId = eventId
+                                    )
+                            }.getOrDefault(emptyList())
+
+                        projectOutcomes
+                            .asSequence()
+                            .filter { it.accepted }
+                            .mapNotNull { update ->
+                                val bindingId =
+                                    update.bindingId
+                                        ?: return@mapNotNull null
+                                update.state.applications
+                                    .firstOrNull {
+                                        it.id == bindingId &&
+                                            it.status ==
+                                            EvidenceApplicationStatus.VERIFIED
+                                    }
+                            }
+                            .distinctBy { it.id }
+                            .forEach { binding ->
+                                runCatching {
+                                    ConstitutionGenomeStore
+                                        .ingestVerifiedProjectApplication(
+                                            context = context,
+                                            task = task,
+                                            binding = binding,
+                                            contributorModelId =
+                                                constitutionContributorModelId
+                                        )
+                                }
+                            }
                     }
 
                 val episodeSessionId = task.projectId
