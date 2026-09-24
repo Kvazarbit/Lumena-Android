@@ -46,9 +46,17 @@ class AgentControllerTest {
         val state = controller.initial(mixed)
 
         assertEquals(TaskIntent.CODE_WORK, state.intent)
-        assertEquals(8, state.task.maxSteps)
+        assertEquals(11, state.task.maxSteps)
         assertTrue("web.read" in state.recommendedTools)
         assertTrue("python.tests" in state.recommendedTools)
+        assertEquals(
+            setOf(
+                "web.read",
+                "python.syntax_check",
+                "python.tests"
+            ),
+            state.requiredTools
+        )
     }
 
     @Test
@@ -74,6 +82,166 @@ class AgentControllerTest {
         )
         assertEquals(TaskIntent.GENERAL, general.intent)
         assertEquals(4, general.task.maxSteps)
+    }
+
+
+    @Test
+    fun requiredWebEvidenceBlocksMutationUntilSuccessfulRead() {
+        val task = TaskState(
+            id = "required-web-before-write",
+            projectId = "e2e_step87",
+            goal = """
+                Прочитай через web.read https://docs.python.org/3/library/pathlib.html
+                Потім створи Python файл і запусти python.tests.
+            """.trimIndent(),
+            status = TaskStatus.WAITING_MODEL
+        )
+        var state = controller.initial(task)
+
+        val blocked = controller.interpret(
+            """{"tool":"file.write","args":{"path":"e2e_step87/a.py","content":"print('ok')"}}""",
+            state
+        )
+        assertTrue(blocked is ControllerInstruction.AskModelAgain)
+        assertEquals(0, blocked.state.task.step)
+
+        val web = controller.interpret(
+            """{"tool":"web.read","args":{"url":"https://docs.python.org/3/library/pathlib.html"}}""",
+            blocked.state
+        )
+        assertTrue(web is ControllerInstruction.Execute)
+        web as ControllerInstruction.Execute
+
+        state = controller.afterTool(
+            state = web.state,
+            call = web.call,
+            ok = true,
+            stdout = "Path.mkdir documentation",
+            stderr = "",
+            error = null
+        ).state
+
+        assertTrue("web.read" in state.completedRequiredTools)
+
+        val write = controller.interpret(
+            """{"tool":"file.write","args":{"path":"e2e_step87/a.py","content":"print('ok')"}}""",
+            state
+        )
+        assertTrue(write is ControllerInstruction.Execute)
+    }
+
+    @Test
+    fun doneIsBlockedUntilExplicitRequiredToolsHaveSuccessfulResults() {
+        val task = TaskState(
+            id = "required-before-done",
+            projectId = "demo",
+            goal = "Запусти python.tests для проекту.",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val state = controller.initial(task)
+
+        val done = controller.interpret(
+            """{"done":true,"summary":"done"}""",
+            state.copy(toolUsed = true)
+        )
+
+        assertTrue(done is ControllerInstruction.AskModelAgain)
+        done as ControllerInstruction.AskModelAgain
+        assertTrue(done.feedback.contains("python.tests"))
+    }
+
+    @Test
+    fun repeatedSuccessfulWriteIsRejectedWithoutConsumingAnotherToolStep() {
+        val task = TaskState(
+            id = "duplicate-write",
+            projectId = "demo",
+            goal = "Створи Python файл.",
+            status = TaskStatus.WAITING_MODEL
+        )
+        var state = controller.initial(task)
+        val first = controller.interpret(
+            """{"tool":"file.write","args":{"path":"demo/a.py","content":"print('ok')"}}""",
+            state
+        )
+        assertTrue(first is ControllerInstruction.Execute)
+        first as ControllerInstruction.Execute
+
+        state = controller.afterTool(
+            state = first.state,
+            call = first.call,
+            ok = true,
+            stdout = "wrote",
+            stderr = "",
+            error = null
+        ).state
+        val stepAfterFirst = state.task.step
+
+        val duplicate = controller.interpret(
+            """{"tool":"file.write","args":{"path":"demo/a.py","content":"print('ok')"}}""",
+            state
+        )
+
+        assertTrue(duplicate is ControllerInstruction.AskModelAgain)
+        assertEquals(stepAfterFirst, duplicate.state.task.step)
+    }
+
+    @Test
+    fun freshTargetVerificationIsNotRepeatedAfterUnrelatedMutation() {
+        val task = TaskState(
+            id = "duplicate-verify",
+            projectId = "demo",
+            goal = "Створи і перевір Python файли.",
+            status = TaskStatus.WAITING_MODEL
+        )
+        var state = controller.initial(task)
+
+        fun after(
+            current: AgentControlState,
+            call: AgentDecision.ToolCall
+        ): AgentControlState =
+            controller.afterTool(
+                state = current,
+                call = call,
+                ok = true,
+                stdout = "ok",
+                stderr = "",
+                error = null
+            ).state
+
+        state = after(
+            state,
+            AgentDecision.ToolCall(
+                "file.write",
+                mapOf(
+                    "path" to "demo/a.py",
+                    "content" to "print('a')"
+                )
+            )
+        )
+        state = after(
+            state,
+            AgentDecision.ToolCall(
+                "python.syntax_check",
+                mapOf("script" to "demo/a.py")
+            )
+        )
+        state = after(
+            state,
+            AgentDecision.ToolCall(
+                "file.write",
+                mapOf(
+                    "path" to "demo/b.py",
+                    "content" to "print('b')"
+                )
+            )
+        )
+
+        val duplicate = controller.interpret(
+            """{"tool":"python.syntax_check","args":{"script":"demo/a.py"}}""",
+            state
+        )
+
+        assertTrue(duplicate is ControllerInstruction.AskModelAgain)
     }
 
     @Test
