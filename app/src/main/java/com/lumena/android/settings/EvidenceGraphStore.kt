@@ -342,6 +342,105 @@ object EvidenceGraphProjector {
 }
 
 /**
+ * Pure URL-to-local-source resolver for semantic model proposals.
+ *
+ * The model supplies human-usable URLs, never internal source IDs. Every URL
+ * must already exist in the local Evidence Graph. When the same URL has both a
+ * search snippet and an actually retrieved source, the retrieved source is
+ * preferred deterministically.
+ */
+object EvidenceGraphCandidateResolver {
+    fun proposeFromUrls(
+        state: EvidenceGraphState,
+        task: TaskState,
+        claimKey: String,
+        statement: String,
+        sourceUrls: List<String>,
+        now: Long
+    ): EvidenceClaimCandidateUpdate {
+        if (
+            sourceUrls.isEmpty() ||
+            sourceUrls.size > 8 ||
+            now <= 0
+        ) {
+            return EvidenceClaimCandidateUpdate(
+                state = state,
+                accepted = false,
+                reason = "INVALID_SOURCE_URLS"
+            )
+        }
+
+        val normalized = sourceUrls
+            .map(EvidenceGraphProjector::normalizeUrl)
+
+        if (
+            normalized.any(String::isBlank) ||
+            normalized.distinct().size != normalized.size
+        ) {
+            return EvidenceClaimCandidateUpdate(
+                state = state,
+                accepted = false,
+                reason = "INVALID_OR_DUPLICATE_SOURCE_URL"
+            )
+        }
+
+        val selectedSources = normalized.map { url ->
+            state.sources
+                .filter {
+                    EvidenceGraphProjector.normalizeUrl(
+                        it.uri
+                    ) == url
+                }
+                .sortedWith(
+                    compareBy<com.lumena.android.agent.core.EvidenceSourceNode> {
+                        it.kind ==
+                            EvidenceSourceKind.SEARCH_SNIPPET
+                    }.thenByDescending {
+                        it.lastObservedAt
+                    }
+                )
+                .firstOrNull()
+                ?: return EvidenceClaimCandidateUpdate(
+                    state = state,
+                    accepted = false,
+                    reason =
+                        "SOURCE_URL_NOT_IN_LOCAL_GRAPH:$url"
+                )
+        }
+
+        val sourceIds = selectedSources
+            .map { it.id }
+            .distinct()
+
+        val linkedClaims = state.claims.filter { claim ->
+            sourceIds.any { sourceId ->
+                sourceId in claim.supportSourceIds ||
+                    sourceId in claim.contradictionSourceIds ||
+                    sourceId in claim.mentionSourceIds
+            }
+        }
+        val projectRelevance = linkedClaims
+            .maxOfOrNull { it.projectRelevance }
+            ?.coerceIn(0.0, 1.0)
+            ?: 0.0
+
+        return EvidenceGraphClaimPolicy.propose(
+            state = state,
+            proposal = EvidenceClaimProposal(
+                claimKey = claimKey,
+                statement = statement,
+                sourceIds = sourceIds,
+                provenance =
+                    EvidenceClaimCandidateProvenance.MODEL_PROPOSAL,
+                proposedAt = now,
+                projectId = task.projectId,
+                projectRelevance = projectRelevance
+            )
+        )
+    }
+}
+
+/**
  * App-private atomic source-evidence store.
  *
  * Corrupt persistence fails closed instead of silently replacing history.
@@ -437,84 +536,15 @@ object EvidenceGraphStore {
         now: Long = System.currentTimeMillis()
     ): EvidenceClaimCandidateUpdate = synchronized(lock) {
         val current = load(context)
-
-        if (
-            sourceUrls.isEmpty() ||
-            sourceUrls.size > 8
-        ) {
-            return@synchronized EvidenceClaimCandidateUpdate(
+        val update =
+            EvidenceGraphCandidateResolver.proposeFromUrls(
                 state = current,
-                accepted = false,
-                reason = "INVALID_SOURCE_URLS"
-            )
-        }
-
-        val normalized = sourceUrls
-            .map(EvidenceGraphProjector::normalizeUrl)
-
-        if (
-            normalized.any(String::isBlank) ||
-            normalized.distinct().size != normalized.size
-        ) {
-            return@synchronized EvidenceClaimCandidateUpdate(
-                state = current,
-                accepted = false,
-                reason = "INVALID_OR_DUPLICATE_SOURCE_URL"
-            )
-        }
-
-        val selectedSources = normalized.map { url ->
-            current.sources
-                .filter {
-                    EvidenceGraphProjector.normalizeUrl(
-                        it.uri
-                    ) == url
-                }
-                .sortedWith(
-                    compareBy<com.lumena.android.agent.core.EvidenceSourceNode> {
-                        it.kind ==
-                            EvidenceSourceKind.SEARCH_SNIPPET
-                    }.thenByDescending {
-                        it.lastObservedAt
-                    }
-                )
-                .firstOrNull()
-                ?: return@synchronized EvidenceClaimCandidateUpdate(
-                    state = current,
-                    accepted = false,
-                    reason = "SOURCE_URL_NOT_IN_LOCAL_GRAPH:$url"
-                )
-        }
-
-        val sourceIds = selectedSources
-            .map { it.id }
-            .distinct()
-
-        val linkedClaims = current.claims.filter { claim ->
-            sourceIds.any { sourceId ->
-                sourceId in claim.supportSourceIds ||
-                    sourceId in claim.contradictionSourceIds ||
-                    sourceId in claim.mentionSourceIds
-            }
-        }
-        val projectRelevance = linkedClaims
-            .maxOfOrNull { it.projectRelevance }
-            ?.coerceIn(0.0, 1.0)
-            ?: 0.0
-
-        val update = EvidenceGraphClaimPolicy.propose(
-            state = current,
-            proposal = EvidenceClaimProposal(
+                task = task,
                 claimKey = claimKey,
                 statement = statement,
-                sourceIds = sourceIds,
-                provenance =
-                    EvidenceClaimCandidateProvenance.MODEL_PROPOSAL,
-                proposedAt = now,
-                projectId = task.projectId,
-                projectRelevance = projectRelevance
+                sourceUrls = sourceUrls,
+                now = now
             )
-        )
 
         if (
             update.accepted &&
