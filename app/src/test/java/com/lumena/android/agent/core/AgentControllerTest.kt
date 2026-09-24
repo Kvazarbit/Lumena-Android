@@ -892,6 +892,11 @@ class AgentControllerTest {
 
         val first = controller.interpret(raw, state)
         assertTrue(first is ControllerInstruction.AskModelAgain)
+        first as ControllerInstruction.AskModelAgain
+        assertTrue(first.feedback.contains("PROTOCOL_REPAIR_MODE retry=1"))
+        assertTrue(first.feedback.contains("Return EXACTLY ONE JSON object"))
+        assertTrue(first.feedback.contains("{\"tool\":\"registered.tool\",\"args\":{}}"))
+        assertTrue(first.feedback.contains("NOTHING from it was run"))
         state = first.state
 
         val second = controller.interpret(raw, state)

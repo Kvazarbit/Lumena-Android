@@ -878,13 +878,21 @@ class AgentController(
         return when (decision) {
             is RecoveryDecision.RetryVariant ->
                 ControllerInstruction.AskModelAgain(
-                    feedback = "Protocol correction: $problem ${decision.guidance} Continue the SAME task from verified state. Do not claim success unless a tool result proves it.",
+                    feedback = protocolRepairFeedback(
+                        problem = problem,
+                        guidance = decision.guidance,
+                        retry = retries
+                    ),
                     state = next
                 )
 
             is RecoveryDecision.TryAlternative ->
                 ControllerInstruction.AskModelAgain(
-                    feedback = "Protocol correction: $problem ${decision.guidance} Continue the SAME task from verified state. Do not claim success unless a tool result proves it.",
+                    feedback = protocolRepairFeedback(
+                        problem = problem,
+                        guidance = decision.guidance,
+                        retry = retries
+                    ),
                     state = next
                 )
 
@@ -901,6 +909,28 @@ class AgentController(
                 )
         }
     }
+
+    private fun protocolRepairFeedback(
+        problem: String,
+        guidance: String,
+        retry: Int
+    ): String = buildString {
+        appendLine("PROTOCOL_REPAIR_MODE retry=$retry")
+        appendLine("The previous model output was not executable and NOTHING from it was run.")
+        appendLine("Return EXACTLY ONE JSON object and no prose, markdown or extra JSON.")
+        appendLine("Allowed roots:")
+        appendLine("{\"tool\":\"registered.tool\",\"args\":{}}")
+        appendLine("{\"done\":true,\"summary\":\"...\"}")
+        appendLine("{\"partial\":true,\"summary\":\"...\"}")
+        appendLine("{\"reply\":\"...\"}")
+        appendLine("Do not echo the malformed output. Do not invent TOOL_RESULT.")
+        appendLine("Continue the SAME task from verified state only.")
+        appendLine("Problem: " + problem.take(1_200))
+        guidance.takeIf { it.isNotBlank() }?.let {
+            append("Recovery guidance: ")
+            append(it.take(500))
+        }
+    }.take(2_800)
 
     private fun actionFamilyFailureLimit(
         state: AgentControlState,
