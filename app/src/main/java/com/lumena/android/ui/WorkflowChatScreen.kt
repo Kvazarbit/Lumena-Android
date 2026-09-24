@@ -582,6 +582,7 @@ fun WorkflowChatScreen(
                             EvidenceGraphStore.autoBindForSuccessfulMutation(
                                 context = context,
                                 taskProjectId = projectId,
+                                taskGoal = task.goal,
                                 request = request,
                                 result = result
                             )
