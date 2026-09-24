@@ -29,7 +29,9 @@ data class AgentControlState(
     val recommendedTools: List<String> = emptyList(),
     val intentGuidance: String? = null,
     val preflightCompleted: Boolean = false,
-    val recoveryHint: String? = null
+    val recoveryHint: String? = null,
+    val evidenceCandidatesProposed: Int = 0,
+    val evidenceCandidateSignatures: List<String> = emptyList()
 )
 
 sealed interface ControllerInstruction {
@@ -43,6 +45,17 @@ sealed interface ControllerInstruction {
 
     data class Finish(
         val text: String,
+        override val state: AgentControlState
+    ) : ControllerInstruction
+
+    /**
+     * Advisory, non-tool protocol action.
+     *
+     * Runtime may persist this as a PENDING semantic evidence candidate, but
+     * no ToolGate execution or permission is implied.
+     */
+    data class ProposeEvidenceCandidate(
+        val candidate: AgentDecision.EvidenceCandidate,
         override val state: AgentControlState
     ) : ControllerInstruction
 
@@ -214,6 +227,8 @@ class AgentController(
         state: AgentControlState
     ): ControllerInstruction = when (decision) {
         is AgentDecision.ToolCall -> interpretTool(decision, state)
+        is AgentDecision.EvidenceCandidate ->
+            interpretEvidenceCandidate(decision, state)
         is AgentDecision.Done -> interpretDone(decision, state)
         is AgentDecision.Partial -> ControllerInstruction.Finish(
             "Частково виконано.\n${decision.summary}",
@@ -225,6 +240,57 @@ class AgentController(
             )
         )
         is AgentDecision.Reply -> interpretReply(decision, state)
+    }
+
+    private fun interpretEvidenceCandidate(
+        decision: AgentDecision.EvidenceCandidate,
+        state: AgentControlState
+    ): ControllerInstruction {
+        val maxCandidatesPerTask = 2
+        if (
+            state.evidenceCandidatesProposed >=
+            maxCandidatesPerTask
+        ) {
+            return protocolRetry(
+                state,
+                "Evidence candidate budget is exhausted. " +
+                    "Do not propose another evidence_candidate in this task. " +
+                    "Use a real evidence-producing tool if needed, or return " +
+                    "done/partial/reply from verified evidence."
+            )
+        }
+
+        val signature = evidenceCandidateSignature(decision)
+        if (signature in state.evidenceCandidateSignatures) {
+            return protocolRetry(
+                state,
+                "Duplicate evidence_candidate was not stored again. " +
+                    "Continue the SAME task using verified evidence; " +
+                    "do not repeat the same semantic proposal."
+            )
+        }
+
+        val next = state.copy(
+            protocolRetries = 0,
+            modelFailures = 0,
+            evidenceCandidatesProposed =
+                state.evidenceCandidatesProposed + 1,
+            evidenceCandidateSignatures =
+                (
+                    state.evidenceCandidateSignatures +
+                        signature
+                    )
+                    .distinct()
+                    .takeLast(maxCandidatesPerTask),
+            task = state.task.copy(
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        return ControllerInstruction.ProposeEvidenceCandidate(
+            candidate = decision,
+            state = next
+        )
     }
 
     private fun interpretTool(
@@ -946,6 +1012,26 @@ class AgentController(
             errors = (state.task.errors + reason).takeLast(8)
         )
     )
+
+    private fun evidenceCandidateSignature(
+        candidate: AgentDecision.EvidenceCandidate
+    ): String =
+        buildString {
+            append(candidate.claimKey.trim().lowercase())
+            append('|')
+            append(
+                candidate.statement
+                    .trim()
+                    .lowercase()
+            )
+            append('|')
+            append(
+                candidate.sourceUrls
+                    .map(String::trim)
+                    .sorted()
+                    .joinToString(",")
+            )
+        }
 
     private fun signature(call: AgentDecision.ToolCall): String {
         val args = call.args.toSortedMap().entries.joinToString("&") { (k, v) -> "$k=${v.trim()}" }
