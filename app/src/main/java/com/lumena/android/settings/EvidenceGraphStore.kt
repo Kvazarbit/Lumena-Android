@@ -488,10 +488,20 @@ object EvidenceGraphStore {
         for (claim in orderedClaims) {
             if (retainedClaims.size >= MAX_CLAIMS) break
 
+            val semanticSourceIds =
+                state.semanticLinks
+                    .asSequence()
+                    .filter {
+                        it.claimId == claim.id
+                    }
+                    .map { it.sourceId }
+                    .toList()
+
             val claimSourceIds = (
                 claim.supportSourceIds +
                     claim.contradictionSourceIds +
-                    claim.mentionSourceIds
+                    claim.mentionSourceIds +
+                    semanticSourceIds
                 )
                 .distinct()
 
@@ -516,9 +526,26 @@ object EvidenceGraphStore {
             .filter { it.id in retainedSourceIds }
             .sortedByDescending { it.lastObservedAt }
 
+        val retainedClaimIds =
+            retainedClaims
+                .map { it.id }
+                .toSet()
+        val retainedSemanticLinks =
+            state.semanticLinks
+                .filter {
+                    it.claimId in retainedClaimIds &&
+                        it.sourceId in retainedSourceIds
+                }
+                .sortedByDescending { it.at }
+                .take(
+                    com.lumena.android.agent.core
+                        .EvidenceSemanticLinkPolicy.MAX_LINKS
+                )
+
         return state.copy(
             claims = retainedClaims,
-            sources = retainedSources
+            sources = retainedSources,
+            semanticLinks = retainedSemanticLinks
         )
     }
 
