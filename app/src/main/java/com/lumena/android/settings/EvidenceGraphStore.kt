@@ -737,16 +737,22 @@ object EvidenceGraphStore {
             .firstOrNull()
 
         val sourceText = source?.let {
-            "${it.uri} sourceId=${it.id} via=${it.retrievalMethod}"
+            "${it.uri} via=${it.retrievalMethod}"
         } ?: "(source unavailable)"
 
         return buildString {
             append("EVIDENCE [")
             append(effective.name)
             append("] ")
+            source?.let {
+                append("sourceId=")
+                append(it.id)
+                append(" · ")
+            }
+            append("source=")
+            append(sourceText.take(520))
+            append(" · statement=")
             append(claim.statement.take(500))
-            append(" · source=")
-            append(sourceText.take(700))
             append(" · projectRelevance=")
             append(
                 (
