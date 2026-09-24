@@ -27,6 +27,9 @@ import com.lumena.android.settings.PortableKernelStore
 import com.lumena.android.settings.ConstitutionGenomeInspectorPolicy
 import com.lumena.android.settings.ConstitutionGenomeStore
 import com.lumena.android.settings.ConstitutionInspectorSnapshot
+import com.lumena.android.settings.EvidenceGraphInspectorPolicy
+import com.lumena.android.settings.EvidenceGraphStore
+import com.lumena.android.settings.EvidenceInspectorSnapshot
 import com.lumena.android.settings.LandscapeRuleStatus
 import com.lumena.android.settings.LandscapeSnapshot
 import com.lumena.android.agent.core.CoreDna
@@ -53,6 +56,8 @@ internal fun ExperienceLandscapePanel(busy: Boolean, refreshKey: String) {
     var portabilityStatus by remember { mutableStateOf<String?>(null) }
     var constitutionInspectorExpanded by rememberSaveable { mutableStateOf(false) }
     var constitutionInspectorError by remember { mutableStateOf<String?>(null) }
+    var evidenceInspectorExpanded by rememberSaveable { mutableStateOf(false) }
+    var evidenceInspectorError by remember { mutableStateOf<String?>(null) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
@@ -159,6 +164,31 @@ internal fun ExperienceLandscapePanel(busy: Boolean, refreshKey: String) {
             }
         }
     }
+    val evidenceInspector by produceState<EvidenceInspectorSnapshot?>(
+        null,
+        evidenceInspectorExpanded,
+        busy,
+        refreshKey,
+        revision
+    ) {
+        if (evidenceInspectorExpanded) {
+            try {
+                value = withContext(Dispatchers.IO) {
+                    EvidenceGraphInspectorPolicy.build(
+                        state = EvidenceGraphStore.load(context),
+                        now = System.currentTimeMillis()
+                    )
+                }
+                evidenceInspectorError = null
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                evidenceInspectorError =
+                    "Не вдалося прочитати Evidence Graph: " +
+                        failure.message
+            }
+        }
+    }
     fun edit(action: () -> Unit) {
         if (busy || editing) return
         editing = true
@@ -175,7 +205,7 @@ internal fun ExperienceLandscapePanel(busy: Boolean, refreshKey: String) {
         }
     }
     TextButton(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth()) {
-        Text((if (expanded) "▾ " else "▸ ") + "Ландшафт досвіду та конституція")
+        Text((if (expanded) "▾ " else "▸ ") + "Ландшафт досвіду · Evidence Graph · конституція")
     }
     if (!expanded) return
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -244,6 +274,36 @@ internal fun ExperienceLandscapePanel(busy: Boolean, refreshKey: String) {
                 Text("Завантаження Constitution Genome…")
             } else if (inspector != null) {
                 ConstitutionGenomeInspectorPanel(inspector)
+            }
+        }
+
+        TextButton(
+            onClick = {
+                evidenceInspectorExpanded =
+                    !evidenceInspectorExpanded
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                (if (evidenceInspectorExpanded) "▾ " else "▸ ") +
+                    "Evidence Graph Inspector"
+            )
+        }
+        if (evidenceInspectorExpanded) {
+            evidenceInspectorError?.let {
+                Text(
+                    it,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            val inspector = evidenceInspector
+            if (
+                inspector == null &&
+                evidenceInspectorError == null
+            ) {
+                Text("Завантаження Evidence Graph…")
+            } else if (inspector != null) {
+                EvidenceGraphInspectorPanel(inspector)
             }
         }
 
