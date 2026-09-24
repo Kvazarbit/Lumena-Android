@@ -226,6 +226,71 @@ class WorkflowRunnerTest {
         assertEquals("web.search", requests.single().tool)
     }
 
+
+    @Test
+    fun malformedProtocolIsNotFedBackAndNextStrictRepairCanRecover() = runBlocking {
+        val modelCalls = AtomicInteger(0)
+        var secondTurnMessages: List<OllamaMessage> = emptyList()
+        val malformed = """{"reply":"broken""""
+
+        val modelClient = object : ChatModelClient {
+            override suspend fun chat(
+                model: String,
+                messages: List<OllamaMessage>
+            ): Result<String> {
+                return when (modelCalls.incrementAndGet()) {
+                    1 -> Result.success(malformed)
+                    else -> {
+                        secondTurnMessages = messages
+                        Result.success(
+                            """{"reply":"Recovered through strict JSON repair."}"""
+                        )
+                    }
+                }
+            }
+        }
+
+        val task = TaskState(
+            id = "protocol-repair-e2e",
+            projectId = "demo_project",
+            goal = "Поясни коротко стан тесту",
+            status = TaskStatus.WAITING_MODEL
+        )
+
+        val outcome = WorkflowRunner(
+            modelClient = modelClient,
+            bridge = null,
+            model = "fixture"
+        ).run(
+            history = listOf(
+                OllamaMessage("user", task.goal)
+            ),
+            task = task
+        )
+
+        assertTrue(outcome is WorkflowOutcome.Finished)
+        outcome as WorkflowOutcome.Finished
+        assertEquals(TaskStatus.DONE, outcome.control.task.status)
+        assertEquals(2, modelCalls.get())
+        assertTrue(
+            secondTurnMessages.any {
+                it.role == "user" &&
+                    it.content.contains("PROTOCOL_REPAIR_MODE retry=1")
+            }
+        )
+        assertFalse(
+            secondTurnMessages.any {
+                it.role == "assistant" &&
+                    it.content == malformed
+            }
+        )
+        assertTrue(
+            outcome.text.contains(
+                "Recovered through strict JSON repair."
+            )
+        )
+    }
+
     @Test
     fun exhaustedContextFailureStopsAfterOneModelAttempt() = runBlocking {
         val modelCalls = AtomicInteger(0)
