@@ -214,7 +214,7 @@ class AgentController(
                 protocolRetry(
                     state = state,
                     problem = "Protocol ${normalized.kind} [${event.failureClass}]: ${event.evidence}. " +
-                        "Return exactly one valid tool/done/partial/reply JSON object." +
+                        "Return exactly one valid tool/evidence_candidate/done/partial/reply JSON object." +
                         webContinuationHint,
                     observedEvent = event
                 )
@@ -477,7 +477,7 @@ class AgentController(
     ): ControllerInstruction {
         val trimmed = decision.text.trim()
         if (trimmed.isEmpty()) {
-            return protocolRetry(state, "The model returned no answer. Return one valid tool/done/partial/reply JSON object.")
+            return protocolRetry(state, "The model returned no answer. Return one valid tool/evidence_candidate/done/partial/reply JSON object.")
         }
         val hasProtocolJsonShape =
             trimmed.contains("{") &&
@@ -498,7 +498,7 @@ class AgentController(
         if (looksLikeBrokenProtocol) {
             return protocolRetry(
                 state,
-                "The previous output looked like a tool/protocol message but could not be parsed safely. Return exactly one valid tool/done/partial/reply JSON object. No proposed tool was executed."
+                "The previous output looked like a tool/protocol message but could not be parsed safely. Return exactly one valid tool/evidence_candidate/done/partial/reply JSON object. No proposed tool was executed."
             )
         }
 
