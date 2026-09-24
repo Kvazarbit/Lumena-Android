@@ -364,7 +364,7 @@ object EvidenceGraphInspectorPolicy {
 
         claim.verificationState ==
             EvidenceVerificationState.CORROBORATED ->
-            "Supported by at least two independent source hosts. This strengthens evidence, but does not grant permission or prove the whole task complete."
+            "Supported by at least two independent source hosts. This strengthens evidence, but is not execution permission and does not prove the whole task complete."
 
         claim.verificationState ==
             EvidenceVerificationState.RETRIEVED ->
