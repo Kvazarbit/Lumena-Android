@@ -13,6 +13,7 @@ import com.lumena.android.agent.core.ConstitutionRuleKind
 import com.lumena.android.agent.core.ConstitutionRuleStatus
 import com.lumena.android.agent.core.ConstitutionScope
 import com.lumena.android.agent.core.ConstitutionStance
+import com.lumena.android.agent.core.EvidenceApplicationBinding
 import com.lumena.android.agent.core.ConstitutionScopeKind
 import com.lumena.android.agent.core.TaskState
 import com.squareup.moshi.Moshi
@@ -253,6 +254,34 @@ object ConstitutionGenomeStore {
                 evidence = evidence,
                 provenance = provenance
             )
+            if (next != current) save(context, next)
+            next
+        }
+
+    fun ingestVerifiedProjectApplication(
+        context: Context,
+        task: TaskState,
+        binding: EvidenceApplicationBinding,
+        contributorModelId: String? = null
+    ): ConstitutionGenomeState =
+        synchronized(lock) {
+            val current = load(context)
+            val proposal =
+                ConstitutionContributionPolicy
+                    .verifiedProjectApplicationRule(
+                        task = task,
+                        binding = binding,
+                        contributorModelId =
+                            contributorModelId
+                    )
+                    ?: return@synchronized current
+
+            val next =
+                ConstitutionGenomePolicy
+                    .contributeVerifiedAdvisory(
+                        state = current,
+                        proposal = proposal
+                    )
             if (next != current) save(context, next)
             next
         }
