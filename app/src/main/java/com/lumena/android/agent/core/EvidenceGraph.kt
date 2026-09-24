@@ -50,6 +50,13 @@ enum class EvidenceClaimCandidateStatus {
     REJECTED
 }
 
+enum class EvidenceApplicationStatus {
+    PENDING,
+    APPLIED,
+    VERIFIED,
+    REJECTED
+}
+
 data class EvidenceObservation(
     val claimKey: String,
     val statement: String,
@@ -127,11 +134,33 @@ data class EvidenceClaimCandidate(
     }
 }
 
+data class EvidenceApplicationBinding(
+    val id: String,
+    val claimKey: String,
+    val projectId: String,
+    val target: String,
+    val status: EvidenceApplicationStatus = EvidenceApplicationStatus.PENDING,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val artifactEvidenceIds: List<String> = emptyList(),
+    val testEvidenceIds: List<String> = emptyList()
+) {
+    init {
+        require(id.isNotBlank())
+        require(claimKey.isNotBlank())
+        require(projectId.isNotBlank())
+        require(target.isNotBlank())
+        require(createdAt > 0)
+        require(updatedAt >= createdAt)
+    }
+}
+
 data class EvidenceGraphState(
     val schemaVersion: Int = 1,
     val claims: List<EvidenceClaimNode> = emptyList(),
     val sources: List<EvidenceSourceNode> = emptyList(),
-    val candidates: List<EvidenceClaimCandidate> = emptyList()
+    val candidates: List<EvidenceClaimCandidate> = emptyList(),
+    val applications: List<EvidenceApplicationBinding> = emptyList()
 )
 
 data class EvidenceGraphUpdate(
@@ -389,14 +418,30 @@ object EvidenceGraphReducer {
             )
         }
 
+        if (
+            !projectOutcomeTransitionAllowed(
+                from = claim.outcome,
+                to = outcome
+            )
+        ) {
+            return EvidenceGraphUpdate(
+                state = state,
+                accepted = false,
+                reason = "OUTCOME_REGRESSION",
+                claimId = id
+            )
+        }
+
         val nextClaim = claim.copy(
             outcome = outcome,
             outcomeEvidenceIds = (
                 claim.outcomeEvidenceIds + proof.evidenceId
                 )
                 .distinct()
-                .takeLast(32),
-            lastObservedAt = maxOf(claim.lastObservedAt, proof.at)
+                .takeLast(32)
+            // Project application/test evidence must not refresh the age of the
+            // external factual source. Source freshness and project outcome are
+            // deliberately separate dimensions.
         )
 
         return EvidenceGraphUpdate(
@@ -408,6 +453,23 @@ object EvidenceGraphReducer {
             accepted = true,
             claimId = id
         )
+    }
+
+    private fun projectOutcomeTransitionAllowed(
+        from: EvidenceProjectOutcome,
+        to: EvidenceProjectOutcome
+    ): Boolean {
+        if (from == to) return true
+        if (from == EvidenceProjectOutcome.REJECTED) return false
+        if (to == EvidenceProjectOutcome.REJECTED) return true
+
+        val rank = mapOf(
+            EvidenceProjectOutcome.UNKNOWN to 0,
+            EvidenceProjectOutcome.USED_IN_PLAN to 1,
+            EvidenceProjectOutcome.APPLIED_TO_PROJECT to 2,
+            EvidenceProjectOutcome.VERIFIED_BY_TEST to 3
+        )
+        return (rank[to] ?: -1) >= (rank[from] ?: -1)
     }
 
     fun relevantClaims(
