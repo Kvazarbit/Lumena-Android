@@ -27,6 +27,8 @@ data class AgentControlState(
     val intent: TaskIntent = TaskIntent.GENERAL,
     val intentConfidence: Int = 0,
     val recommendedTools: List<String> = emptyList(),
+    val requiredTools: Set<String> = emptySet(),
+    val completedRequiredTools: Set<String> = emptySet(),
     val intentGuidance: String? = null,
     val preflightCompleted: Boolean = false,
     val recoveryHint: String? = null
@@ -72,16 +74,19 @@ class AgentController(
 ) {
     fun initial(task: TaskState): AgentControlState {
         val profile = TaskIntentRouter.route(task.goal)
+        val requiredTools =
+            TaskIntentRouter.explicitRequiredTools(task.goal)
         val reserve = if (profile.preflight != null) 1 else 0
         val initialToolBudget = maxOf(
             task.maxSteps + reserve,
-            profile.minimumToolSteps
+            profile.minimumToolSteps + requiredTools.size
         ).coerceAtMost(budget.maxTotalSteps)
         return AgentControlState(
             task = task.copy(
                 maxSteps = initialToolBudget
             ),
             intent = profile.intent,
+            requiredTools = requiredTools,
             pendingPythonPaths = task.kernel.pendingVerification,
             verificationRequired = task.kernel.pendingVerification.isNotEmpty(),
             verificationReason = task.kernel.pendingVerification.takeIf { it.isNotEmpty() }?.let {
@@ -277,6 +282,121 @@ class AgentController(
 
         val canonical = decision.copy(tool = validation.canonicalTool)
 
+        val pendingRequired =
+            state.requiredTools - state.completedRequiredTools
+        val pendingResearchEvidence =
+            pendingRequired.filterTo(linkedSetOf()) {
+                it in setOf(
+                    "web.search",
+                    "web.read",
+                    "http.get",
+                    "http.json"
+                )
+            }
+
+        if (
+            pendingResearchEvidence.isNotEmpty() &&
+            ToolRegistry.get(canonical.tool)?.risk ==
+                ToolRisk.MUTATING
+        ) {
+            return ControllerInstruction.AskModelAgain(
+                feedback =
+                    "Required research evidence must be obtained before project mutation. " +
+                        "Execute one of the still-required evidence tools first: " +
+                        pendingResearchEvidence.joinToString() +
+                        ". No mutation was executed.",
+                state = state.copy(
+                    task = state.task.copy(
+                        status = TaskStatus.WAITING_MODEL
+                    )
+                )
+            )
+        }
+
+        val freshPendingVerifications =
+            state.pendingPythonPaths.size
+        val remainingSlots =
+            minOf(
+                state.task.maxSteps,
+                budget.maxTotalSteps
+            ) - state.task.step
+        val reservedSlots =
+            pendingRequired.size +
+                freshPendingVerifications
+
+        val satisfiesPendingPathVerification =
+            canonical.tool in setOf(
+                "python.syntax_check",
+                "python.run"
+            ) &&
+                normalizePath(
+                    canonical.args["script"].orEmpty()
+                ) in state.pendingPythonPaths
+
+        if (
+            reservedSlots > 0 &&
+            remainingSlots <= reservedSlots &&
+            canonical.tool !in pendingRequired &&
+            !satisfiesPendingPathVerification
+        ) {
+            return ControllerInstruction.AskModelAgain(
+                feedback =
+                    "The remaining tool budget is reserved for explicit unfinished obligations. " +
+                        "Pending tools: " +
+                        pendingRequired.joinToString()
+                            .ifBlank { "(none)" } +
+                        "; pending Python targets: " +
+                        state.pendingPythonPaths
+                            .sorted()
+                            .joinToString()
+                            .ifBlank { "(none)" } +
+                        ". The proposed " + canonical.tool + " call was not executed.",
+                state = state.copy(
+                    task = state.task.copy(
+                        status = TaskStatus.WAITING_MODEL
+                    )
+                )
+            )
+        }
+
+        if (
+            ContextKernel.redundantSuccessfulMutation(
+                state.task.kernel,
+                canonical
+            )
+        ) {
+            return ControllerInstruction.AskModelAgain(
+                feedback =
+                    "This exact mutation already succeeded and no later failure justifies replaying it. " +
+                        "Use the recorded TOOL_RESULT and continue with unfinished verification/evidence steps. " +
+                        "The duplicate mutation was not executed.",
+                state = state.copy(
+                    task = state.task.copy(
+                        status = TaskStatus.WAITING_MODEL
+                    )
+                )
+            )
+        }
+
+        if (
+            ContextKernel.redundantTargetVerification(
+                state.task.kernel,
+                canonical
+            )
+        ) {
+            return ControllerInstruction.AskModelAgain(
+                feedback =
+                    "This target already has a successful fresh verification after its last mutation. " +
+                        "Do not spend another tool slot repeating it; continue with unfinished obligations. " +
+                        "The duplicate verification was not executed.",
+                state = state.copy(
+                    task = state.task.copy(
+                        status = TaskStatus.WAITING_MODEL
+                    )
+                )
+            )
+        }
+
         if (state.recoveryHint != null &&
             state.semanticRecoverySpent >= semanticRecoveryLimit(state, canonical)
         ) {
@@ -377,6 +497,16 @@ class AgentController(
         state: AgentControlState
     ): ControllerInstruction {
         ContextKernel.completionBlocker(state.task.kernel)?.let { return protocolRetry(state, it) }
+        val missingRequired =
+            state.requiredTools - state.completedRequiredTools
+        if (missingRequired.isNotEmpty()) {
+            return protocolRetry(
+                state,
+                "Explicitly requested tool evidence is still missing: " +
+                    missingRequired.joinToString() +
+                    ". Execute these tools successfully or return partial."
+            )
+        }
         if (requiresToolEvidence(state.intent) && !state.toolUsed) {
             return protocolRetry(
                 state,
@@ -437,6 +567,18 @@ class AgentController(
             return protocolRetry(
                 state,
                 "The previous output looked like a tool/protocol message but could not be parsed safely. Return exactly one valid tool/done/partial/reply JSON object. No proposed tool was executed."
+            )
+        }
+
+        val missingRequired =
+            state.requiredTools - state.completedRequiredTools
+        if (missingRequired.isNotEmpty()) {
+            return recoverPlainReply(
+                state,
+                trimmed,
+                "Explicitly requested tool evidence is still missing: " +
+                    missingRequired.joinToString() +
+                    ". Execute these tools successfully or return partial."
             )
         }
 
@@ -701,9 +843,23 @@ class AgentController(
             stderr = stderr,
             error = error
         )
+        val completedRequiredTools =
+            if (
+                ok &&
+                ToolRegistry.canonicalize(call.tool) in
+                    state.requiredTools
+            ) {
+                state.completedRequiredTools +
+                    ToolRegistry.canonicalize(call.tool)
+            } else {
+                state.completedRequiredTools
+            }
+
         val nextState = state.copy(
             task = nextTask,
             toolUsed = true,
+            completedRequiredTools =
+                completedRequiredTools,
             protocolRetries = 0,
             // modelFailures is a consecutive model-runtime counter. A valid model
             // reply resets it in interpretTool(); tool success/failure must not
