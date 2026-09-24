@@ -10,6 +10,19 @@ sealed interface AgentDecision {
         val plan: List<String> = emptyList()
     ) : AgentDecision
 
+    /**
+     * Non-tool advisory protocol action.
+     *
+     * A model may propose a semantic claim only against source URLs already
+     * present in the local Evidence Graph. This object carries no execution
+     * authority and is never routed through ToolGate as a tool call.
+     */
+    data class EvidenceCandidate(
+        val claimKey: String,
+        val statement: String,
+        val sourceUrls: List<String>
+    ) : AgentDecision
+
     data class Done(val summary: String) : AgentDecision
     data class Partial(val summary: String) : AgentDecision
 }
