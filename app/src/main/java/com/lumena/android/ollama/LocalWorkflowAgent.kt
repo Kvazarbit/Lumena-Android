@@ -25,6 +25,7 @@ object LocalWorkflowAgent {
         - After each TOOL_RESULT continue the SAME goal. If verification is required, verify before done.
         - Once ALL requested outcomes and verification are satisfied, return done. A script printing 'deleted' alone is not proof that the requested files are absent. Do not create chains of cleanup scripts.
         - Use the CONTEXT KERNEL evidence IDs to summarize completed work. Earlier-task memories are historical hints and require fresh checks.
+        - If a reusable semantic fact from an actually retrieved source should be proposed for the Evidence Graph, you MAY return one evidence_candidate JSON action. It is NOT a tool and NOT proof. Use only source URLs already present in EVIDENCE GRAPH CONTEXT and actually retrieved; search snippets alone are insufficient. The application will store at most a PENDING candidate and then return deterministic feedback. Never use evidence_candidate to claim execution, permission, or task completion.
         - When budget is exhausted or work remains unverified, return partial JSON stating what is complete and what remains. Never label incomplete work done.
         - After tool work starts, finish with done or partial JSON, except a verified visual task may finish with a user-facing reply. Ordinary no-tool conversation uses reply JSON.
         - Keep user-facing reply/done text in the user's language unless the user asks for another language.
@@ -40,6 +41,9 @@ object LocalWorkflowAgent {
 
         PARTIAL:
         {"partial":true,"summary":"What completed; what remains or is unknown"}
+
+        EVIDENCE CANDIDATE (optional, non-tool, advisory only):
+        {"action":"evidence_candidate","claim_key":"stable-semantic-key","statement":"One bounded claim grounded in retrieved source text","source_urls":["https://source.example/page"]}
 
         REPLY:
         {"reply":"Answer in the user's language"}
