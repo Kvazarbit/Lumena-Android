@@ -140,6 +140,203 @@ class EvidenceGraphStoreTest {
     }
 
     @Test
+    fun candidateUrlResolverPrefersRetrievedSourceOverSearchSnippet() {
+        val currentTask =
+            task("Android WorkManager persistent background work online")
+
+        val search = EvidenceGraphProjector.fromToolResult(
+            task = currentTask,
+            request = ToolRequest(
+                tool = "web.search",
+                args = mapOf(
+                    "query" to
+                        "Android WorkManager persistent background work"
+                )
+            ),
+            result = ToolResult(
+                ok = true,
+                stdout =
+                    """{"results":[{"title":"WorkManager docs","url":"https://developer.android.com/workmanager","snippet":"Android WorkManager supports persistent background work requests"}]}"""
+            ),
+            evidenceId = "search-ev",
+            now = now
+        ).single()
+
+        val read = EvidenceGraphProjector.fromToolResult(
+            task = currentTask,
+            request = ToolRequest(
+                tool = "web.read",
+                args = mapOf(
+                    "url" to
+                        "https://developer.android.com/workmanager"
+                )
+            ),
+            result = ToolResult(
+                ok = true,
+                stdout =
+                    """{"url":"https://developer.android.com/workmanager","title":"WorkManager docs","text":"Android WorkManager supports persistent background work requests."}"""
+            ),
+            evidenceId = "read-ev",
+            now = now + 1
+        ).single()
+
+        var state = EvidenceGraphReducer.record(
+            EvidenceGraphState(),
+            search
+        ).state
+        state = EvidenceGraphReducer.record(
+            state,
+            read
+        ).state
+
+        val resolved =
+            EvidenceGraphCandidateResolver.proposeFromUrls(
+                state = state,
+                task = currentTask,
+                claimKey =
+                    "android-workmanager-persistent",
+                statement =
+                    "Android WorkManager supports persistent background work.",
+                sourceUrls = listOf(
+                    "https://www.developer.android.com/workmanager/"
+                ),
+                now = now + 2
+            )
+
+        assertTrue(resolved.accepted)
+        val candidate = resolved.state.candidates.single()
+        assertEquals(
+            EvidenceClaimCandidateStatus.PENDING,
+            candidate.status
+        )
+        val bound = state.sources.first {
+            it.id in candidate.sourceIds
+        }
+        assertEquals(
+            EvidenceSourceKind.WEB_PAGE,
+            bound.kind
+        )
+        assertEquals(
+            "lumena",
+            candidate.projectId
+        )
+        assertTrue(candidate.projectRelevance > 0.0)
+    }
+
+    @Test
+    fun candidateUrlResolverRejectsInventedOrDuplicateUrls() {
+        val currentTask =
+            task("Android WorkManager persistent background work online")
+        val read = EvidenceGraphProjector.fromToolResult(
+            task = currentTask,
+            request = ToolRequest(
+                tool = "web.read",
+                args = mapOf(
+                    "url" to
+                        "https://developer.android.com/workmanager"
+                )
+            ),
+            result = ToolResult(
+                ok = true,
+                stdout =
+                    """{"url":"https://developer.android.com/workmanager","title":"WorkManager docs","text":"Android WorkManager supports persistent background work requests."}"""
+            ),
+            evidenceId = "read-ev",
+            now = now
+        ).single()
+        val state = EvidenceGraphReducer.record(
+            EvidenceGraphState(),
+            read
+        ).state
+
+        val invented =
+            EvidenceGraphCandidateResolver.proposeFromUrls(
+                state = state,
+                task = currentTask,
+                claimKey = "invented",
+                statement =
+                    "Android WorkManager supports persistent background work.",
+                sourceUrls = listOf(
+                    "https://invented.example/not-read"
+                ),
+                now = now + 1
+            )
+        assertFalse(invented.accepted)
+        assertTrue(
+            invented.reason.orEmpty()
+                .startsWith(
+                    "SOURCE_URL_NOT_IN_LOCAL_GRAPH:"
+                )
+        )
+
+        val duplicate =
+            EvidenceGraphCandidateResolver.proposeFromUrls(
+                state = state,
+                task = currentTask,
+                claimKey = "duplicate",
+                statement =
+                    "Android WorkManager supports persistent background work.",
+                sourceUrls = listOf(
+                    "https://developer.android.com/workmanager",
+                    "https://www.developer.android.com/workmanager/"
+                ),
+                now = now + 1
+            )
+        assertFalse(duplicate.accepted)
+        assertEquals(
+            "INVALID_OR_DUPLICATE_SOURCE_URL",
+            duplicate.reason
+        )
+    }
+
+    @Test
+    fun candidateUrlResolverRejectsSearchOnlySource() {
+        val currentTask =
+            task("Android WorkManager persistent background work online")
+        val search = EvidenceGraphProjector.fromToolResult(
+            task = currentTask,
+            request = ToolRequest(
+                tool = "web.search",
+                args = mapOf(
+                    "query" to
+                        "Android WorkManager persistent background work"
+                )
+            ),
+            result = ToolResult(
+                ok = true,
+                stdout =
+                    """{"results":[{"title":"WorkManager docs","url":"https://developer.android.com/workmanager","snippet":"Android WorkManager supports persistent background work requests"}]}"""
+            ),
+            evidenceId = "search-only",
+            now = now
+        ).single()
+        val state = EvidenceGraphReducer.record(
+            EvidenceGraphState(),
+            search
+        ).state
+
+        val resolved =
+            EvidenceGraphCandidateResolver.proposeFromUrls(
+                state = state,
+                task = currentTask,
+                claimKey =
+                    "android-workmanager-persistent",
+                statement =
+                    "Android WorkManager supports persistent background work.",
+                sourceUrls = listOf(
+                    "https://developer.android.com/workmanager"
+                ),
+                now = now + 1
+            )
+
+        assertFalse(resolved.accepted)
+        assertEquals(
+            "SEARCH_ONLY_SOURCE",
+            resolved.reason
+        )
+    }
+
+    @Test
     fun searchProjectsBoundedSourceEvidence() {
         val result = ToolResult(
             ok = true,
