@@ -5,6 +5,9 @@ import com.lumena.android.agent.core.AgentController
 import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.AgentDecision
 import com.lumena.android.agent.core.ControllerInstruction
+import com.lumena.android.agent.core.EvidenceCandidateDirective
+import com.lumena.android.agent.core.EvidenceCandidateIngestReport
+import com.lumena.android.agent.core.EvidenceModelDirectiveParser
 import com.lumena.android.agent.core.FailureEvent
 import com.lumena.android.agent.core.ReflexCandidateSet
 import com.lumena.android.agent.core.ReflexKernel
@@ -70,6 +73,15 @@ class WorkflowRunner(
         List<OllamaMessage>
     ) -> List<String> = { _, _ -> emptyList() },
     private val evidenceProvider: (TaskState) -> List<String> = { emptyList() },
+    private val onModelEvidenceCandidates: (
+        TaskState,
+        List<EvidenceCandidateDirective>
+    ) -> EvidenceCandidateIngestReport = { _, _ ->
+        EvidenceCandidateIngestReport(
+            accepted = 0,
+            rejected = 0
+        )
+    },
     private val constitutionProvider: (TaskState) -> List<String> = { emptyList() },
     private val reflexAdviceProvider: (
         FailureEvent,
@@ -384,6 +396,33 @@ class WorkflowRunner(
 
             val reply = replyResult.getOrThrow()
             onProgress("MODEL REPLY\n${reply.take(6_000)}")
+
+            val candidateDirectives =
+                EvidenceModelDirectiveParser.parse(reply)
+            if (candidateDirectives.isNotEmpty()) {
+                try {
+                    val report =
+                        onModelEvidenceCandidates(
+                            state.task,
+                            candidateDirectives
+                        )
+                    onProgress(
+                        "EVIDENCE CANDIDATES · accepted=" +
+                            report.accepted +
+                            " · rejected=" +
+                            report.rejected +
+                            " · PENDING/advisory only"
+                    )
+                } catch (failure: Exception) {
+                    onProgress(
+                        "EVIDENCE CANDIDATES NOT SAVED · " +
+                            (failure.message
+                                ?: failure::class.simpleName
+                                ?: "error")
+                                .take(300)
+                    )
+                }
+            }
 
             when (val instruction = controller.interpret(reply, state)) {
                 is ControllerInstruction.Execute -> {

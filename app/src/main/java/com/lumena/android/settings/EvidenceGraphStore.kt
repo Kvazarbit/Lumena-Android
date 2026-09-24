@@ -2,6 +2,7 @@ package com.lumena.android.settings
 
 import android.content.Context
 import android.util.AtomicFile
+import com.lumena.android.agent.core.EvidenceCandidateDirective
 import com.lumena.android.agent.core.EvidenceClaimNode
 import com.lumena.android.agent.core.EvidenceApplicationUpdate
 import com.lumena.android.agent.core.EvidenceProjectApplicationPolicy
@@ -30,6 +31,13 @@ data class EvidenceGraphStats(
     val retrieved: Int,
     val corroborated: Int,
     val contested: Int
+)
+
+data class EvidenceModelProposalBatchResult(
+    val accepted: Int,
+    val rejected: Int,
+    val candidateIds: List<String>,
+    val rejectionReasons: List<String>
 )
 
 object EvidenceGraphCodec {
@@ -427,6 +435,83 @@ object EvidenceGraphStore {
             observations
         }
 
+    fun proposeModelCandidates(
+        context: Context,
+        task: TaskState,
+        directives: List<EvidenceCandidateDirective>,
+        now: Long = System.currentTimeMillis()
+    ): EvidenceModelProposalBatchResult = synchronized(lock) {
+        if (directives.isEmpty()) {
+            return@synchronized EvidenceModelProposalBatchResult(
+                accepted = 0,
+                rejected = 0,
+                candidateIds = emptyList(),
+                rejectionReasons = emptyList()
+            )
+        }
+
+        var state = load(context)
+        var changed = false
+        val ids = mutableListOf<String>()
+        val reasons = mutableListOf<String>()
+
+        directives.take(4).forEach { directive ->
+            val sourceIds = directive.sourceIds
+                .distinct()
+                .take(8)
+
+            val relevance = state.claims
+                .filter { claim ->
+                    val linked = (
+                        claim.supportSourceIds +
+                            claim.contradictionSourceIds +
+                            claim.mentionSourceIds
+                        ).toSet()
+                    sourceIds.any { it in linked }
+                }
+                .maxOfOrNull { it.projectRelevance }
+                ?: 0.0
+
+            val update = EvidenceGraphClaimPolicy.propose(
+                state = state,
+                proposal = EvidenceClaimProposal(
+                    claimKey = directive.claimKey,
+                    statement = directive.statement,
+                    sourceIds = sourceIds,
+                    provenance =
+                        EvidenceClaimCandidateProvenance.MODEL_PROPOSAL,
+                    proposedAt = now,
+                    projectId = task.projectId,
+                    projectRelevance = relevance
+                )
+            )
+
+            if (update.accepted) {
+                state = update.state
+                update.candidateId?.let(ids::add)
+                changed = true
+            } else {
+                reasons += (
+                    update.reason
+                        ?: "EVIDENCE_CANDIDATE_REJECTED"
+                    )
+            }
+        }
+
+        if (changed) {
+            save(context, trim(state))
+        }
+
+        EvidenceModelProposalBatchResult(
+            accepted = ids.distinct().size,
+            rejected = reasons.size,
+            candidateIds = ids.distinct(),
+            rejectionReasons = reasons
+                .distinct()
+                .take(8)
+        )
+    }
+
     fun proposeModelClaim(
         context: Context,
         claimKey: String,
@@ -659,9 +744,15 @@ object EvidenceGraphStore {
             append("EVIDENCE [")
             append(effective.name)
             append("] ")
+            source?.let {
+                append("sourceId=")
+                append(it.id)
+                append(" · ")
+            }
+            append("source=")
+            append(sourceText.take(520))
+            append(" · statement=")
             append(claim.statement.take(500))
-            append(" · source=")
-            append(sourceText.take(700))
             append(" · projectRelevance=")
             append(
                 (
