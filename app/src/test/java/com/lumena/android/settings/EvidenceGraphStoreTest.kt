@@ -3,6 +3,9 @@ package com.lumena.android.settings
 import com.lumena.android.agent.core.EvidenceClaimNode
 import com.lumena.android.agent.core.EvidenceGraphReducer
 import com.lumena.android.agent.core.EvidenceGraphState
+import com.lumena.android.agent.core.EvidenceRelation
+import com.lumena.android.agent.core.EvidenceSemanticLinkPolicy
+import com.lumena.android.agent.core.EvidenceSemanticLinkProposal
 import com.lumena.android.agent.core.EvidenceSourceNode
 import com.lumena.android.agent.core.EvidenceSourceKind
 import com.lumena.android.agent.core.EvidenceVerificationState
@@ -377,6 +380,85 @@ class EvidenceGraphStoreTest {
         assertEquals(
             newestIds,
             trimmed.claims.single().supportSourceIds
+        )
+    }
+
+    @Test
+    fun codecAndTrimPreserveOnlyNonDanglingSemanticLinks() {
+        val sourceObservation =
+            EvidenceGraphProjector.fromToolResult(
+                task = task("Android Vulkan documentation online"),
+                request = ToolRequest(
+                    tool = "web.read",
+                    args = mapOf(
+                        "url" to "https://docs.example/vulkan"
+                    )
+                ),
+                result = ToolResult(
+                    ok = true,
+                    stdout =
+                        """{"url":"https://docs.example/vulkan","title":"Vulkan docs","text":"Android Vulkan uses the documented feature X on this path."}"""
+                ),
+                evidenceId = "ev-source",
+                now = now
+            ).single()
+
+        val sourceUpdate = EvidenceGraphReducer.record(
+            EvidenceGraphState(),
+            sourceObservation
+        )
+        val sourceId = sourceUpdate.sourceId!!
+
+        val linked = EvidenceSemanticLinkPolicy.propose(
+            sourceUpdate.state,
+            EvidenceSemanticLinkProposal(
+                claimKey = "feature-x",
+                statement = "Feature X is used on this Android Vulkan path.",
+                relation = EvidenceRelation.SUPPORTS,
+                sourceId = sourceId,
+                quotedFragment =
+                    "uses the documented feature X on this path",
+                extractorModelId = "fixture-model",
+                at = now + 1,
+                projectId = "lumena"
+            )
+        )
+        assertTrue(linked.accepted)
+
+        val decoded = EvidenceGraphCodec.decode(
+            EvidenceGraphCodec.encode(linked.state)
+        )
+        assertEquals(
+            linked.state.semanticLinks,
+            decoded.semanticLinks
+        )
+
+        val trimmed = EvidenceGraphStore.trim(decoded)
+        assertEquals(1, trimmed.semanticLinks.size)
+        assertTrue(
+            trimmed.sources.any {
+                it.id == sourceId
+            }
+        )
+        assertTrue(
+            trimmed.claims.any {
+                it.id ==
+                    trimmed.semanticLinks.single().claimId
+            }
+        )
+
+        val dangling = decoded.copy(
+            semanticLinks = decoded.semanticLinks +
+                decoded.semanticLinks.single().copy(
+                    id = "dangling",
+                    sourceId = "missing-source"
+                )
+        )
+        val cleaned = EvidenceGraphStore.trim(dangling)
+        assertFalse(
+            cleaned.semanticLinks.any {
+                it.id == "dangling"
+            }
         )
     }
 
