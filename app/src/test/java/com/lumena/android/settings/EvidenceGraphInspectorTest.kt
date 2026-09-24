@@ -1,5 +1,10 @@
 package com.lumena.android.settings
 
+import com.lumena.android.agent.core.EvidenceApplicationBinding
+import com.lumena.android.agent.core.EvidenceApplicationStatus
+import com.lumena.android.agent.core.EvidenceClaimCandidate
+import com.lumena.android.agent.core.EvidenceClaimCandidateProvenance
+import com.lumena.android.agent.core.EvidenceClaimCandidateStatus
 import com.lumena.android.agent.core.EvidenceGraphReducer
 import com.lumena.android.agent.core.EvidenceGraphState
 import com.lumena.android.agent.core.EvidenceObservation
@@ -236,4 +241,189 @@ class EvidenceGraphInspectorTest {
         assertEquals("lumena", claim.projectId)
         assertEquals(1, claim.evidenceCount)
     }
+
+    @Test
+    fun inspectorSeparatesSemanticCandidatesFromVerifiedClaims() {
+        val sourceState = EvidenceGraphReducer.record(
+            EvidenceGraphState(),
+            observation(
+                claimKey = "source:https://docs.example/workmanager",
+                relation = EvidenceRelation.SUPPORTS,
+                uri = "https://docs.example/workmanager",
+                kind = EvidenceSourceKind.WEB_PAGE,
+                method = "web.read",
+                evidenceId = "source-1",
+                at = t0,
+                statement =
+                    "Android WorkManager supports persistent background work."
+            )
+        ).state
+        val sourceId = sourceState.sources.single().id
+        val pending = EvidenceClaimCandidate(
+            id = "candidate-pending",
+            claimKey = "workmanager-persistent",
+            statement =
+                "Android WorkManager supports persistent background work.",
+            sourceIds = listOf(sourceId),
+            provenance =
+                EvidenceClaimCandidateProvenance.MODEL_PROPOSAL,
+            status = EvidenceClaimCandidateStatus.PENDING,
+            lexicalCoverage = 0.75,
+            proposedAt = t0 + 1,
+            projectId = "lumena",
+            projectRelevance = 0.9
+        )
+        val promoted = pending.copy(
+            id = "candidate-promoted",
+            status = EvidenceClaimCandidateStatus.PROMOTED,
+            proposedAt = t0 + 2,
+            resolutionEvidenceIds = listOf("claim-proof")
+        )
+        val rejected = pending.copy(
+            id = "candidate-rejected",
+            status = EvidenceClaimCandidateStatus.REJECTED,
+            proposedAt = t0 + 3,
+            resolutionEvidenceIds = listOf("reject-proof")
+        )
+
+        val snapshot = EvidenceGraphInspectorPolicy.build(
+            state = sourceState.copy(
+                candidates = listOf(
+                    rejected,
+                    promoted,
+                    pending
+                )
+            ),
+            now = t0 + 4
+        )
+
+        assertEquals(3, snapshot.totalCandidates)
+        assertEquals(1, snapshot.pendingCandidates)
+        assertEquals(1, snapshot.promotedCandidates)
+        assertEquals(1, snapshot.rejectedCandidates)
+
+        val pendingEntry = snapshot.candidates.first {
+            it.id == "candidate-pending"
+        }
+        assertEquals("PENDING", pendingEntry.status)
+        assertEquals(75, pendingEntry.lexicalCoveragePercent)
+        assertEquals(
+            listOf("https://docs.example/workmanager"),
+            pendingEntry.sourceUris
+        )
+        assertTrue(
+            pendingEntry.explanation.contains(
+                "not verified"
+            )
+        )
+
+        // Candidate is visible separately; it did not create a semantic claim.
+        assertTrue(
+            snapshot.claims.none {
+                it.claimKey == "workmanager-persistent"
+            }
+        )
+    }
+
+    @Test
+    fun inspectorShowsPendingAppliedAndVerifiedProjectBindings() {
+        val state = EvidenceGraphState(
+            applications = listOf(
+                EvidenceApplicationBinding(
+                    id = "pending",
+                    claimKey = "claim-pending",
+                    projectId = "lumena",
+                    target = "app/pending.py",
+                    status = EvidenceApplicationStatus.PENDING,
+                    createdAt = t0,
+                    updatedAt = t0
+                ),
+                EvidenceApplicationBinding(
+                    id = "applied",
+                    claimKey = "claim-applied",
+                    projectId = "lumena",
+                    target = "app/applied.py",
+                    status = EvidenceApplicationStatus.APPLIED,
+                    createdAt = t0,
+                    updatedAt = t0 + 1,
+                    artifactEvidenceIds =
+                        listOf("write-ok")
+                ),
+                EvidenceApplicationBinding(
+                    id = "verified",
+                    claimKey = "claim-verified",
+                    projectId = "lumena",
+                    target = "app/verified.py",
+                    status = EvidenceApplicationStatus.VERIFIED,
+                    createdAt = t0,
+                    updatedAt = t0 + 2,
+                    artifactEvidenceIds =
+                        listOf("patch-ok"),
+                    testEvidenceIds =
+                        listOf("tests-ok")
+                )
+            )
+        )
+
+        val snapshot = EvidenceGraphInspectorPolicy.build(
+            state = state,
+            now = t0 + 3
+        )
+
+        assertEquals(3, snapshot.totalApplications)
+        assertEquals(1, snapshot.pendingApplications)
+        assertEquals(1, snapshot.appliedApplications)
+        assertEquals(1, snapshot.verifiedApplications)
+        assertEquals(0, snapshot.rejectedApplications)
+
+        val verified = snapshot.applications.first {
+            it.id == "verified"
+        }
+        assertEquals("VERIFIED", verified.status)
+        assertEquals(1, verified.artifactEvidenceCount)
+        assertEquals(1, verified.testEvidenceCount)
+        assertTrue(
+            verified.explanation.contains(
+                "verified by a successful local"
+            )
+        )
+    }
+
+    @Test
+    fun inspectorBuildIsPureAndDoesNotMutateGraph() {
+        val original = EvidenceGraphState(
+            candidates = listOf(
+                EvidenceClaimCandidate(
+                    id = "pure-candidate",
+                    claimKey = "pure-claim",
+                    statement = "Pure inspector candidate statement.",
+                    sourceIds = listOf("missing-source-id"),
+                    provenance =
+                        EvidenceClaimCandidateProvenance.USER_PROPOSAL,
+                    status =
+                        EvidenceClaimCandidateStatus.REJECTED,
+                    lexicalCoverage = 0.5,
+                    proposedAt = t0,
+                    resolutionEvidenceIds =
+                        listOf("user-decision")
+                )
+            )
+        )
+
+        EvidenceGraphInspectorPolicy.build(
+            state = original,
+            now = t0 + 1
+        )
+
+        assertEquals(
+            EvidenceClaimCandidateStatus.REJECTED,
+            original.candidates.single().status
+        )
+        assertEquals(
+            listOf("missing-source-id"),
+            original.candidates.single().sourceIds
+        )
+        assertTrue(original.claims.isEmpty())
+    }
+
 }
