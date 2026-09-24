@@ -140,6 +140,105 @@ class FollowUpGoalTest {
         assertTrue(capsule.length <= 4_500)
     }
 
+
+    @Test fun boundedPreviousTaskPhrasesRetainPriorGoal() {
+        val goal = """
+            Працюй у проекті e2e_step87.
+            Прочитай через web.read і потім запусти python.tests.
+        """.trimIndent()
+
+        for (followUp in listOf(
+            "повтори, з відповідним форматом, завдання вище...",
+            "повтори попереднє завдання",
+            "retry the previous task",
+            "continue the task above",
+            "powtórz poprzednie zadanie"
+        )) {
+            assertTrue(
+                followUp,
+                FollowUpGoal.isPriorTaskReference(followUp)
+            )
+            assertTrue(
+                followUp,
+                FollowUpGoal.isReference(followUp)
+            )
+            assertEquals(
+                followUp,
+                goal,
+                FollowUpGoal.resolve(followUp, goal)
+            )
+        }
+
+        assertFalse(
+            FollowUpGoal.isPriorTaskReference(
+                "повтори тест файлу"
+            )
+        )
+        assertEquals(
+            "повтори тест файлу",
+            FollowUpGoal.resolve(
+                "повтори тест файлу",
+                goal
+            )
+        )
+    }
+
+    @Test fun partialOutcomeCapsulePreservesGoalAndVerifiedStateWithoutAuthority() {
+        val call = AgentDecision.ToolCall(
+            tool = "python.syntax_check",
+            args = mapOf(
+                "script" to "e2e_step87/dir_a.py"
+            )
+        )
+        val kernel = ContextKernel.record(
+            state = ContextKernel.before(
+                ContextKernelState(),
+                call
+            ),
+            call = call,
+            ok = true,
+            output = "syntax ok"
+        )
+        val task = TaskState(
+            id = "task-partial",
+            projectId = "e2e_step87",
+            goal = "Run the original e2e verification task",
+            status = TaskStatus.PARTIAL,
+            lastTool = "python.syntax_check",
+            lastResult = "ok=true",
+            kernel = kernel
+        )
+
+        val capsule = PreviousTaskOutcomeContext.partial(
+            task = task,
+            message =
+                "python.tests was not executed yet"
+        )
+
+        assertTrue(
+            capsule.startsWith(
+                "PREVIOUS_TASK_OUTCOME"
+            )
+        )
+        assertTrue(capsule.contains("status=PARTIAL"))
+        assertTrue(capsule.contains("project_id=e2e_step87"))
+        assertTrue(
+            capsule.contains(
+                "goal=Run the original e2e verification task"
+            )
+        )
+        assertTrue(
+            capsule.contains(
+                "summary=python.tests was not executed yet"
+            )
+        )
+        assertTrue(capsule.contains("verified_kernel:"))
+        assertTrue(capsule.contains("HISTORICAL_ONLY"))
+        assertTrue(capsule.contains("no approval"))
+        assertTrue(capsule.contains("no replay permission"))
+        assertTrue(capsule.length <= 4_500)
+    }
+
     @Test fun explicitNewGoalAndMissingHistoryArePreserved() {
         assertEquals("повтори", FollowUpGoal.resolve("повтори", null))
         assertEquals("повтори тест файлу", FollowUpGoal.resolve("повтори тест файлу", "старе завдання"))

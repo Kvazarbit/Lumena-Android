@@ -27,7 +27,7 @@ object FollowUpGoal {
             return true
         }
 
-        if (isOutcomeReference(text)) {
+        if (isOutcomeReference(text) || isPriorTaskReference(text)) {
             return true
         }
 
@@ -57,6 +57,25 @@ object FollowUpGoal {
         )
     }
 
+    fun isPriorTaskReference(text: String): Boolean {
+        val normalized = normalized(text)
+        if (normalized.length > 320) return false
+
+        val retryDirective = Regex(
+            """(?iu)^(?:повтори|повторити|продовж|продовжуй|спробуй\s+ще\s+раз|повторить|продолжи|продолжай|попробуй\s+ещ[её]\s+раз|repeat|retry|try\s+again|continue|resume|powtórz|powtorz|spróbuj\s+ponownie|sprobuj\s+ponownie|kontynuuj)\b"""
+        )
+        val priorObject = Regex(
+            """(?iu)\b(?:завдан(?:ня|ню|нням)|запит(?:у|ом)?|задач[а-я]*|task|request|goal|zadani[ea]|zapytani[ea])\b"""
+        )
+        val priorPointer = Regex(
+            """(?iu)\b(?:вище|попередн[а-яіїєґ]*|раніш[еє]|предыдущ[а-я]*|выше|above|previous|earlier|poprzedn[iaey]*|powyżej)\b"""
+        )
+
+        return retryDirective.containsMatchIn(normalized) &&
+            priorObject.containsMatchIn(normalized) &&
+            priorPointer.containsMatchIn(normalized)
+    }
+
     fun resolve(text: String, previousGoal: String?): String =
         if (isReference(text) && !previousGoal.isNullOrBlank()) previousGoal else text
 }
@@ -73,9 +92,33 @@ object PreviousTaskOutcomeContext {
     fun failure(
         task: TaskState,
         message: String
+    ): String =
+        terminal(
+            task = task,
+            status = "FAILED",
+            detailKey = "error",
+            message = message
+        )
+
+    fun partial(
+        task: TaskState,
+        message: String
+    ): String =
+        terminal(
+            task = task,
+            status = "PARTIAL",
+            detailKey = "summary",
+            message = message
+        )
+
+    private fun terminal(
+        task: TaskState,
+        status: String,
+        detailKey: String,
+        message: String
     ): String = buildString {
         appendLine("PREVIOUS_TASK_OUTCOME")
-        appendLine("status=FAILED")
+        appendLine("status=" + status)
         appendLine("task_id=" + clean(task.id, 220))
         appendLine("project_id=" + clean(task.projectId.orEmpty(), 160))
         appendLine("goal=" + clean(task.goal, MAX_FIELD))
@@ -85,7 +128,7 @@ object PreviousTaskOutcomeContext {
             ?.let {
                 appendLine("last_result=" + clean(it, MAX_FIELD))
             }
-        appendLine("error=" + clean(message, MAX_FIELD))
+        appendLine(detailKey + "=" + clean(message, MAX_FIELD))
         if (
             task.kernel.observed > 0 ||
             task.kernel.inFlight != null

@@ -731,15 +731,35 @@ fun WorkflowChatScreen(
         if (!coordinator.isCurrent(runToken, taskId) || !isCurrentTask(taskId)) return
         when (outcome) {
             is WorkflowOutcome.Finished -> {
-                history = outcome.history
+                val finishedTask = outcome.control.task
+                history =
+                    if (finishedTask.status == TaskStatus.PARTIAL) {
+                        outcome.history +
+                            OllamaMessage(
+                                "user",
+                                PreviousTaskOutcomeContext.partial(
+                                    task = finishedTask,
+                                    message = outcome.text
+                                )
+                            )
+                    } else {
+                        outcome.history
+                    }
                 pending = null
-                currentTask = outcome.control.task
+                currentTask = finishedTask
                 bubbles += ChatBubble(
                     role = "assistant",
                     text = outcome.text,
                     images = outcome.images
                 )
-                coordinator.finish(runToken, if (outcome.control.task.status == TaskStatus.PARTIAL) "Частково виконано" else "Done")
+                coordinator.finish(
+                    runToken,
+                    if (finishedTask.status == TaskStatus.PARTIAL) {
+                        "Частково виконано"
+                    } else {
+                        "Done"
+                    }
+                )
                 taskApprovals.remove(taskId)
             }
             is WorkflowOutcome.NeedsConfirmation -> {
