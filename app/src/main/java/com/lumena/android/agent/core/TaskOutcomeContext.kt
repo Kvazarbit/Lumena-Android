@@ -16,24 +16,24 @@ object TaskOutcomeContext {
     ): String = buildString {
         appendLine("TASK_OUTCOME_CONTEXT")
         appendLine("kind=FAILED")
-        appendLine("task_id=\${clean(task.id, 220)}")
+        appendLine("task_id=${clean(task.id, 220)}")
         task.projectId
             ?.takeIf { it.isNotBlank() }
-            ?.let { appendLine("project_id=\${clean(it, 160)}") }
-        appendLine("goal=\${clean(task.goal, MAX_GOAL_CHARS)}")
+            ?.let { appendLine("project_id=${clean(it, 160)}") }
+        appendLine("goal=${clean(task.goal, MAX_GOAL_CHARS)}")
         task.lastTool
             ?.takeIf { it.isNotBlank() }
-            ?.let { appendLine("last_tool=\${clean(it, 160)}") }
+            ?.let { appendLine("last_tool=${clean(it, 160)}") }
         task.lastResult
             ?.takeIf { it.isNotBlank() }
-            ?.let { appendLine("last_result=\${clean(it, MAX_RESULT_CHARS)}") }
-        appendLine("failure=\${clean(message, MAX_ERROR_CHARS)}")
+            ?.let { appendLine("last_result=${clean(it, MAX_RESULT_CHARS)}") }
+        appendLine("failure=${clean(message, MAX_ERROR_CHARS)}")
         task.errors
             .takeLast(3)
             .map { clean(it, 600) }
             .filter { it.isNotBlank() }
             .forEachIndexed { index, value ->
-                appendLine("error_\${index + 1}=$value")
+                appendLine("error_${index + 1}=$value")
             }
         append(
             "This record describes the previous run only. " +
