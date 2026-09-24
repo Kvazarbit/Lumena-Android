@@ -10,6 +10,16 @@ data class EvidenceCandidateDirective(
     val sourceIds: List<String>
 )
 
+data class EvidenceCandidateIngestReport(
+    val accepted: Int,
+    val rejected: Int
+) {
+    init {
+        require(accepted >= 0)
+        require(rejected >= 0)
+    }
+}
+
 /**
  * Read-only parser for optional semantic-evidence metadata emitted alongside
  * normal agent JSON.
