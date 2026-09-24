@@ -22,6 +22,9 @@ data class ConstitutionInspectorEntry(
     val distinctLocalContexts: Int,
     val distinctTaskCount: Int,
     val distinctProjectCount: Int,
+    val geneStage: String,
+    val activationProgressPercent: Int,
+    val pairedProjectContexts: Int,
     val contributorModelIds: List<String>,
     val provenance: List<String>,
     val enforcementPoints: List<String>,
@@ -64,6 +67,7 @@ data class ImportedConstitutionInspectorEntry(
 data class ConstitutionInspectorSnapshot(
     val hardDna: List<ConstitutionInspectorEntry>,
     val learned: List<ConstitutionInspectorEntry>,
+    val shadowCandidates: List<ConstitutionInspectorEntry>,
     val userConstraints: List<ConstitutionInspectorEntry>,
     val contested: List<ConstitutionInspectorConflict>,
     val importedLearned: List<ImportedConstitutionInspectorEntry>,
@@ -89,6 +93,18 @@ object ConstitutionGenomeInspectorPolicy {
         val learned = view.rules
             .filter {
                 it.status == ConstitutionRuleStatus.LEARNED &&
+                    it.authority == ConstitutionAuthority.ADVISORY
+            }
+            .sortedWith(
+                compareBy<ConstitutionRule> { it.scope.stableKey() }
+                    .thenBy { it.claimKey }
+                    .thenBy { it.id }
+            )
+            .map(::localEntry)
+
+        val shadowCandidates = view.rules
+            .filter {
+                it.status == ConstitutionRuleStatus.CANDIDATE &&
                     it.authority == ConstitutionAuthority.ADVISORY
             }
             .sortedWith(
@@ -180,6 +196,7 @@ object ConstitutionGenomeInspectorPolicy {
         return ConstitutionInspectorSnapshot(
             hardDna = hard,
             learned = learned,
+            shadowCandidates = shadowCandidates,
             userConstraints = users,
             contested = conflicts,
             importedLearned = importedEntries.filter {
@@ -195,6 +212,8 @@ object ConstitutionGenomeInspectorPolicy {
     private fun localEntry(
         rule: ConstitutionRule
     ): ConstitutionInspectorEntry {
+        val calibration =
+            ConstitutionGenomePolicy.calibration(rule)
         val eligible = rule.evidenceRefs
             .filter { it.promotionEligible() }
             .distinctBy { it.id }
@@ -218,7 +237,10 @@ object ConstitutionGenomeInspectorPolicy {
                 "Explicit local user directive. It is active as USER_CONSTRAINT but never becomes HARD_GUARD."
 
             rule.status == ConstitutionRuleStatus.LEARNED ->
-                "Promoted to LEARNED after ${eligible.size} locally verified evidence references across ${contexts.size} distinct local task/project contexts; still advisory and not permission."
+                "ACTIVE learned gene. Promoted after ${eligible.size} locally verified evidence references across ${contexts.size} distinct local task/project contexts; still advisory and not permission."
+
+            rule.status == ConstitutionRuleStatus.CANDIDATE ->
+                "SHADOW candidate at ${calibration.activationProgressPercent}% activation progress. It is visible for inspection but is not injected as an active learned Constitution rule."
 
             else ->
                 "Non-authoritative constitutional record; inspect its status and provenance before reuse."
@@ -239,6 +261,11 @@ object ConstitutionGenomeInspectorPolicy {
             distinctLocalContexts = contexts.size,
             distinctTaskCount = distinctTasks.size,
             distinctProjectCount = distinctProjects.size,
+            geneStage = calibration.stage.name,
+            activationProgressPercent =
+                calibration.activationProgressPercent,
+            pairedProjectContexts =
+                calibration.pairedProjectContextCount,
             contributorModelIds = rule.provenance
                 .mapNotNull { it.modelId }
                 .distinct()

@@ -200,6 +200,28 @@ data class ConstitutionConflict(
     val hasHardInvariant: Boolean
 )
 
+enum class ConstitutionGeneStage {
+    SHADOW,
+    ACTIVE,
+    FIXED,
+    USER_ACTIVE,
+    OBSERVATION,
+    CONTESTED,
+    INACTIVE
+}
+
+data class ConstitutionGeneCalibration(
+    val stage: ConstitutionGeneStage,
+    val verifiedEvidenceCount: Int,
+    val distinctContextCount: Int,
+    val pairedProjectContextCount: Int,
+    val evidenceProgressPercent: Int,
+    val contextProgressPercent: Int,
+    val pairedProjectProgressPercent: Int,
+    val activationProgressPercent: Int,
+    val activeEligible: Boolean
+)
+
 object ConstitutionGenomePolicy {
     const val SCHEMA_VERSION = 1
     const val MIN_VERIFIED_EVIDENCE = 3
@@ -562,15 +584,9 @@ object ConstitutionGenomePolicy {
             )
     }
 
-    fun canPromoteToLearned(rule: ConstitutionRule): Boolean {
-        if (rule.authority != ConstitutionAuthority.ADVISORY) return false
-        if (
-            rule.status == ConstitutionRuleStatus.HARD_INVARIANT ||
-            rule.status == ConstitutionRuleStatus.SUPERSEDED
-        ) {
-            return false
-        }
-
+    fun calibration(
+        rule: ConstitutionRule
+    ): ConstitutionGeneCalibration {
         val verified = rule.evidenceRefs
             .filter { it.promotionEligible() }
             .distinctBy { it.id }
@@ -579,8 +595,117 @@ object ConstitutionGenomePolicy {
             .map { it.contextKey() }
             .distinct()
 
-        return verified.size >= MIN_VERIFIED_EVIDENCE &&
+        val pairedProjectContexts = verified
+            .groupBy { it.contextKey() }
+            .count { (_, refs) ->
+                refs.any {
+                    it.kind ==
+                        ConstitutionEvidenceKind.PROJECT_ARTIFACT
+                } &&
+                    refs.any {
+                        it.kind ==
+                            ConstitutionEvidenceKind.TEST_RESULT
+                    }
+            }
+
+        val requiresPairedProjectProof =
+            rule.kind == ConstitutionRuleKind.VERIFICATION &&
+                rule.claimKey ==
+                "verify-project-mutation-before-success"
+
+        val evidenceReady =
+            verified.size >= MIN_VERIFIED_EVIDENCE
+        val contextReady =
             contexts.size >= MIN_DISTINCT_CONTEXTS
+        val pairedReady =
+            !requiresPairedProjectProof ||
+                pairedProjectContexts >=
+                MIN_DISTINCT_CONTEXTS
+
+        val activeEligible =
+            rule.authority == ConstitutionAuthority.ADVISORY &&
+                rule.status !in setOf(
+                    ConstitutionRuleStatus.HARD_INVARIANT,
+                    ConstitutionRuleStatus.SUPERSEDED,
+                    ConstitutionRuleStatus.CONTESTED
+                ) &&
+                evidenceReady &&
+                contextReady &&
+                pairedReady
+
+        val evidenceProgress =
+            progress(
+                value = verified.size,
+                target = MIN_VERIFIED_EVIDENCE
+            )
+        val contextProgress =
+            progress(
+                value = contexts.size,
+                target = MIN_DISTINCT_CONTEXTS
+            )
+        val pairedProgress =
+            if (requiresPairedProjectProof) {
+                progress(
+                    value = pairedProjectContexts,
+                    target = MIN_DISTINCT_CONTEXTS
+                )
+            } else {
+                100
+            }
+
+        val stage = when (rule.status) {
+            ConstitutionRuleStatus.HARD_INVARIANT ->
+                ConstitutionGeneStage.FIXED
+            ConstitutionRuleStatus.ACTIVE_USER_CONSTRAINT ->
+                ConstitutionGeneStage.USER_ACTIVE
+            ConstitutionRuleStatus.LEARNED ->
+                ConstitutionGeneStage.ACTIVE
+            ConstitutionRuleStatus.CANDIDATE ->
+                ConstitutionGeneStage.SHADOW
+            ConstitutionRuleStatus.OBSERVATION ->
+                ConstitutionGeneStage.OBSERVATION
+            ConstitutionRuleStatus.CONTESTED ->
+                ConstitutionGeneStage.CONTESTED
+            ConstitutionRuleStatus.SUPERSEDED ->
+                ConstitutionGeneStage.INACTIVE
+        }
+
+        return ConstitutionGeneCalibration(
+            stage = stage,
+            verifiedEvidenceCount = verified.size,
+            distinctContextCount = contexts.size,
+            pairedProjectContextCount =
+                pairedProjectContexts,
+            evidenceProgressPercent =
+                evidenceProgress,
+            contextProgressPercent =
+                contextProgress,
+            pairedProjectProgressPercent =
+                pairedProgress,
+            activationProgressPercent =
+                minOf(
+                    evidenceProgress,
+                    contextProgress,
+                    pairedProgress
+                ),
+            activeEligible = activeEligible
+        )
+    }
+
+    fun canPromoteToLearned(
+        rule: ConstitutionRule
+    ): Boolean =
+        calibration(rule).activeEligible
+
+    private fun progress(
+        value: Int,
+        target: Int
+    ): Int {
+        if (target <= 0) return 100
+        return (
+            value.coerceAtLeast(0) * 100 /
+                target
+            ).coerceIn(0, 100)
     }
 
     private fun evaluate(rule: ConstitutionRule): ConstitutionRule {

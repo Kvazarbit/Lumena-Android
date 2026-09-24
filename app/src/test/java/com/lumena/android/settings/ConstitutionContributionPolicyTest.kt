@@ -5,6 +5,7 @@ import com.lumena.android.agent.core.ConstitutionEvidenceKind
 import com.lumena.android.agent.core.ConstitutionEvidenceRef
 import com.lumena.android.agent.core.ConstitutionGenomePolicy
 import com.lumena.android.agent.core.ConstitutionGenomeState
+import com.lumena.android.agent.core.ConstitutionGeneStage
 import com.lumena.android.agent.core.ConstitutionProvenance
 import com.lumena.android.agent.core.ConstitutionRuleKind
 import com.lumena.android.agent.core.ConstitutionRuleStatus
@@ -636,6 +637,167 @@ class ConstitutionContributionPolicyTest {
                     binding = missingTestProof
                 )
         )
+    }
+
+
+    @Test
+    fun verifiedProjectGeneMovesFromShadowToActiveOnlyAcrossIndependentTasks() {
+        var state = ConstitutionGenomeState()
+
+        fun verifiedBinding(
+            id: String,
+            artifact: String,
+            test: String,
+            at: Long
+        ) = EvidenceApplicationBinding(
+            id = id,
+            claimKey = "source:https://docs.example/pathlib",
+            projectId = "project-a",
+            target = "project-a/src/worker.py",
+            status = EvidenceApplicationStatus.VERIFIED,
+            createdAt = at - 10,
+            updatedAt = at,
+            artifactEvidenceIds = listOf(artifact),
+            testEvidenceIds = listOf(test)
+        )
+
+        val first = requireNotNull(
+            ConstitutionContributionPolicy
+                .verifiedProjectApplicationRule(
+                    task = task("task-shadow-1"),
+                    binding = verifiedBinding(
+                        id = "binding-shadow-1",
+                        artifact = "artifact-shadow-1",
+                        test = "test-shadow-1",
+                        at = 200
+                    )
+                )
+        )
+        state =
+            ConstitutionGenomePolicy
+                .contributeVerifiedAdvisory(
+                    state = state,
+                    proposal = first
+                )
+
+        var rule = state.rules.single()
+        var calibration =
+            ConstitutionGenomePolicy.calibration(rule)
+        assertEquals(
+            ConstitutionRuleStatus.CANDIDATE,
+            rule.status
+        )
+        assertEquals(
+            ConstitutionGeneStage.SHADOW,
+            calibration.stage
+        )
+        assertEquals(1, calibration.distinctContextCount)
+        assertEquals(1, calibration.pairedProjectContextCount)
+        assertEquals(50, calibration.activationProgressPercent)
+        assertFalse(calibration.activeEligible)
+
+        val second = requireNotNull(
+            ConstitutionContributionPolicy
+                .verifiedProjectApplicationRule(
+                    task = task("task-shadow-2"),
+                    binding = verifiedBinding(
+                        id = "binding-shadow-2",
+                        artifact = "artifact-shadow-2",
+                        test = "test-shadow-2",
+                        at = 300
+                    )
+                )
+        )
+        state =
+            ConstitutionGenomePolicy
+                .contributeVerifiedAdvisory(
+                    state = state,
+                    proposal = second
+                )
+
+        rule = state.rules.single()
+        calibration =
+            ConstitutionGenomePolicy.calibration(rule)
+        assertEquals(
+            ConstitutionRuleStatus.LEARNED,
+            rule.status
+        )
+        assertEquals(
+            ConstitutionGeneStage.ACTIVE,
+            calibration.stage
+        )
+        assertEquals(4, calibration.verifiedEvidenceCount)
+        assertEquals(2, calibration.distinctContextCount)
+        assertEquals(2, calibration.pairedProjectContextCount)
+        assertEquals(100, calibration.activationProgressPercent)
+        assertTrue(calibration.activeEligible)
+    }
+
+    @Test
+    fun extraArtifactFromSecondTaskCannotActivateVerificationGeneWithoutSecondTestProof() {
+        var state = ConstitutionGenomeState()
+        val first = requireNotNull(
+            ConstitutionContributionPolicy
+                .verifiedProjectApplicationRule(
+                    task = task("task-pair-1"),
+                    binding = EvidenceApplicationBinding(
+                        id = "binding-pair-1",
+                        claimKey = "claim",
+                        projectId = "project-a",
+                        target = "project-a/file.py",
+                        status = EvidenceApplicationStatus.VERIFIED,
+                        createdAt = 100,
+                        updatedAt = 200,
+                        artifactEvidenceIds =
+                            listOf("artifact-pair-1"),
+                        testEvidenceIds =
+                            listOf("test-pair-1")
+                    )
+                )
+        )
+        state =
+            ConstitutionGenomePolicy
+                .contributeVerifiedAdvisory(
+                    state = state,
+                    proposal = first
+                )
+        val ruleId = state.rules.single().id
+
+        state = ConstitutionGenomePolicy.recordEvidence(
+            state = state,
+            ruleId = ruleId,
+            evidence = ConstitutionEvidenceRef(
+                id = "artifact-pair-2",
+                kind =
+                    ConstitutionEvidenceKind.PROJECT_ARTIFACT,
+                locallyVerified = true,
+                taskId = "task-pair-2",
+                projectId = "project-a",
+                at = 300
+            ),
+            provenance = ConstitutionProvenance(
+                sourceKind =
+                    ConstitutionSourceKind.PROJECT_ARTIFACT,
+                sourceId = "artifact-pair-2",
+                projectId = "project-a",
+                taskId = "task-pair-2",
+                at = 300
+            )
+        )
+
+        val rule = state.rules.single()
+        val calibration =
+            ConstitutionGenomePolicy.calibration(rule)
+
+        assertEquals(
+            ConstitutionRuleStatus.CANDIDATE,
+            rule.status
+        )
+        assertEquals(3, calibration.verifiedEvidenceCount)
+        assertEquals(2, calibration.distinctContextCount)
+        assertEquals(1, calibration.pairedProjectContextCount)
+        assertEquals(50, calibration.activationProgressPercent)
+        assertFalse(calibration.activeEligible)
     }
 
 

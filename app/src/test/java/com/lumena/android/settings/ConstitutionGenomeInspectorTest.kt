@@ -7,6 +7,7 @@ import com.lumena.android.agent.core.ConstitutionEvidenceKind
 import com.lumena.android.agent.core.ConstitutionEvidenceRef
 import com.lumena.android.agent.core.ConstitutionGenomePolicy
 import com.lumena.android.agent.core.ConstitutionGenomeState
+import com.lumena.android.agent.core.ConstitutionGeneStage
 import com.lumena.android.agent.core.ConstitutionProvenance
 import com.lumena.android.agent.core.ConstitutionRule
 import com.lumena.android.agent.core.ConstitutionRuleKind
@@ -16,6 +17,10 @@ import com.lumena.android.agent.core.ConstitutionScopeKind
 import com.lumena.android.agent.core.ConstitutionSourceKind
 import com.lumena.android.agent.core.ConstitutionStance
 import com.lumena.android.agent.core.CoreDna
+import com.lumena.android.agent.core.EvidenceApplicationBinding
+import com.lumena.android.agent.core.EvidenceApplicationStatus
+import com.lumena.android.agent.core.TaskState
+import com.lumena.android.agent.core.TaskStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -296,4 +301,63 @@ class ConstitutionGenomeInspectorTest {
         assertTrue(user.explanation.contains("not active locally"))
         assertTrue(user.explanation.contains("not permission"))
     }
+    @Test
+    fun shadowCandidateIsVisibleWithCalibrationButNotActiveLearned() {
+        val task = TaskState(
+            id = "inspector-shadow-task",
+            projectId = "project-a",
+            goal = "Verify project mutation",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val candidate = requireNotNull(
+            ConstitutionContributionPolicy
+                .verifiedProjectApplicationRule(
+                    task = task,
+                    binding = EvidenceApplicationBinding(
+                        id = "inspector-shadow-binding",
+                        claimKey = "source:https://docs.example/pathlib",
+                        projectId = "project-a",
+                        target = "project-a/file.py",
+                        status = EvidenceApplicationStatus.VERIFIED,
+                        createdAt = 100,
+                        updatedAt = 200,
+                        artifactEvidenceIds =
+                            listOf("inspector-artifact"),
+                        testEvidenceIds =
+                            listOf("inspector-test")
+                    )
+                )
+        )
+
+        val state =
+            ConstitutionGenomePolicy
+                .contributeVerifiedAdvisory(
+                    state = ConstitutionGenomeState(),
+                    proposal = candidate
+                )
+
+        val snapshot =
+            ConstitutionGenomeInspectorPolicy.build(
+                localState = state,
+                imported = null
+            )
+
+        assertTrue(snapshot.learned.isEmpty())
+        val entry =
+            snapshot.shadowCandidates.single()
+        assertEquals(
+            ConstitutionGeneStage.SHADOW.name,
+            entry.geneStage
+        )
+        assertEquals(50, entry.activationProgressPercent)
+        assertEquals(1, entry.pairedProjectContexts)
+        assertTrue(entry.explanation.contains("SHADOW"))
+        assertTrue(
+            entry.explanation.contains(
+                "not injected as an active learned"
+            )
+        )
+    }
+
+
 }
