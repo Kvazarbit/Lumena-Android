@@ -534,9 +534,18 @@ class WorkflowRunner(
                 is ControllerInstruction.AskModelAgain -> {
                     state = instruction.state
                     publish(state, onState)
-                    current = current +
-                        OllamaMessage("assistant", reply.take(4_000)) +
-                        OllamaMessage("user", instruction.feedback)
+
+                    // Do not feed malformed protocol-shaped output back to the
+                    // model. It remains visible in MODEL REPLY progress for
+                    // diagnostics, while recovery history contains only the
+                    // deterministic repair instruction. This prevents a small
+                    // local model from imitating its own invalid envelope.
+                    current =
+                        current +
+                            OllamaMessage(
+                                "user",
+                                instruction.feedback
+                            )
 
                     onProgress(
                         "PROTOCOL CORRECTION · retry ${state.protocolRetries}\n${instruction.feedback.take(2_000)}"
