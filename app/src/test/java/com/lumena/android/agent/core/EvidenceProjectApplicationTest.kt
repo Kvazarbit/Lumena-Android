@@ -385,6 +385,57 @@ class EvidenceProjectApplicationTest {
         )
     }
 
+
+    @Test
+    fun selectedPytestCannotVerifyWholeAppliedBinding() {
+        val bound = bind(retrievedState())
+        val applied = EvidenceProjectApplicationPolicy
+            .observeToolResult(
+                state = bound.state,
+                bindingId = bound.bindingId!!,
+                taskProjectId = "lumena",
+                request = ToolRequest(
+                    tool = "file.write",
+                    args = mapOf(
+                        "path" to target,
+                        "content" to "x"
+                    )
+                ),
+                result = ToolResult(ok = true),
+                evidenceId = "write-selected",
+                now = now + 2
+            )
+
+        val selected =
+            EvidenceProjectApplicationPolicy
+                .observeToolResult(
+                    state = applied.state,
+                    bindingId = bound.bindingId!!,
+                    taskProjectId = "lumena",
+                    request = ToolRequest(
+                        tool = "python.tests",
+                        args = mapOf(
+                            "cwd" to "app",
+                            "argv" to
+                                "-q tests/test_other.py"
+                        )
+                    ),
+                    result = ToolResult(ok = true),
+                    evidenceId = "selected-tests",
+                    now = now + 3
+                )
+
+        assertFalse(selected.accepted)
+        assertEquals(
+            "SELECTED_TEST_SCOPE",
+            selected.reason
+        )
+        assertEquals(
+            EvidenceApplicationStatus.APPLIED,
+            selected.state.applications.single().status
+        )
+    }
+
     @Test
     fun projectScopeMismatchAndUnrelatedToolsCannotBecomeProof() {
         val bound = bind(retrievedState())
