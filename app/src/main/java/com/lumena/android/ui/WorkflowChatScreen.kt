@@ -75,6 +75,7 @@ import com.lumena.android.llama.EmbeddedLlamaClient
 import com.lumena.android.llama.EmbeddedLlamaRuntime
 import com.lumena.android.llama.LlamaHardwareProfile
 import com.lumena.android.ollama.ChatModelClient
+import com.lumena.android.ollama.EvidenceCandidateDisposition
 import com.lumena.android.ollama.LocalWorkflowAgent
 import com.lumena.android.ollama.ModelContextUsage
 import com.lumena.android.ollama.OllamaClient
@@ -503,6 +504,21 @@ fun WorkflowChatScreen(
                     context = context,
                     query = task.goal,
                     limit = 4
+                )
+            },
+            evidenceCandidateHandler = { task, candidate ->
+                val update =
+                    EvidenceGraphStore.proposeModelClaimFromUrls(
+                        context = context,
+                        task = task,
+                        claimKey = candidate.claimKey,
+                        statement = candidate.statement,
+                        sourceUrls = candidate.sourceUrls
+                    )
+                EvidenceCandidateDisposition(
+                    accepted = update.accepted,
+                    candidateId = update.candidateId,
+                    reason = update.reason
                 )
             },
             constitutionProvider = { task ->
