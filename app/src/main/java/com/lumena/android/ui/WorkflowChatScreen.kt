@@ -575,6 +575,18 @@ fun WorkflowChatScreen(
                 task.projectId
                     ?.takeIf { it.isNotBlank() }
                     ?.let { projectId ->
+                        // Binding is advisory and is created only after this
+                        // already-authorized mutation produced a known-success
+                        // TOOL_RESULT. It cannot initiate or authorize a tool.
+                        runCatching {
+                            EvidenceGraphStore.autoBindForSuccessfulMutation(
+                                context = context,
+                                taskProjectId = projectId,
+                                taskGoal = task.goal,
+                                request = request,
+                                result = result
+                            )
+                        }
                         runCatching {
                             EvidenceGraphStore.recordMatchingProjectOutcomes(
                                 context = context,

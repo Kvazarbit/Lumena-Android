@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.AtomicFile
 import com.lumena.android.agent.core.EvidenceClaimNode
 import com.lumena.android.agent.core.EvidenceApplicationUpdate
+import com.lumena.android.agent.core.EvidenceAutomaticBindingUpdate
+import com.lumena.android.agent.core.EvidenceAutomaticProjectBindingPolicy
 import com.lumena.android.agent.core.EvidenceProjectApplicationPolicy
 import com.lumena.android.agent.core.EvidenceProjectOutcomeRouter
 import com.lumena.android.agent.core.EvidenceClaimCandidateProvenance
@@ -498,6 +500,31 @@ object EvidenceGraphStore {
             now = now
         )
         if (update.accepted && update.state != current) {
+            save(context, trim(update.state))
+        }
+        update
+    }
+
+    fun autoBindForSuccessfulMutation(
+        context: Context,
+        taskProjectId: String,
+        taskGoal: String,
+        request: ToolRequest,
+        result: ToolResult,
+        now: Long = System.currentTimeMillis()
+    ): EvidenceAutomaticBindingUpdate = synchronized(lock) {
+        val current = load(context)
+        val update =
+            EvidenceAutomaticProjectBindingPolicy
+                .bindForSuccessfulMutation(
+                    state = current,
+                    projectId = taskProjectId,
+                    taskGoal = taskGoal,
+                    request = request,
+                    result = result,
+                    now = now
+                )
+        if (update.state != current) {
             save(context, trim(update.state))
         }
         update

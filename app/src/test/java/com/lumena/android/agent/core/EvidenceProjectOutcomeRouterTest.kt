@@ -294,4 +294,326 @@ class EvidenceProjectOutcomeRouterTest {
             update.state.claims.single().outcome
         )
     }
+
+    @Test
+    fun successfulProjectMutationAutoBindsVerifiedEvidenceThenRoutesAppliedAndVerified() {
+        val retrieved = EvidenceGraphReducer.record(
+            EvidenceGraphState(),
+            EvidenceObservation(
+                claimKey = "pathlib-mkdir-parents",
+                statement =
+                    "Path.mkdir with parents true creates missing parent directories.",
+                relation = EvidenceRelation.SUPPORTS,
+                sourceUri = "https://docs.python.org/pathlib",
+                sourceKind = EvidenceSourceKind.WEB_PAGE,
+                retrievalMethod = "web.read",
+                evidenceId = "web-read-ok",
+                observedAt = now,
+                projectId = "demo_project",
+                projectRelevance = 0.95
+            )
+        ).state
+
+        val mutationRequest = ToolRequest(
+            tool = "file.write",
+            args = mapOf(
+                "path" to "demo_project/evidence_step8.py",
+                "content" to "from pathlib import Path"
+            )
+        )
+        val mutationResult = ToolResult(
+            ok = true,
+            tool = "file.write"
+        )
+
+        val auto =
+            EvidenceAutomaticProjectBindingPolicy
+                .bindForSuccessfulMutation(
+                    state = retrieved,
+                    projectId = "demo_project",
+                    taskGoal = "Path.mkdir parents true project evidence",
+                    request = mutationRequest,
+                    result = mutationResult,
+                    now = now + 1
+                )
+
+        assertEquals(1, auto.bindingIds.size)
+        assertEquals(1, auto.state.applications.size)
+        assertEquals(
+            EvidenceApplicationStatus.PENDING,
+            auto.state.applications.single().status
+        )
+        assertEquals(
+            "demo_project/evidence_step8.py",
+            auto.state.applications.single().target
+        )
+
+        val bindingId = auto.bindingIds.single()
+        assertEquals(
+            listOf(bindingId),
+            EvidenceProjectOutcomeRouter.matchingBindingIds(
+                state = auto.state,
+                projectId = "demo_project",
+                request = mutationRequest
+            )
+        )
+
+        val applied =
+            EvidenceProjectApplicationPolicy.observeToolResult(
+                state = auto.state,
+                bindingId = bindingId,
+                taskProjectId = "demo_project",
+                request = mutationRequest,
+                result = mutationResult,
+                evidenceId = "mutation-ok",
+                now = now + 2
+            )
+
+        assertTrue(applied.accepted)
+        assertEquals(
+            EvidenceApplicationStatus.APPLIED,
+            applied.state.applications.single().status
+        )
+
+        val testRequest = ToolRequest(
+            tool = "python.tests",
+            args = mapOf("cwd" to "demo_project")
+        )
+        val verified =
+            EvidenceProjectApplicationPolicy.observeToolResult(
+                state = applied.state,
+                bindingId = bindingId,
+                taskProjectId = "demo_project",
+                request = testRequest,
+                result = ToolResult(
+                    ok = true,
+                    tool = "python.tests"
+                ),
+                evidenceId = "pytest-ok",
+                now = now + 3
+            )
+
+        assertTrue(verified.accepted)
+        assertEquals(
+            EvidenceApplicationStatus.VERIFIED,
+            verified.state.applications.single().status
+        )
+        assertEquals(
+            EvidenceProjectOutcome.VERIFIED_BY_TEST,
+            verified.state.claims.single().outcome
+        )
+    }
+
+    @Test
+    fun autoBindingRejectsFailedUnknownCrossProjectAndSearchOnlyMutations() {
+        val searchOnly = EvidenceGraphReducer.record(
+            EvidenceGraphState(),
+            EvidenceObservation(
+                claimKey = "search-only",
+                statement = "Search snippet only",
+                relation = EvidenceRelation.SUPPORTS,
+                sourceUri = "https://search.example/result",
+                sourceKind = EvidenceSourceKind.SEARCH_SNIPPET,
+                retrievalMethod = "web.search",
+                evidenceId = "search-evidence",
+                observedAt = now,
+                projectId = "demo_project",
+                projectRelevance = 1.0
+            )
+        ).state
+
+        val request = ToolRequest(
+            tool = "file.write",
+            args = mapOf(
+                "path" to "demo_project/file.py",
+                "content" to "x"
+            )
+        )
+
+        assertTrue(
+            EvidenceAutomaticProjectBindingPolicy
+                .bindForSuccessfulMutation(
+                    state = searchOnly,
+                    projectId = "demo_project",
+                    taskGoal = "Path.mkdir parents true project evidence",
+                    request = request,
+                    result = ToolResult(ok = true),
+                    now = now + 1
+                )
+                .bindingIds
+                .isEmpty()
+        )
+
+        val retrieved = EvidenceGraphReducer.record(
+            searchOnly,
+            EvidenceObservation(
+                claimKey = "verified-project-evidence",
+                statement = "Verified project evidence",
+                relation = EvidenceRelation.SUPPORTS,
+                sourceUri = "https://docs.example/project",
+                sourceKind = EvidenceSourceKind.WEB_PAGE,
+                retrievalMethod = "web.read",
+                evidenceId = "read-evidence",
+                observedAt = now + 1,
+                projectId = "demo_project",
+                projectRelevance = 0.9
+            )
+        ).state
+
+        val failed =
+            EvidenceAutomaticProjectBindingPolicy
+                .bindForSuccessfulMutation(
+                    state = retrieved,
+                    projectId = "demo_project",
+                    taskGoal = "Verified project evidence",
+                    request = request,
+                    result = ToolResult(
+                        ok = false,
+                        error = "write failed"
+                    ),
+                    now = now + 2
+                )
+        assertTrue(failed.bindingIds.isEmpty())
+
+        val unknown =
+            EvidenceAutomaticProjectBindingPolicy
+                .bindForSuccessfulMutation(
+                    state = retrieved,
+                    projectId = "demo_project",
+                    taskGoal = "Verified project evidence",
+                    request = request,
+                    result = ToolResult(
+                        ok = false,
+                        outcomeUnknown = true,
+                        error = "transport lost"
+                    ),
+                    now = now + 2
+                )
+        assertTrue(unknown.bindingIds.isEmpty())
+
+        val crossProject =
+            EvidenceAutomaticProjectBindingPolicy
+                .bindForSuccessfulMutation(
+                    state = retrieved,
+                    projectId = "demo_project",
+                    taskGoal = "Verified project evidence",
+                    request = ToolRequest(
+                        tool = "file.write",
+                        args = mapOf(
+                            "path" to "other_project/file.py",
+                            "content" to "x"
+                        )
+                    ),
+                    result = ToolResult(ok = true),
+                    now = now + 2
+                )
+        assertTrue(crossProject.bindingIds.isEmpty())
+    }
+
+    @Test
+    fun autoBindingUsesOnlyOneCurrentGoalRelevantVerifiedClaim() {
+        var state = EvidenceGraphReducer.record(
+            EvidenceGraphState(),
+            EvidenceObservation(
+                claimKey = "pathlib-mkdir-parents",
+                statement =
+                    "Path.mkdir with parents true creates missing parent directories.",
+                relation = EvidenceRelation.SUPPORTS,
+                sourceUri = "https://docs.python.org/pathlib",
+                sourceKind = EvidenceSourceKind.WEB_PAGE,
+                retrievalMethod = "web.read",
+                evidenceId = "pathlib-read",
+                observedAt = now,
+                projectId = "demo_project",
+                projectRelevance = 0.95
+            )
+        ).state
+
+        state = EvidenceGraphReducer.record(
+            state,
+            EvidenceObservation(
+                claimKey = "unrelated-http-timeout",
+                statement =
+                    "HTTP client timeout handling can retry transient network failures.",
+                relation = EvidenceRelation.SUPPORTS,
+                sourceUri = "https://example.org/http",
+                sourceKind = EvidenceSourceKind.WEB_PAGE,
+                retrievalMethod = "web.read",
+                evidenceId = "http-read",
+                observedAt = now + 1,
+                projectId = "demo_project",
+                projectRelevance = 0.99
+            )
+        ).state
+
+        val update =
+            EvidenceAutomaticProjectBindingPolicy
+                .bindForSuccessfulMutation(
+                    state = state,
+                    projectId = "demo_project",
+                    taskGoal =
+                        "Use pathlib Path.mkdir parents true in demo_project",
+                    request = ToolRequest(
+                        tool = "file.write",
+                        args = mapOf(
+                            "path" to
+                                "demo_project/evidence_step8.py",
+                            "content" to "from pathlib import Path"
+                        )
+                    ),
+                    result = ToolResult(ok = true),
+                    now = now + 2
+                )
+
+        assertEquals(1, update.bindingIds.size)
+        assertEquals(1, update.state.applications.size)
+        assertEquals(
+            "pathlib-mkdir-parents",
+            update.state.applications.single().claimKey
+        )
+    }
+
+    @Test
+    fun unrelatedCurrentGoalCannotRetroactivelyBindProjectEvidence() {
+        val state = EvidenceGraphReducer.record(
+            EvidenceGraphState(),
+            EvidenceObservation(
+                claimKey = "verified-http-timeout",
+                statement =
+                    "HTTP client timeout handling can retry transient network failures.",
+                relation = EvidenceRelation.SUPPORTS,
+                sourceUri = "https://example.org/http",
+                sourceKind = EvidenceSourceKind.WEB_PAGE,
+                retrievalMethod = "web.read",
+                evidenceId = "http-read",
+                observedAt = now,
+                projectId = "demo_project",
+                projectRelevance = 1.0
+            )
+        ).state
+
+        val update =
+            EvidenceAutomaticProjectBindingPolicy
+                .bindForSuccessfulMutation(
+                    state = state,
+                    projectId = "demo_project",
+                    taskGoal =
+                        "Implement pathlib directory creation with parents true",
+                    request = ToolRequest(
+                        tool = "file.write",
+                        args = mapOf(
+                            "path" to
+                                "demo_project/evidence_step8.py",
+                            "content" to "x"
+                        )
+                    ),
+                    result = ToolResult(ok = true),
+                    now = now + 1
+                )
+
+        assertTrue(update.bindingIds.isEmpty())
+        assertTrue(update.state.applications.isEmpty())
+    }
+
+
 }
