@@ -1,5 +1,6 @@
 package com.lumena.android.agent.core
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -25,6 +26,54 @@ class AgentControllerTest {
         val state = controller.initial(conversational)
         val instruction = controller.interpret("{\"reply\":\"hello\"}", state)
         assertTrue(instruction is ControllerInstruction.Finish)
+    }
+
+
+    @Test
+    fun mixedResearchCodeTaskStartsWithEightToolBudget() {
+        val mixed = TaskState(
+            id = "mixed-budget",
+            projectId = "e2e_step87",
+            goal = """
+                Працюй у проекті e2e_step87.
+                Прочитай через web.read https://docs.python.org/3/library/pathlib.html
+                Потім створи dir_a.py і test_dir_a.py.
+                Запусти python.syntax_check і python.tests.
+            """.trimIndent(),
+            status = TaskStatus.WAITING_MODEL
+        )
+
+        val state = controller.initial(mixed)
+
+        assertEquals(TaskIntent.CODE_WORK, state.intent)
+        assertEquals(8, state.task.maxSteps)
+        assertTrue("web.read" in state.recommendedTools)
+        assertTrue("python.tests" in state.recommendedTools)
+    }
+
+    @Test
+    fun simpleCodeTaskGetsSixButGeneralConversationStaysFour() {
+        val code = controller.initial(
+            TaskState(
+                id = "code-budget",
+                projectId = "demo",
+                goal = "Створи Python script і перевір тестами",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        assertEquals(TaskIntent.CODE_WORK, code.intent)
+        assertEquals(6, code.task.maxSteps)
+
+        val general = controller.initial(
+            TaskState(
+                id = "general-budget",
+                projectId = null,
+                goal = "Поясни різницю між RAM і SSD",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        assertEquals(TaskIntent.GENERAL, general.intent)
+        assertEquals(4, general.task.maxSteps)
     }
 
     @Test
