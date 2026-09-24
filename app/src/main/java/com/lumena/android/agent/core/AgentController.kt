@@ -94,7 +94,14 @@ class AgentController(
             },
             intentConfidence = profile.confidence,
             recommendedTools = profile.recommendedTools,
-            intentGuidance = profile.guidance
+            intentGuidance = buildString {
+                append(profile.guidance)
+                if (requiredTools.isNotEmpty()) {
+                    append(" Explicit required TOOL_RESULT obligations before done: ")
+                    append(requiredTools.joinToString())
+                    append(".")
+                }
+            }
         )
     }
 
