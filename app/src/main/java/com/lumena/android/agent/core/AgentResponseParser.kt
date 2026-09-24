@@ -36,6 +36,41 @@ class AgentResponseParser {
             return AgentDecision.Done(summary.ifBlank { "Task complete." })
         }
 
+        if (
+            obj["action"]
+                ?.toString()
+                ?.trim()
+                ?.lowercase() == "evidence_candidate"
+        ) {
+            val claimKey = obj["claim_key"]
+                ?.toString()
+                ?.trim()
+                .orEmpty()
+            val statement = obj["statement"]
+                ?.toString()
+                ?.trim()
+                .orEmpty()
+            val sourceUrls = (obj["source_urls"] as? List<*>)
+                .orEmpty()
+                .mapNotNull {
+                    it?.toString()?.trim()
+                        ?.takeIf(String::isNotBlank)
+                }
+                .take(8)
+
+            if (
+                claimKey.isNotBlank() &&
+                statement.isNotBlank() &&
+                sourceUrls.isNotEmpty()
+            ) {
+                return AgentDecision.EvidenceCandidate(
+                    claimKey = claimKey,
+                    statement = statement,
+                    sourceUrls = sourceUrls
+                )
+            }
+        }
+
         obj["reply"]?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let {
             return AgentDecision.Reply(it)
         }
