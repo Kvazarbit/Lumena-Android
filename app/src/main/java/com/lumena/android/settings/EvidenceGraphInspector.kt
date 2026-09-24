@@ -18,6 +18,17 @@ data class EvidenceInspectorSource(
     val lastObservedAt: Long
 )
 
+data class EvidenceInspectorSemanticLink(
+    val id: String,
+    val relation: String,
+    val source: EvidenceInspectorSource?,
+    val quotedFragment: String,
+    val extractorModelId: String,
+    val sourceEvidenceCount: Int,
+    val status: String,
+    val at: Long
+)
+
 data class EvidenceInspectorClaim(
     val id: String,
     val claimKey: String,
@@ -27,6 +38,7 @@ data class EvidenceInspectorClaim(
     val supportSources: List<EvidenceInspectorSource>,
     val contradictionSources: List<EvidenceInspectorSource>,
     val mentionSources: List<EvidenceInspectorSource>,
+    val semanticLinks: List<EvidenceInspectorSemanticLink>,
     val evidenceCount: Int,
     val projectId: String?,
     val projectRelevancePercent: Int,
@@ -132,6 +144,33 @@ object EvidenceGraphInspectorPolicy {
             state,
             claim.mentionSourceIds
         )
+        val semanticLinks =
+            state.semanticLinks
+                .filter {
+                    it.claimId == claim.id
+                }
+                .sortedByDescending { it.at }
+                .map { link ->
+                    EvidenceInspectorSemanticLink(
+                        id = link.id,
+                        relation = link.relation.name,
+                        source = state.sources
+                            .firstOrNull {
+                                it.id == link.sourceId
+                            }
+                            ?.let(::sourceEntry),
+                        quotedFragment =
+                            link.quotedFragment,
+                        extractorModelId =
+                            link.extractorModelId,
+                        sourceEvidenceCount =
+                            link.sourceEvidenceIds
+                                .distinct()
+                                .size,
+                        status = link.status.name,
+                        at = link.at
+                    )
+                }
 
         return EvidenceInspectorClaim(
             id = claim.id,
@@ -142,6 +181,7 @@ object EvidenceGraphInspectorPolicy {
             supportSources = support,
             contradictionSources = contradictions,
             mentionSources = mentions,
+            semanticLinks = semanticLinks,
             evidenceCount = claim.evidenceIds.distinct().size,
             projectId = claim.projectId,
             projectRelevancePercent =
@@ -155,7 +195,9 @@ object EvidenceGraphInspectorPolicy {
                 claim = claim,
                 effective = effective,
                 support = support,
-                contradictions = contradictions
+                contradictions = contradictions,
+                semanticLinkCount =
+                    semanticLinks.size
             )
         )
     }
@@ -195,7 +237,8 @@ object EvidenceGraphInspectorPolicy {
         claim: EvidenceClaimNode,
         effective: EvidenceVerificationState,
         support: List<EvidenceInspectorSource>,
-        contradictions: List<EvidenceInspectorSource>
+        contradictions: List<EvidenceInspectorSource>,
+        semanticLinkCount: Int
     ): String = when {
         effective == EvidenceVerificationState.STALE ->
             "Evidence is older than the active freshness window. Historical evidence remains stored, but current reuse should be revalidated."
@@ -219,6 +262,11 @@ object EvidenceGraphInspectorPolicy {
         support.isEmpty() &&
             contradictions.isNotEmpty() ->
             "Only contradicting source evidence is present; inspect the source records before relying on the claim."
+
+        semanticLinkCount > 0 &&
+            support.isEmpty() &&
+            contradictions.isEmpty() ->
+            "Model-grounded semantic proposal. Its quote was found inside a locally verified source excerpt, but the model interpretation itself remains advisory DISCOVERED context and cannot self-promote verification."
 
         claim.outcome ==
             EvidenceProjectOutcome.VERIFIED_BY_TEST ->
