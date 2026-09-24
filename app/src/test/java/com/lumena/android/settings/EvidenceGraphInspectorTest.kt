@@ -4,6 +4,8 @@ import com.lumena.android.agent.core.EvidenceGraphReducer
 import com.lumena.android.agent.core.EvidenceGraphState
 import com.lumena.android.agent.core.EvidenceObservation
 import com.lumena.android.agent.core.EvidenceRelation
+import com.lumena.android.agent.core.EvidenceSemanticLinkPolicy
+import com.lumena.android.agent.core.EvidenceSemanticLinkProposal
 import com.lumena.android.agent.core.EvidenceSourceKind
 import com.lumena.android.agent.core.EvidenceVerificationState
 import org.junit.Assert.assertEquals
@@ -235,5 +237,67 @@ class EvidenceGraphInspectorTest {
         assertEquals(87, claim.projectRelevancePercent)
         assertEquals("lumena", claim.projectId)
         assertEquals(1, claim.evidenceCount)
+    }    @Test
+    fun inspectorLabelsGroundedModelProposalAsAdvisoryDiscovered() {
+        val sourceUpdate = EvidenceGraphReducer.record(
+            EvidenceGraphState(),
+            observation(
+                claimKey = "source:https://docs.example/vulkan",
+                relation = EvidenceRelation.SUPPORTS,
+                uri = "https://docs.example/vulkan",
+                kind = EvidenceSourceKind.WEB_PAGE,
+                method = "web.read",
+                evidenceId = "source-1",
+                at = t0,
+                statement =
+                    "Verified excerpt says Android Vulkan uses feature X on this path."
+            )
+        )
+        val proposed = EvidenceSemanticLinkPolicy.propose(
+            sourceUpdate.state,
+            EvidenceSemanticLinkProposal(
+                claimKey = "feature-x-semantic",
+                statement =
+                    "Feature X is used by this Android Vulkan path.",
+                relation = EvidenceRelation.SUPPORTS,
+                sourceId = sourceUpdate.sourceId!!,
+                quotedFragment =
+                    "Android Vulkan uses feature X on this path",
+                extractorModelId = "gemma4:31b-cloud",
+                at = t0 + 1,
+                projectId = "lumena"
+            )
+        )
+        assertTrue(proposed.accepted)
+
+        val snapshot = EvidenceGraphInspectorPolicy.build(
+            state = proposed.state,
+            now = t0 + 2
+        )
+        val semantic = snapshot.claims.first {
+            it.claimKey == "feature-x-semantic"
+        }
+
+        assertEquals(
+            EvidenceVerificationState.DISCOVERED.name,
+            semantic.effectiveState
+        )
+        assertTrue(semantic.supportSources.isEmpty())
+        assertEquals(1, semantic.semanticLinks.size)
+        assertEquals(
+            "gemma4:31b-cloud",
+            semantic.semanticLinks.single().extractorModelId
+        )
+        assertTrue(
+            semantic.explanation.contains(
+                "model interpretation itself remains advisory"
+            )
+        )
+        assertEquals(
+            "https://docs.example/vulkan",
+            semantic.semanticLinks.single().source?.uri
+        )
     }
+
+
 }
