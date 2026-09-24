@@ -266,7 +266,7 @@ class ContextBuilderTest {
         )
         assertTrue(
             context.contains(
-                "evidence_candidates=[{claim_key,statement,source_ids}]"
+                "\"evidence_candidates\":[{\"claim_key\":\"stable-key\""
             )
         )
         assertTrue(
