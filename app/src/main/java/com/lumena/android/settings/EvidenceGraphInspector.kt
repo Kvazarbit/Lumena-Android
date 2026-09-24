@@ -360,7 +360,7 @@ object EvidenceGraphInspectorPolicy {
 
         claim.verificationState ==
             EvidenceVerificationState.CONTESTED ->
-            "Verified evidence contains both support and contradiction. The conflict remains visible instead of being resolved by model preference."
+            "Verified evidence contains both support and contradiction. Lumena must preserve the conflict instead of resolving it by model preference."
 
         claim.verificationState ==
             EvidenceVerificationState.CORROBORATED ->
