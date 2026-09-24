@@ -12,6 +12,8 @@ import com.lumena.android.agent.core.ConstitutionScope
 import com.lumena.android.agent.core.ConstitutionScopeKind
 import com.lumena.android.agent.core.ConstitutionSourceKind
 import com.lumena.android.agent.core.ConstitutionStance
+import com.lumena.android.agent.core.EvidenceApplicationBinding
+import com.lumena.android.agent.core.EvidenceApplicationStatus
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import org.junit.Assert.assertEquals
@@ -520,6 +522,119 @@ class ConstitutionContributionPolicyTest {
         assertEquals(
             setOf("model-a", "model-b"),
             rule.provenance.mapNotNull { it.modelId }.toSet()
+        )
+    }
+
+
+    @Test
+    fun verifiedProjectApplicationProducesControlledGenomeCandidate() {
+        val binding = EvidenceApplicationBinding(
+            id = "binding-verified-1",
+            claimKey = "source:https://docs.example/pathlib",
+            projectId = "project-a",
+            target = "project-a/src/worker.py",
+            status = EvidenceApplicationStatus.VERIFIED,
+            createdAt = 100,
+            updatedAt = 200,
+            artifactEvidenceIds = listOf("artifact-proof-1"),
+            testEvidenceIds = listOf("pytest-proof-1")
+        )
+
+        val rule = requireNotNull(
+            ConstitutionContributionPolicy
+                .verifiedProjectApplicationRule(
+                    task = task("verified-task-1"),
+                    binding = binding,
+                    contributorModelId = "fixture-model"
+                )
+        )
+
+        assertEquals(
+            ConstitutionRuleStatus.CANDIDATE,
+            rule.status
+        )
+        assertEquals(
+            ConstitutionAuthority.ADVISORY,
+            rule.authority
+        )
+        assertEquals(
+            ConstitutionRuleKind.VERIFICATION,
+            rule.kind
+        )
+        assertEquals(
+            ConstitutionSourceKind.PROJECT_TEST,
+            rule.provenance.single().sourceKind
+        )
+        assertEquals(
+            setOf(
+                ConstitutionEvidenceKind.PROJECT_ARTIFACT,
+                ConstitutionEvidenceKind.TEST_RESULT
+            ),
+            rule.evidenceRefs.map { it.kind }.toSet()
+        )
+        assertTrue(
+            rule.evidenceRefs.all {
+                it.locallyVerified &&
+                    it.projectId == "project-a" &&
+                    it.taskId == "verified-task-1"
+            }
+        )
+        assertFalse(
+            rule.statement.contains(binding.target)
+        )
+        assertFalse(
+            rule.rationale.contains(binding.claimKey)
+        )
+        assertFalse(
+            ConstitutionGenomePolicy.canPromoteToLearned(rule)
+        )
+    }
+
+    @Test
+    fun unverifiedOrCrossProjectBindingCannotCreateGenomeCandidate() {
+        val appliedOnly = EvidenceApplicationBinding(
+            id = "binding-applied",
+            claimKey = "claim",
+            projectId = "project-a",
+            target = "project-a/file.py",
+            status = EvidenceApplicationStatus.APPLIED,
+            createdAt = 100,
+            updatedAt = 150,
+            artifactEvidenceIds = listOf("artifact-proof")
+        )
+
+        assertNull(
+            ConstitutionContributionPolicy
+                .verifiedProjectApplicationRule(
+                    task = task("task-applied"),
+                    binding = appliedOnly
+                )
+        )
+
+        val crossProject = appliedOnly.copy(
+            id = "binding-cross",
+            projectId = "project-b",
+            status = EvidenceApplicationStatus.VERIFIED,
+            testEvidenceIds = listOf("test-proof")
+        )
+        assertNull(
+            ConstitutionContributionPolicy
+                .verifiedProjectApplicationRule(
+                    task = task("task-cross"),
+                    binding = crossProject
+                )
+        )
+
+        val missingTestProof = appliedOnly.copy(
+            id = "binding-no-test",
+            status = EvidenceApplicationStatus.VERIFIED
+        )
+        assertNull(
+            ConstitutionContributionPolicy
+                .verifiedProjectApplicationRule(
+                    task = task("task-no-test"),
+                    binding = missingTestProof
+                )
         )
     }
 
