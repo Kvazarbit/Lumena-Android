@@ -40,6 +40,12 @@ data class PendingWorkflowTool(
         get() = control.plan
 }
 
+data class EvidenceCandidateDisposition(
+    val accepted: Boolean,
+    val candidateId: String? = null,
+    val reason: String? = null
+)
+
 sealed interface WorkflowOutcome {
     data class Finished(
         val text: String,
@@ -70,6 +76,15 @@ class WorkflowRunner(
         List<OllamaMessage>
     ) -> List<String> = { _, _ -> emptyList() },
     private val evidenceProvider: (TaskState) -> List<String> = { emptyList() },
+    private val evidenceCandidateHandler: (
+        TaskState,
+        AgentDecision.EvidenceCandidate
+    ) -> EvidenceCandidateDisposition = { _, _ ->
+        EvidenceCandidateDisposition(
+            accepted = false,
+            reason = "EVIDENCE_CANDIDATE_STORE_UNAVAILABLE"
+        )
+    },
     private val constitutionProvider: (TaskState) -> List<String> = { emptyList() },
     private val reflexAdviceProvider: (
         FailureEvent,
@@ -516,6 +531,108 @@ class WorkflowRunner(
                     transition.stopReason?.let { reason ->
                         return WorkflowOutcome.Failed(reason, current, state)
                     }
+                }
+
+                is ControllerInstruction.ProposeEvidenceCandidate -> {
+                    state = instruction.state
+                    publish(state, onState)
+
+                    val candidate = instruction.candidate
+                    val disposition = try {
+                        evidenceCandidateHandler(
+                            state.task,
+                            candidate
+                        )
+                    } catch (failure: Exception) {
+                        EvidenceCandidateDisposition(
+                            accepted = false,
+                            reason =
+                                "EVIDENCE_CANDIDATE_HANDLER_FAILED:" +
+                                    (
+                                        failure::class.simpleName
+                                            ?: "error"
+                                        )
+                        )
+                    }
+
+                    val feedback = if (disposition.accepted) {
+                        buildString {
+                            appendLine(
+                                "EVIDENCE CANDIDATE STORED · PENDING"
+                            )
+                            disposition.candidateId
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let {
+                                    append("candidate_id=")
+                                    appendLine(it.take(160))
+                                }
+                            appendLine(
+                                "This proposal is NOT verified evidence, permission, execution proof, or task-completion proof."
+                            )
+                            appendLine(
+                                "Promotion requires a new verified observation from a bound local source."
+                            )
+                            append(
+                                "Continue the SAME task. Use a real evidence-producing tool if more verification is needed; otherwise answer/done/partial using only verified evidence."
+                            )
+                        }
+                    } else {
+                        buildString {
+                            appendLine(
+                                "EVIDENCE CANDIDATE REJECTED"
+                            )
+                            append("reason=")
+                            appendLine(
+                                disposition.reason
+                                    ?.take(700)
+                                    ?: "UNSPECIFIED"
+                            )
+                            appendLine(
+                                "No verified claim was created."
+                            )
+                            append(
+                                "Use only source URLs already present in the local Evidence Graph and actually retrieved, or continue research. Do not treat the rejected proposal as evidence."
+                            )
+                        }
+                    }
+
+                    onProgress(
+                        buildString {
+                            append(
+                                if (disposition.accepted) {
+                                    "EVIDENCE CANDIDATE · PENDING"
+                                } else {
+                                    "EVIDENCE CANDIDATE · REJECTED"
+                                }
+                            )
+                            append("\nclaim_key=")
+                            append(candidate.claimKey.take(500))
+                            append("\nsources=")
+                            append(candidate.sourceUrls.size)
+                            disposition.candidateId
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let {
+                                    append("\ncandidate_id=")
+                                    append(it.take(160))
+                                }
+                            disposition.reason
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let {
+                                    append("\nreason=")
+                                    append(it.take(700))
+                                }
+                        }
+                    )
+
+                    current = current +
+                        OllamaMessage(
+                            "assistant",
+                            reply.take(4_000)
+                        ) +
+                        OllamaMessage(
+                            "user",
+                            feedback.take(3_000)
+                        )
                 }
 
                 is ControllerInstruction.Finish -> {
