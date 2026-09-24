@@ -664,11 +664,8 @@ class AgentController(
             ToolRegistry.canonicalize(call.tool) ==
             "python.tests" &&
             EvidenceProjectApplicationPolicy
-                .isFullProjectTestRequest(
-                    ToolRequest(
-                        tool = call.tool,
-                        args = call.args
-                    )
+                .isFullProjectTestArgs(
+                    call.args
                 )
         ) {
             val cwd = call.args["cwd"]
