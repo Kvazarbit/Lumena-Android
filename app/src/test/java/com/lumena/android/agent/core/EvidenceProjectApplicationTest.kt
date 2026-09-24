@@ -532,4 +532,110 @@ class EvidenceProjectApplicationTest {
             regression.state.claims.single().outcome
         )
     }
+    @Test
+    fun secondTargetCanAdvanceAfterAggregateClaimIsAlreadyVerified() {
+        val firstBound = bind(retrievedState())
+        val firstApplied =
+            EvidenceProjectApplicationPolicy.observeToolResult(
+                state = firstBound.state,
+                bindingId = firstBound.bindingId!!,
+                taskProjectId = "lumena",
+                request = ToolRequest(
+                    tool = "file.write",
+                    args = mapOf(
+                        "path" to target,
+                        "content" to "x"
+                    )
+                ),
+                result = ToolResult(ok = true),
+                evidenceId = "first-artifact",
+                now = now + 2
+            )
+        val firstVerified =
+            EvidenceProjectApplicationPolicy.observeToolResult(
+                state = firstApplied.state,
+                bindingId = firstBound.bindingId!!,
+                taskProjectId = "lumena",
+                request = ToolRequest(
+                    tool = "python.tests",
+                    args = mapOf("cwd" to "app")
+                ),
+                result = ToolResult(ok = true),
+                evidenceId = "first-test",
+                now = now + 3
+            )
+        assertTrue(firstVerified.accepted)
+        assertEquals(
+            EvidenceProjectOutcome.VERIFIED_BY_TEST,
+            firstVerified.state.claims.single().outcome
+        )
+
+        val secondTarget =
+            "app/src/main/python/second.py"
+        val secondBound =
+            EvidenceProjectApplicationPolicy.bind(
+                state = firstVerified.state,
+                claimKey = claimKey,
+                projectId = "lumena",
+                target = secondTarget,
+                now = now + 4
+            )
+        assertTrue(secondBound.accepted)
+
+        val secondApplied =
+            EvidenceProjectApplicationPolicy.observeToolResult(
+                state = secondBound.state,
+                bindingId = secondBound.bindingId!!,
+                taskProjectId = "lumena",
+                request = ToolRequest(
+                    tool = "file.write",
+                    args = mapOf(
+                        "path" to secondTarget,
+                        "content" to "y"
+                    )
+                ),
+                result = ToolResult(ok = true),
+                evidenceId = "second-artifact",
+                now = now + 5
+            )
+
+        assertTrue(secondApplied.accepted)
+        assertEquals(
+            EvidenceProjectOutcome.VERIFIED_BY_TEST,
+            secondApplied.state.claims.single().outcome
+        )
+        assertEquals(
+            EvidenceApplicationStatus.APPLIED,
+            secondApplied.state.applications
+                .single { it.id == secondBound.bindingId }
+                .status
+        )
+
+        val secondVerified =
+            EvidenceProjectApplicationPolicy.observeToolResult(
+                state = secondApplied.state,
+                bindingId = secondBound.bindingId!!,
+                taskProjectId = "lumena",
+                request = ToolRequest(
+                    tool = "python.tests",
+                    args = mapOf("cwd" to "app")
+                ),
+                result = ToolResult(ok = true),
+                evidenceId = "second-test",
+                now = now + 6
+            )
+        assertTrue(secondVerified.accepted)
+        assertEquals(
+            EvidenceApplicationStatus.VERIFIED,
+            secondVerified.state.applications
+                .single { it.id == secondBound.bindingId }
+                .status
+        )
+        assertEquals(
+            EvidenceProjectOutcome.VERIFIED_BY_TEST,
+            secondVerified.state.claims.single().outcome
+        )
+    }
+
+
 }
