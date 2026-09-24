@@ -647,11 +647,43 @@ class AgentController(
             }
         }
         if (ok && call.tool in setOf("python.syntax_check", "python.run")) {
-            // A successful unrelated script (or selected pytest subset) proves
-            // nothing about the files changed by this task.
-            pendingPythonPaths.remove(normalizePath(call.args["script"].orEmpty()))
+            // A successful unrelated script proves nothing about the other
+            // files changed by this task.
+            pendingPythonPaths.remove(
+                normalizePath(
+                    call.args["script"].orEmpty()
+                )
+            )
             if (state.pendingPythonPaths.isNotEmpty()) {
-                verificationRequired = pendingPythonPaths.isNotEmpty()
+                verificationRequired =
+                    pendingPythonPaths.isNotEmpty()
+            }
+        }
+        if (
+            ok &&
+            ToolRegistry.canonicalize(call.tool) ==
+            "python.tests" &&
+            EvidenceProjectApplicationPolicy
+                .isFullProjectTestRequest(
+                    ToolRequest(
+                        tool = call.tool,
+                        args = call.args
+                    )
+                )
+        ) {
+            val cwd = call.args["cwd"]
+                .orEmpty()
+                .trim()
+            pendingPythonPaths.removeAll { path ->
+                EvidenceProjectApplicationPolicy
+                    .testScopeContainsTarget(
+                        cwd = cwd,
+                        target = path
+                    )
+            }
+            if (state.pendingPythonPaths.isNotEmpty()) {
+                verificationRequired =
+                    pendingPythonPaths.isNotEmpty()
             }
         }
         if (pendingPythonPaths.isNotEmpty()) {
