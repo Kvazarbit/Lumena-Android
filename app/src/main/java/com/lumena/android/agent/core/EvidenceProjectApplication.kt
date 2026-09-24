@@ -502,23 +502,24 @@ data class EvidenceAutomaticBindingUpdate(
  * It never initiates a mutation, grants permission, or crosses project scope.
  */
 object EvidenceAutomaticProjectBindingPolicy {
-    private const val MAX_BINDINGS_PER_MUTATION = 2
+    private const val MAX_BINDINGS_PER_MUTATION = 1
 
     fun bindForSuccessfulMutation(
         state: EvidenceGraphState,
         projectId: String,
+        taskGoal: String,
         request: ToolRequest,
         result: ToolResult,
-        now: Long,
-        maxBindings: Int = MAX_BINDINGS_PER_MUTATION
+        now: Long
     ): EvidenceAutomaticBindingUpdate {
         val safeProject = projectId.trim()
+        val safeGoal = taskGoal.trim()
         if (
             safeProject.isBlank() ||
+            safeGoal.isBlank() ||
             now <= 0 ||
             !result.ok ||
-            result.outcomeUnknown ||
-            maxBindings <= 0
+            result.outcomeUnknown
         ) {
             return EvidenceAutomaticBindingUpdate(state)
         }
@@ -543,44 +544,30 @@ object EvidenceAutomaticProjectBindingPolicy {
             return EvidenceAutomaticBindingUpdate(state)
         }
 
-        val candidates = state.claims
-            .asSequence()
-            .filter { it.projectId == safeProject }
-            .filter {
-                it.outcome != EvidenceProjectOutcome.REJECTED
-            }
-            .mapNotNull { claim ->
-                val effective =
-                    EvidenceGraphReducer.effectiveVerificationState(
-                        claim = claim,
-                        now = now
-                    )
-                if (
-                    effective !in setOf(
-                        EvidenceVerificationState.RETRIEVED,
-                        EvidenceVerificationState.CORROBORATED
-                    )
-                ) {
-                    null
-                } else {
-                    claim to effective
-                }
-            }
-            .sortedWith(
-                compareByDescending<Pair<EvidenceClaimNode, EvidenceVerificationState>> {
-                    it.second ==
-                        EvidenceVerificationState.CORROBORATED
-                }.thenByDescending {
-                    it.first.projectRelevance
-                }.thenByDescending {
-                    it.first.lastObservedAt
-                }.thenBy {
-                    it.first.claimKey
-                }
+        val candidates =
+            EvidenceGraphReducer.relevantClaims(
+                state = state,
+                query = safeGoal,
+                now = now,
+                limit = 16
             )
-            .take(maxBindings.coerceAtMost(MAX_BINDINGS_PER_MUTATION))
-            .map { it.first }
-            .toList()
+                .asSequence()
+                .filter { it.projectId == safeProject }
+                .filter {
+                    it.outcome != EvidenceProjectOutcome.REJECTED
+                }
+                .filter { claim ->
+                    EvidenceGraphReducer
+                        .effectiveVerificationState(
+                            claim = claim,
+                            now = now
+                        ) in setOf(
+                            EvidenceVerificationState.RETRIEVED,
+                            EvidenceVerificationState.CORROBORATED
+                        )
+                }
+                .take(MAX_BINDINGS_PER_MUTATION)
+                .toList()
 
         if (candidates.isEmpty()) {
             return EvidenceAutomaticBindingUpdate(state)
