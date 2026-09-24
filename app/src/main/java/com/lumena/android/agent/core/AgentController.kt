@@ -73,9 +73,13 @@ class AgentController(
     fun initial(task: TaskState): AgentControlState {
         val profile = TaskIntentRouter.route(task.goal)
         val reserve = if (profile.preflight != null) 1 else 0
+        val initialToolBudget = maxOf(
+            task.maxSteps + reserve,
+            profile.minimumToolSteps
+        ).coerceAtMost(budget.maxTotalSteps)
         return AgentControlState(
             task = task.copy(
-                maxSteps = (task.maxSteps + reserve).coerceAtMost(budget.maxTotalSteps)
+                maxSteps = initialToolBudget
             ),
             intent = profile.intent,
             pendingPythonPaths = task.kernel.pendingVerification,
