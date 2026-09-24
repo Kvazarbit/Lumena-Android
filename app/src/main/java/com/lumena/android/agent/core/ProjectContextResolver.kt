@@ -11,7 +11,7 @@ object ProjectContextResolver {
     private const val MAX_PROJECT_ID_CHARS = 80
 
     private val explicitProject = Regex(
-        """(?iu)\b(?:project|projekt|projekcie|projektu|проєкт|проєкті|проєкту|проект|проекті|проекте|проекту)\b\s*(?:[:=]\s*)?[`"']?([A-Za-z0-9][A-Za-z0-9._-]{0,79})[`"']?(?=$|[\s.,;:!?\)\]\}])"""
+        """(?iu)\b(?:project|projekt|projekcie|projektu|проєкт|проєкті|проєкту|проект|проекті|проекте|проекту)\b\s*(?:[:=]\s*)?[`"']?([A-Za-z0-9](?:[A-Za-z0-9._-]{0,78}[A-Za-z0-9_-])?)[`"']?(?=$|[\s.,;:!?\)\]\}])"""
     )
 
     fun resolve(
@@ -45,7 +45,7 @@ object ProjectContextResolver {
         }
 
         if (
-            !Regex("""[A-Za-z0-9][A-Za-z0-9._-]{0,79}""")
+            !Regex("""[A-Za-z0-9](?:[A-Za-z0-9._-]{0,78}[A-Za-z0-9_-])?""")
                 .matches(value)
         ) {
             return null
