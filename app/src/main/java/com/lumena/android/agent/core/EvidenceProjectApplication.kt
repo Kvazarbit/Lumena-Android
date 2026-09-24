@@ -490,6 +490,145 @@ object EvidenceProjectApplicationPolicy {
             }
 }
 
+data class EvidenceAutomaticBindingUpdate(
+    val state: EvidenceGraphState,
+    val bindingIds: List<String> = emptyList()
+)
+
+/**
+ * Creates advisory evidence->target bindings only after an already-authorized
+ * mutation produced a successful known TOOL_RESULT.
+ *
+ * It never initiates a mutation, grants permission, or crosses project scope.
+ */
+object EvidenceAutomaticProjectBindingPolicy {
+    private const val MAX_BINDINGS_PER_MUTATION = 2
+
+    fun bindForSuccessfulMutation(
+        state: EvidenceGraphState,
+        projectId: String,
+        request: ToolRequest,
+        result: ToolResult,
+        now: Long,
+        maxBindings: Int = MAX_BINDINGS_PER_MUTATION
+    ): EvidenceAutomaticBindingUpdate {
+        val safeProject = projectId.trim()
+        if (
+            safeProject.isBlank() ||
+            now <= 0 ||
+            !result.ok ||
+            result.outcomeUnknown ||
+            maxBindings <= 0
+        ) {
+            return EvidenceAutomaticBindingUpdate(state)
+        }
+
+        val canonical = ToolRegistry.canonicalize(request.tool)
+        val spec = ToolRegistry.get(canonical)
+        if (spec?.risk != ToolRisk.MUTATING) {
+            return EvidenceAutomaticBindingUpdate(state)
+        }
+
+        val target = mutationTarget(
+            canonical = canonical,
+            request = request
+        ) ?: return EvidenceAutomaticBindingUpdate(state)
+
+        if (
+            !EvidenceProjectApplicationPolicy.testScopeContainsTarget(
+                cwd = safeProject,
+                target = target
+            )
+        ) {
+            return EvidenceAutomaticBindingUpdate(state)
+        }
+
+        val candidates = state.claims
+            .asSequence()
+            .filter { it.projectId == safeProject }
+            .filter {
+                it.outcome != EvidenceProjectOutcome.REJECTED
+            }
+            .mapNotNull { claim ->
+                val effective =
+                    EvidenceGraphReducer.effectiveVerificationState(
+                        claim = claim,
+                        now = now
+                    )
+                if (
+                    effective !in setOf(
+                        EvidenceVerificationState.RETRIEVED,
+                        EvidenceVerificationState.CORROBORATED
+                    )
+                ) {
+                    null
+                } else {
+                    claim to effective
+                }
+            }
+            .sortedWith(
+                compareByDescending<Pair<EvidenceClaimNode, EvidenceVerificationState>> {
+                    it.second ==
+                        EvidenceVerificationState.CORROBORATED
+                }.thenByDescending {
+                    it.first.projectRelevance
+                }.thenByDescending {
+                    it.first.lastObservedAt
+                }.thenBy {
+                    it.first.claimKey
+                }
+            )
+            .take(maxBindings.coerceAtMost(MAX_BINDINGS_PER_MUTATION))
+            .map { it.first }
+            .toList()
+
+        if (candidates.isEmpty()) {
+            return EvidenceAutomaticBindingUpdate(state)
+        }
+
+        var next = state
+        val ids = mutableListOf<String>()
+        candidates.forEach { claim ->
+            val update =
+                EvidenceProjectApplicationPolicy.bind(
+                    state = next,
+                    claimKey = claim.claimKey,
+                    projectId = safeProject,
+                    target = target,
+                    now = now
+                )
+            if (update.accepted) {
+                next = update.state
+                update.bindingId
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let(ids::add)
+            }
+        }
+
+        return EvidenceAutomaticBindingUpdate(
+            state = next,
+            bindingIds = ids.distinct().sorted()
+        )
+    }
+
+    private fun mutationTarget(
+        canonical: String,
+        request: ToolRequest
+    ): String? {
+        val raw = when (canonical) {
+            "project.create" -> request.args["name"]
+            "dir.create",
+            "file.write",
+            "file.patch" -> request.args["path"]
+            else -> null
+        } ?: return null
+
+        return EvidenceProjectApplicationPolicy
+            .normalizeTarget(raw)
+            .takeIf { it.isNotBlank() }
+    }
+}
+
 /**
  * Pure router that maps a verified project tool result to already-existing
  * evidence bindings. It never creates a binding and therefore cannot turn
