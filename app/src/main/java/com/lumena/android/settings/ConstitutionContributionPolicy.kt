@@ -11,6 +11,8 @@ import com.lumena.android.agent.core.ConstitutionScope
 import com.lumena.android.agent.core.ConstitutionScopeKind
 import com.lumena.android.agent.core.ConstitutionSourceKind
 import com.lumena.android.agent.core.ConstitutionStance
+import com.lumena.android.agent.core.EvidenceApplicationBinding
+import com.lumena.android.agent.core.EvidenceApplicationStatus
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.ToolRegistry
 import java.security.MessageDigest
@@ -29,6 +31,127 @@ import java.security.MessageDigest
  */
 object ConstitutionContributionPolicy {
     private const val MAX_EXAMPLES_PER_PASS = 64
+
+    /**
+     * Converts only a fully VERIFIED evidence->project application into a
+     * controlled-template constitutional candidate.
+     *
+     * The binding already contains separate successful mutation and local-test
+     * proof IDs. Model prose, source text and target paths never author the
+     * constitutional statement.
+     */
+    fun verifiedProjectApplicationRule(
+        task: TaskState,
+        binding: EvidenceApplicationBinding,
+        contributorModelId: String? = null
+    ): ConstitutionRule? {
+        val projectId =
+            task.projectId
+                ?.takeIf { it.isNotBlank() }
+                ?: return null
+
+        if (
+            binding.status != EvidenceApplicationStatus.VERIFIED ||
+            binding.projectId != projectId ||
+            binding.artifactEvidenceIds.isEmpty() ||
+            binding.testEvidenceIds.isEmpty()
+        ) {
+            return null
+        }
+
+        val scope = ConstitutionScope(
+            kind = ConstitutionScopeKind.PROJECT,
+            key = safeId(projectId)
+        )
+        val taskId = safeId(task.id)
+        val safeProject = safeId(projectId)
+        val at = binding.updatedAt
+
+        val evidence =
+            (
+                binding.artifactEvidenceIds
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                    .take(16)
+                    .map { id ->
+                        ConstitutionEvidenceRef(
+                            id = safeEvidenceId(id),
+                            kind =
+                                ConstitutionEvidenceKind.PROJECT_ARTIFACT,
+                            locallyVerified = true,
+                            taskId = taskId,
+                            projectId = safeProject,
+                            at = at
+                        )
+                    } +
+                    binding.testEvidenceIds
+                        .filter { it.isNotBlank() }
+                        .distinct()
+                        .take(16)
+                        .map { id ->
+                            ConstitutionEvidenceRef(
+                                id = safeEvidenceId(id),
+                                kind =
+                                    ConstitutionEvidenceKind.TEST_RESULT,
+                                locallyVerified = true,
+                                taskId = taskId,
+                                projectId = safeProject,
+                                at = at
+                            )
+                        }
+                )
+                .distinctBy { it.id }
+
+        if (
+            evidence.none {
+                it.kind ==
+                    ConstitutionEvidenceKind.PROJECT_ARTIFACT
+            } ||
+            evidence.none {
+                it.kind ==
+                    ConstitutionEvidenceKind.TEST_RESULT
+            }
+        ) {
+            return null
+        }
+
+        val source = ConstitutionProvenance(
+            sourceKind = ConstitutionSourceKind.PROJECT_TEST,
+            sourceId =
+                "verified-binding:" +
+                    safeId(binding.id),
+            modelId = contributorModelId
+                ?.takeIf { it.isNotBlank() }
+                ?.let(::safeId),
+            projectId = safeProject,
+            taskId = taskId,
+            at = at
+        )
+
+        return ConstitutionGenomePolicy.propose(
+            source = source,
+            claimKey = "verify-project-mutation-before-success",
+            stance = ConstitutionStance.AFFIRM,
+            kind = ConstitutionRuleKind.VERIFICATION,
+            statement =
+                "After applying a project mutation in this scope, require successful local verification before treating the application as verified.",
+            rationale =
+                "This candidate is derived only from a VERIFIED evidence-to-project binding with separate successful artifact and local-test proof. It remains advisory and grants no execution permission.",
+            threatPrevented =
+                "Treating a successful write as sufficient proof that the resulting project behavior is correct.",
+            scope = scope,
+            evidenceRefs = evidence,
+            enforcementPoints = listOf(
+                "ContextKernel",
+                "EvidenceProjectApplicationPolicy",
+                "ToolRegistry",
+                "ToolGate"
+            ),
+            identitySeed =
+                "verified-project-application|" +
+                    scope.stableKey()
+        )
+    }
 
     fun ingestVerifiedRecoveryExamples(
         state: ConstitutionGenomeState,
@@ -264,6 +387,16 @@ object ConstitutionContributionPolicy {
                 kind = ConstitutionScopeKind.PROJECT,
                 key = "task:" + safeId(task.id)
             )
+
+    private fun safeEvidenceId(value: String): String {
+        val clean = value
+            .replace('\u0000', ' ')
+            .trim()
+        if (clean.matches(Regex("[A-Za-z0-9._:-]{1,180}"))) {
+            return clean
+        }
+        return "evidence-" + sha256(clean).take(32)
+    }
 
     private fun safeClaimKey(value: String): String {
         val clean = value
