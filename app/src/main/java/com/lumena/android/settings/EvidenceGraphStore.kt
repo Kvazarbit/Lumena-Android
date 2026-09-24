@@ -508,6 +508,7 @@ object EvidenceGraphStore {
     fun autoBindForSuccessfulMutation(
         context: Context,
         taskProjectId: String,
+        taskGoal: String,
         request: ToolRequest,
         result: ToolResult,
         now: Long = System.currentTimeMillis()
@@ -518,6 +519,7 @@ object EvidenceGraphStore {
                 .bindForSuccessfulMutation(
                     state = current,
                     projectId = taskProjectId,
+                    taskGoal = taskGoal,
                     request = request,
                     result = result,
                     now = now
