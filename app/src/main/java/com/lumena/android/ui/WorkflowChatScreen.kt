@@ -65,6 +65,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.core.AgentControlState
 import com.lumena.android.agent.core.TaskState
+import com.lumena.android.agent.core.TaskOutcomeContext
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.TermuxBridgeClient
@@ -705,9 +706,19 @@ fun WorkflowChatScreen(
                 coordinator.pauseForApproval(runToken)
             }
             is WorkflowOutcome.Failed -> {
-                history = outcome.history
+                val failedTask = outcome.control.task
+                val outcomeContext = TaskOutcomeContext.failed(
+                    task = failedTask,
+                    message = outcome.message
+                )
+                history =
+                    outcome.history +
+                        OllamaMessage(
+                            "user",
+                            outcomeContext
+                        )
                 pending = null
-                currentTask = outcome.control.task
+                currentTask = failedTask
                 bubbles += ChatBubble("error", outcome.message)
                 coordinator.finish(runToken, "Failed")
                 taskApprovals.remove(taskId)
