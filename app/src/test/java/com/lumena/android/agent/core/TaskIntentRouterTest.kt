@@ -77,6 +77,28 @@ class TaskIntentRouterTest {
         assertEquals(4, profile.minimumToolSteps)
     }
 
+
+    @Test
+    fun explicitToolRequirementsAreDetectedAndNegatedOnesAreExcluded() {
+        val required = TaskIntentRouter.explicitRequiredTools(
+            """
+            Прочитай через web.read.
+            Запусти python.syntax_check.
+            Запусти python.tests.
+            Не запускай python.run.
+            """.trimIndent()
+        )
+
+        assertEquals(
+            setOf(
+                "web.read",
+                "python.syntax_check",
+                "python.tests"
+            ),
+            required
+        )
+    }
+
     @Test
     fun fileInspectionDiscoversWorkspaceFirst() {
         val profile = TaskIntentRouter.route(
