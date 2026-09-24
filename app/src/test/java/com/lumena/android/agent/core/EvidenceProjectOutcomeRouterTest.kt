@@ -331,6 +331,7 @@ class EvidenceProjectOutcomeRouterTest {
                 .bindForSuccessfulMutation(
                     state = retrieved,
                     projectId = "demo_project",
+                    taskGoal = "Path.mkdir parents true project evidence",
                     request = mutationRequest,
                     result = mutationResult,
                     now = now + 1
@@ -434,6 +435,7 @@ class EvidenceProjectOutcomeRouterTest {
                 .bindForSuccessfulMutation(
                     state = searchOnly,
                     projectId = "demo_project",
+                    taskGoal = "Path.mkdir parents true project evidence",
                     request = request,
                     result = ToolResult(ok = true),
                     now = now + 1
@@ -463,6 +465,7 @@ class EvidenceProjectOutcomeRouterTest {
                 .bindForSuccessfulMutation(
                     state = retrieved,
                     projectId = "demo_project",
+                    taskGoal = "Verified project evidence",
                     request = request,
                     result = ToolResult(
                         ok = false,
@@ -477,6 +480,7 @@ class EvidenceProjectOutcomeRouterTest {
                 .bindForSuccessfulMutation(
                     state = retrieved,
                     projectId = "demo_project",
+                    taskGoal = "Verified project evidence",
                     request = request,
                     result = ToolResult(
                         ok = false,
@@ -492,6 +496,7 @@ class EvidenceProjectOutcomeRouterTest {
                 .bindForSuccessfulMutation(
                     state = retrieved,
                     projectId = "demo_project",
+                    taskGoal = "Verified project evidence",
                     request = ToolRequest(
                         tool = "file.write",
                         args = mapOf(
@@ -504,5 +509,111 @@ class EvidenceProjectOutcomeRouterTest {
                 )
         assertTrue(crossProject.bindingIds.isEmpty())
     }
+
+    @Test
+    fun autoBindingUsesOnlyOneCurrentGoalRelevantVerifiedClaim() {
+        var state = EvidenceGraphReducer.record(
+            EvidenceGraphState(),
+            EvidenceObservation(
+                claimKey = "pathlib-mkdir-parents",
+                statement =
+                    "Path.mkdir with parents true creates missing parent directories.",
+                relation = EvidenceRelation.SUPPORTS,
+                sourceUri = "https://docs.python.org/pathlib",
+                sourceKind = EvidenceSourceKind.WEB_PAGE,
+                retrievalMethod = "web.read",
+                evidenceId = "pathlib-read",
+                observedAt = now,
+                projectId = "demo_project",
+                projectRelevance = 0.95
+            )
+        ).state
+
+        state = EvidenceGraphReducer.record(
+            state,
+            EvidenceObservation(
+                claimKey = "unrelated-http-timeout",
+                statement =
+                    "HTTP client timeout handling can retry transient network failures.",
+                relation = EvidenceRelation.SUPPORTS,
+                sourceUri = "https://example.org/http",
+                sourceKind = EvidenceSourceKind.WEB_PAGE,
+                retrievalMethod = "web.read",
+                evidenceId = "http-read",
+                observedAt = now + 1,
+                projectId = "demo_project",
+                projectRelevance = 0.99
+            )
+        ).state
+
+        val update =
+            EvidenceAutomaticProjectBindingPolicy
+                .bindForSuccessfulMutation(
+                    state = state,
+                    projectId = "demo_project",
+                    taskGoal =
+                        "Use pathlib Path.mkdir parents true in demo_project",
+                    request = ToolRequest(
+                        tool = "file.write",
+                        args = mapOf(
+                            "path" to
+                                "demo_project/evidence_step8.py",
+                            "content" to "from pathlib import Path"
+                        )
+                    ),
+                    result = ToolResult(ok = true),
+                    now = now + 2
+                )
+
+        assertEquals(1, update.bindingIds.size)
+        assertEquals(1, update.state.applications.size)
+        assertEquals(
+            "pathlib-mkdir-parents",
+            update.state.applications.single().claimKey
+        )
+    }
+
+    @Test
+    fun unrelatedCurrentGoalCannotRetroactivelyBindProjectEvidence() {
+        val state = EvidenceGraphReducer.record(
+            EvidenceGraphState(),
+            EvidenceObservation(
+                claimKey = "verified-http-timeout",
+                statement =
+                    "HTTP client timeout handling can retry transient network failures.",
+                relation = EvidenceRelation.SUPPORTS,
+                sourceUri = "https://example.org/http",
+                sourceKind = EvidenceSourceKind.WEB_PAGE,
+                retrievalMethod = "web.read",
+                evidenceId = "http-read",
+                observedAt = now,
+                projectId = "demo_project",
+                projectRelevance = 1.0
+            )
+        ).state
+
+        val update =
+            EvidenceAutomaticProjectBindingPolicy
+                .bindForSuccessfulMutation(
+                    state = state,
+                    projectId = "demo_project",
+                    taskGoal =
+                        "Implement pathlib directory creation with parents true",
+                    request = ToolRequest(
+                        tool = "file.write",
+                        args = mapOf(
+                            "path" to
+                                "demo_project/evidence_step8.py",
+                            "content" to "x"
+                        )
+                    ),
+                    result = ToolResult(ok = true),
+                    now = now + 1
+                )
+
+        assertTrue(update.bindingIds.isEmpty())
+        assertTrue(update.state.applications.isEmpty())
+    }
+
 
 }
