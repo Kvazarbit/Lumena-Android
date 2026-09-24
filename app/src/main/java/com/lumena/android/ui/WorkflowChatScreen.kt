@@ -96,6 +96,7 @@ import com.lumena.android.settings.ContextGenomeStats
 import com.lumena.android.settings.ContextGenomeStore
 import com.lumena.android.settings.ConstitutionGenomeStore
 import com.lumena.android.settings.ExperienceMemoryStore
+import com.lumena.android.settings.EvidenceGraphStore
 import com.lumena.android.settings.ExperienceLandscapeStore
 import com.lumena.android.settings.CoordinatorExperienceStore
 import com.lumena.android.settings.ReflexExperienceRanker
@@ -497,6 +498,13 @@ fun WorkflowChatScreen(
                     )
                 }
             },
+            evidenceProvider = { task ->
+                EvidenceGraphStore.relevant(
+                    context = context,
+                    query = task.goal,
+                    limit = 4
+                )
+            },
             constitutionProvider = { task ->
                 ConstitutionGenomeStore.relevant(
                     context = context,
@@ -541,7 +549,7 @@ fun WorkflowChatScreen(
             onToolExperience = { task, request, result, elapsedMs ->
                 val eventId = ExperienceMemoryStore.record(context, request, result)
 
-                // Advisory projection only. Failure here must never erase or
+                // Advisory projections only. Failure here must never erase or
                 // block the older verified experience stores below.
                 runCatching {
                     AdaptiveWebResearchStore.record(
@@ -550,6 +558,15 @@ fun WorkflowChatScreen(
                         request = request,
                         result = result,
                         elapsedMs = elapsedMs,
+                        evidenceId = eventId
+                    )
+                }
+                runCatching {
+                    EvidenceGraphStore.record(
+                        context = context,
+                        task = task,
+                        request = request,
+                        result = result,
                         evidenceId = eventId
                     )
                 }

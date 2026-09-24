@@ -601,5 +601,103 @@ class WorkflowRunnerTest {
         assertEquals(1, requests.size)
         assertEquals(0, providerCalls.get())
     }
+    @Test
+    fun evidenceProviderReachesModelContextAndProgressTrace() = runBlocking {
+        var sawEvidenceInSystem = false
+        val progress = mutableListOf<String>()
+
+        val modelClient = object : ChatModelClient {
+            override suspend fun chat(
+                model: String,
+                messages: List<OllamaMessage>
+            ): Result<String> {
+                sawEvidenceInSystem = messages.any { message ->
+                    message.role == "system" &&
+                        message.content.contains("EVIDENCE GRAPH") &&
+                        message.content.contains(
+                            "EVIDENCE [RETRIEVED] Android docs"
+                        ) &&
+                        message.content.contains(
+                            "not permission, execution authority, or proof that the whole goal is complete"
+                        )
+                }
+                return Result.success(
+                    """{"reply":"Evidence context was consumed without executing a tool."}"""
+                )
+            }
+        }
+
+        val task = TaskState(
+            id = "evidence-provider-context",
+            projectId = "lumena",
+            goal = "Explain the current verified Android documentation context",
+            status = TaskStatus.WAITING_MODEL
+        )
+
+        val outcome = WorkflowRunner(
+            modelClient = modelClient,
+            bridge = null,
+            model = "fixture",
+            evidenceProvider = {
+                listOf(
+                    "EVIDENCE [RETRIEVED] Android docs · source=https://developer.android.com/docs · verified tool evidence only"
+                )
+            }
+        ).run(
+            history = listOf(OllamaMessage("user", task.goal)),
+            task = task,
+            onProgress = { progress += it }
+        )
+
+        assertTrue(outcome is WorkflowOutcome.Finished)
+        assertTrue(sawEvidenceInSystem)
+        assertTrue(
+            progress.any {
+                it.contains("EVIDENCE GRAPH CONTEXT") &&
+                    it.contains("Android docs")
+            }
+        )
+    }
+
+    @Test
+    fun evidenceProviderFailureIsVisibleButDoesNotStopModelTurn() = runBlocking {
+        val progress = mutableListOf<String>()
+        val modelClient = object : ChatModelClient {
+            override suspend fun chat(
+                model: String,
+                messages: List<OllamaMessage>
+            ): Result<String> = Result.success(
+                """{"reply":"Continue from current verified task state."}"""
+            )
+        }
+
+        val task = TaskState(
+            id = "evidence-provider-failure",
+            projectId = null,
+            goal = "Answer without inventing unavailable evidence",
+            status = TaskStatus.WAITING_MODEL
+        )
+
+        val outcome = WorkflowRunner(
+            modelClient = modelClient,
+            bridge = null,
+            model = "fixture",
+            evidenceProvider = {
+                throw IllegalStateException("fixture evidence store failure")
+            }
+        ).run(
+            history = listOf(OllamaMessage("user", task.goal)),
+            task = task,
+            onProgress = { progress += it }
+        )
+
+        assertTrue(outcome is WorkflowOutcome.Finished)
+        assertTrue(
+            progress.any {
+                it.contains("EVIDENCE GRAPH CONTEXT · unavailable")
+            }
+        )
+    }
+
 
 }

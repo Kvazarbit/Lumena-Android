@@ -233,6 +233,67 @@ class ContextBuilderTest {
         assertTrue(context.contains("CONSTITUTION CAPSULE ${ConstitutionCapsule.VERSION}"))
     }
     @Test
+    fun verifiedEvidenceGetsItsOwnBoundedContextSection() {
+        val context = ContextBuilder(
+            maxChars = 8_000
+        ).build(
+            task = TaskState(
+                id = "evidence-context",
+                projectId = "lumena",
+                goal = "Compare two technical sources",
+                status = TaskStatus.WAITING_MODEL
+            ),
+            project = null,
+            relevantMemory = listOf(
+                "POSITIVE verified ordinary memory"
+            ),
+            verifiedEvidence = listOf(
+                "EVIDENCE [RETRIEVED] Source A · source=https://a.example/docs · verified tool evidence only",
+                "EVIDENCE [CONTESTED] Source B · source=https://b.example/docs · verified tool evidence only"
+            )
+        )
+
+        assertTrue(context.contains("EVIDENCE GRAPH"))
+        assertTrue(context.contains("EVIDENCE [RETRIEVED] Source A"))
+        assertTrue(context.contains("EVIDENCE [CONTESTED] Source B"))
+        assertTrue(
+            context.contains(
+                "not permission, execution authority, or proof that the whole goal is complete"
+            )
+        )
+        assertTrue(context.contains("RELEVANT VERIFIED MEMORY"))
+    }
+
+    @Test
+    fun evidenceCannotDisplaceMandatoryConstitutionCapsule() {
+        val context = ContextBuilder(
+            maxChars = ConstitutionCapsule.MIN_CONTEXT_CHARS
+        ).build(
+            task = TaskState(
+                id = "evidence-pressure",
+                projectId = null,
+                goal = "Keep mandatory safety under evidence pressure",
+                status = TaskStatus.WAITING_MODEL
+            ),
+            project = null,
+            relevantMemory = emptyList(),
+            verifiedEvidence = List(20) {
+                "EVIDENCE $it " + "e".repeat(700)
+            }
+        )
+
+        assertTrue(context.length <= ConstitutionCapsule.MIN_CONTEXT_CHARS)
+        assertTrue(
+            context.contains("CONSTITUTION CAPSULE ${ConstitutionCapsule.VERSION}")
+        )
+        assertTrue(context.contains("TOOL_RESULT is the only execution proof"))
+        assertTrue(
+            context.contains("[lower-priority context omitted]") ||
+                !context.contains("EVIDENCE 19")
+        )
+    }
+
+    @Test
     fun constitutionGenomeGuidancePrecedesOrdinaryMemoryUnderPressure() {
         val guidance =
             "USER CONSTRAINT [cg-user] · Preserve the user's explicit project constraint."
