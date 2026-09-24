@@ -41,6 +41,40 @@ class TaskIntentRouterTest {
         assertEquals("context.snapshot", profile.preflight?.tool)
         assertFalse(profile.preflight?.mandatory ?: true)
         assertTrue("python.tests" in profile.recommendedTools)
+        assertEquals(6, profile.minimumToolSteps)
+    }
+
+
+    @Test
+    fun mixedWebResearchAndCodeGetsCombinedRecipeAndEightToolBudget() {
+        val profile = TaskIntentRouter.route(
+            """
+            Працюй у проекті e2e_step87.
+            Прочитай через web.read:
+            https://docs.python.org/3/library/pathlib.html#pathlib.Path.mkdir
+            Потім створи e2e_step87/dir_a.py і e2e_step87/test_dir_a.py.
+            Запусти python.syntax_check і python.tests.
+            """.trimIndent()
+        )
+
+        assertEquals(TaskIntent.CODE_WORK, profile.intent)
+        assertTrue(profile.confidence >= 90)
+        assertTrue("web.read" in profile.recommendedTools)
+        assertTrue("file.write" in profile.recommendedTools)
+        assertTrue("python.syntax_check" in profile.recommendedTools)
+        assertTrue("python.tests" in profile.recommendedTools)
+        assertEquals(8, profile.minimumToolSteps)
+        assertEquals("context.snapshot", profile.preflight?.tool)
+    }
+
+    @Test
+    fun ordinaryConversationKeepsFourToolCeilingHint() {
+        val profile = TaskIntentRouter.route(
+            "поясни мені різницю між RAM і SSD"
+        )
+
+        assertEquals(TaskIntent.GENERAL, profile.intent)
+        assertEquals(4, profile.minimumToolSteps)
     }
 
     @Test
