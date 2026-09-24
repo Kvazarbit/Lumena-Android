@@ -267,24 +267,52 @@ object EvidenceProjectApplicationPolicy {
             )
         }
 
-        val outcome = EvidenceGraphReducer.applyProjectOutcome(
+        val claim = state.claims.firstOrNull {
+            it.claimKey == binding.claimKey
+        } ?: return EvidenceApplicationUpdate(
             state = state,
-            claimKey = binding.claimKey,
-            outcome = EvidenceProjectOutcome.APPLIED_TO_PROJECT,
-            proof = EvidenceOutcomeProof(
-                kind = EvidenceOutcomeProofKind.PROJECT_ARTIFACT,
-                evidenceId = evidenceId,
-                at = now
-            )
+            accepted = false,
+            reason = "CLAIM_NOT_FOUND",
+            bindingId = binding.id
         )
-        if (!outcome.accepted) {
-            return EvidenceApplicationUpdate(
-                state = state,
-                accepted = false,
-                reason = outcome.reason ?: "OUTCOME_REJECTED",
-                bindingId = binding.id
-            )
-        }
+
+        // Claim outcome is an aggregate monotonic summary across every project
+        // binding for that claim. A new target may still need its own
+        // PENDING -> APPLIED -> VERIFIED lifecycle after an earlier target
+        // already raised the aggregate claim to VERIFIED_BY_TEST. Do not
+        // regress that aggregate outcome merely to advance the new binding.
+        val outcomeState =
+            if (
+                claim.outcome ==
+                    EvidenceProjectOutcome.VERIFIED_BY_TEST
+            ) {
+                state
+            } else {
+                val outcome =
+                    EvidenceGraphReducer.applyProjectOutcome(
+                        state = state,
+                        claimKey = binding.claimKey,
+                        outcome =
+                            EvidenceProjectOutcome.APPLIED_TO_PROJECT,
+                        proof = EvidenceOutcomeProof(
+                            kind =
+                                EvidenceOutcomeProofKind.PROJECT_ARTIFACT,
+                            evidenceId = evidenceId,
+                            at = now
+                        )
+                    )
+                if (!outcome.accepted) {
+                    return EvidenceApplicationUpdate(
+                        state = state,
+                        accepted = false,
+                        reason =
+                            outcome.reason
+                                ?: "OUTCOME_REJECTED",
+                        bindingId = binding.id
+                    )
+                }
+                outcome.state
+            }
 
         val updated = binding.copy(
             status = EvidenceApplicationStatus.APPLIED,
@@ -297,9 +325,9 @@ object EvidenceProjectApplicationPolicy {
         )
 
         return EvidenceApplicationUpdate(
-            state = outcome.state.copy(
+            state = outcomeState.copy(
                 applications = replaceBinding(
-                    outcome.state.applications,
+                    outcomeState.applications,
                     updated
                 )
             ),
