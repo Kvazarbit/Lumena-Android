@@ -77,8 +77,72 @@ class FollowUpGoalTest {
         assertNull(result.researchGoal)
     }
 
+    @Test fun failureExplanationReferencesPreviousGoalAcrossLanguages() {
+        val goal = "Працюй у проєкті demo_project і виконай перевірку"
+
+        for (followUp in listOf(
+            "чому?",
+            "що сталося?",
+            "почему?",
+            "why?",
+            "what happened?",
+            "dlaczego?",
+            "co się stało?"
+        )) {
+            assertTrue(FollowUpGoal.isOutcomeReference(followUp))
+            assertTrue(FollowUpGoal.isReference(followUp))
+            assertEquals(goal, FollowUpGoal.resolve(followUp, goal))
+        }
+    }
+
+    @Test fun failedOutcomeCapsuleIsBoundedHistoricalContextOnly() {
+        val call = AgentDecision.ToolCall(
+            tool = "web.search",
+            args = mapOf("query" to "python pathlib mkdir")
+        )
+        val kernel = ContextKernel.record(
+            state = ContextKernel.before(
+                ContextKernelState(),
+                call
+            ),
+            call = call,
+            ok = true,
+            output = "verified search result"
+        )
+        val task = TaskState(
+            id = "task-8-2",
+            projectId = "demo_project",
+            goal = "Research and apply pathlib mkdir",
+            status = TaskStatus.FAILED,
+            lastTool = "web.search",
+            lastResult = "ok=true",
+            kernel = kernel
+        )
+
+        val capsule = PreviousTaskOutcomeContext.failure(
+            task = task,
+            message =
+                "Protocol-looking output is not one valid JSON envelope"
+        )
+
+        assertTrue(capsule.startsWith("PREVIOUS_TASK_OUTCOME"))
+        assertTrue(capsule.contains("status=FAILED"))
+        assertTrue(capsule.contains("project_id=demo_project"))
+        assertTrue(capsule.contains("last_tool=web.search"))
+        assertTrue(capsule.contains("INVALID").not())
+        assertTrue(
+            capsule.contains(
+                "Protocol-looking output is not one valid JSON envelope"
+            )
+        )
+        assertTrue(capsule.contains("HISTORICAL_ONLY"))
+        assertTrue(capsule.contains("no approval"))
+        assertTrue(capsule.length <= 4_500)
+    }
+
     @Test fun explicitNewGoalAndMissingHistoryArePreserved() {
         assertEquals("повтори", FollowUpGoal.resolve("повтори", null))
         assertEquals("повтори тест файлу", FollowUpGoal.resolve("повтори тест файлу", "старе завдання"))
+        assertEquals("why?", FollowUpGoal.resolve("why?", null))
     }
 }
