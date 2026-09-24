@@ -33,6 +33,55 @@ data class TaskIntentProfile(
  * reduces hallucination and wasted model turns.
  */
 object TaskIntentRouter {
+    private val explicitObligationTools = setOf(
+        "web.search",
+        "web.read",
+        "http.get",
+        "http.json",
+        "file.write",
+        "file.patch",
+        "python.syntax_check",
+        "python.tests",
+        "python.run"
+    )
+
+    fun explicitRequiredTools(goal: String): Set<String> {
+        val lower = goal.lowercase()
+        return explicitObligationTools
+            .asSequence()
+            .filter { tool ->
+                val index = lower.indexOf(tool)
+                if (index < 0) return@filter false
+
+                val prefix = lower
+                    .substring(
+                        maxOf(0, index - 48),
+                        index
+                    )
+                    .trimEnd()
+
+                val negated = listOf(
+                    "не використовуй",
+                    "не запускай",
+                    "не виконуй",
+                    "не роби",
+                    "do not use",
+                    "do not run",
+                    "don't use",
+                    "don't run",
+                    "nie używaj",
+                    "nie uzywaj",
+                    "nie uruchamiaj",
+                    "без "
+                ).any { prefix.endsWith(it) }
+
+                !negated
+            }
+            .map(ToolRegistry::canonicalize)
+            .filter { ToolRegistry.get(it) != null }
+            .toSortedSet()
+    }
+
     fun route(goal: String): TaskIntentProfile {
         val normalized = goal
             .replace(Regex("[\\r\\n\\t]+"), " ")
