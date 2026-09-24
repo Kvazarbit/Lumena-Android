@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import com.lumena.android.settings.EvidenceInspectorClaim
 import com.lumena.android.settings.EvidenceInspectorSnapshot
 import com.lumena.android.settings.EvidenceInspectorSource
+import com.lumena.android.settings.EvidenceInspectorSemanticLink
 import java.text.DateFormat
 import java.util.Date
 
@@ -126,7 +127,62 @@ private fun ClaimCard(
                 title = "Mentions",
                 sources = claim.mentionSources
             )
+            SemanticLinkSection(
+                links = claim.semanticLinks
+            )
         }
+    }
+}
+
+@Composable
+private fun SemanticLinkSection(
+    links: List<EvidenceInspectorSemanticLink>
+) {
+    if (links.isEmpty()) return
+
+    Text(
+        "Grounded model proposals · ${links.size}",
+        style = MaterialTheme.typography.labelSmall
+    )
+    Text(
+        "Quote grounded in verified source excerpt; semantic interpretation remains advisory and does not promote verification.",
+        style = MaterialTheme.typography.bodySmall
+    )
+
+    links
+        .take(MAX_VISIBLE_EVIDENCE_SOURCES)
+        .forEach { link ->
+            Text(
+                buildString {
+                    append("↳ ")
+                    append(link.relation)
+                    append(" · ")
+                    append(link.status)
+                    append(" · model=")
+                    append(link.extractorModelId)
+                    append(" · sourceEvidence=")
+                    append(link.sourceEvidenceCount)
+                    append("\nquote=“")
+                    append(link.quotedFragment)
+                    append("”")
+                    link.source?.let { source ->
+                        append("\nsource=")
+                        append(source.uri)
+                    }
+                },
+                style =
+                    MaterialTheme.typography.labelSmall
+            )
+        }
+
+    if (
+        links.size >
+        MAX_VISIBLE_EVIDENCE_SOURCES
+    ) {
+        Text(
+            "↳ +${links.size - MAX_VISIBLE_EVIDENCE_SOURCES} more grounded proposals",
+            style = MaterialTheme.typography.labelSmall
+        )
     }
 }
 
