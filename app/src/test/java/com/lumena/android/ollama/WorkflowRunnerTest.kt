@@ -700,4 +700,148 @@ class WorkflowRunnerTest {
     }
 
 
+
+    @Test
+    fun evidenceCandidateIsStoredAsPendingWithoutExecutingTool() = runBlocking {
+        var modelCalls = 0
+        var handlerCalls = 0
+        var sawPendingFeedback = false
+
+        val modelClient = object : ChatModelClient {
+            override suspend fun chat(
+                model: String,
+                messages: List<OllamaMessage>
+            ): Result<String> {
+                modelCalls += 1
+                return if (modelCalls == 1) {
+                    Result.success(
+                        """{"action":"evidence_candidate","claim_key":"android-workmanager-persistent","statement":"Android WorkManager supports persistent background work.","source_urls":["https://developer.android.com/workmanager"]}"""
+                    )
+                } else {
+                    sawPendingFeedback = messages.any { message ->
+                        message.role == "user" &&
+                            message.content.contains(
+                                "EVIDENCE CANDIDATE STORED · PENDING"
+                            ) &&
+                            message.content.contains(
+                                "NOT verified evidence"
+                            )
+                    }
+                    Result.success(
+                        """{"reply":"The candidate is pending; only verified evidence may be stated as verified."}"""
+                    )
+                }
+            }
+        }
+
+        val task = TaskState(
+            id = "evidence-candidate-runtime",
+            projectId = "lumena",
+            goal = "Explain the stored technical claim",
+            status = TaskStatus.WAITING_MODEL
+        )
+
+        val outcome = WorkflowRunner(
+            modelClient = modelClient,
+            bridge = null,
+            model = "fixture",
+            evidenceCandidateHandler = { _, candidate ->
+                handlerCalls += 1
+                assertTrue(
+                    candidate.claimKey ==
+                        "android-workmanager-persistent"
+                )
+                EvidenceCandidateDisposition(
+                    accepted = true,
+                    candidateId = "candidate-verified-shape"
+                )
+            }
+        ).run(
+            history = listOf(
+                OllamaMessage("user", task.goal)
+            ),
+            task = task
+        )
+
+        assertTrue(outcome is WorkflowOutcome.Finished)
+        outcome as WorkflowOutcome.Finished
+        assertTrue(modelCalls == 2)
+        assertTrue(handlerCalls == 1)
+        assertTrue(sawPendingFeedback)
+        assertTrue(
+            outcome.control.evidenceCandidatesProposed == 1
+        )
+        assertFalse(outcome.control.toolUsed)
+        assertTrue(outcome.control.task.step == 0)
+    }
+
+    @Test
+    fun rejectedEvidenceCandidateCreatesNoToolExecutionAndReturnsDeterministicFeedback() = runBlocking {
+        var modelCalls = 0
+        var sawRejectedFeedback = false
+
+        val modelClient = object : ChatModelClient {
+            override suspend fun chat(
+                model: String,
+                messages: List<OllamaMessage>
+            ): Result<String> {
+                modelCalls += 1
+                return if (modelCalls == 1) {
+                    Result.success(
+                        """{"action":"evidence_candidate","claim_key":"invented-source","statement":"Invented source claim text","source_urls":["https://invented.example/not-read"]}"""
+                    )
+                } else {
+                    sawRejectedFeedback = messages.any { message ->
+                        message.role == "user" &&
+                            message.content.contains(
+                                "EVIDENCE CANDIDATE REJECTED"
+                            ) &&
+                            message.content.contains(
+                                "SOURCE_URL_NOT_IN_LOCAL_GRAPH"
+                            ) &&
+                            message.content.contains(
+                                "No verified claim was created"
+                            )
+                    }
+                    Result.success(
+                        """{"reply":"I cannot treat that proposal as verified evidence."}"""
+                    )
+                }
+            }
+        }
+
+        val task = TaskState(
+            id = "evidence-candidate-rejected",
+            projectId = "lumena",
+            goal = "Explain the stored technical claim",
+            status = TaskStatus.WAITING_MODEL
+        )
+
+        val outcome = WorkflowRunner(
+            modelClient = modelClient,
+            bridge = null,
+            model = "fixture",
+            evidenceCandidateHandler = { _, _ ->
+                EvidenceCandidateDisposition(
+                    accepted = false,
+                    reason =
+                        "SOURCE_URL_NOT_IN_LOCAL_GRAPH:https://invented.example/not-read"
+                )
+            }
+        ).run(
+            history = listOf(
+                OllamaMessage("user", task.goal)
+            ),
+            task = task
+        )
+
+        assertTrue(outcome is WorkflowOutcome.Finished)
+        outcome as WorkflowOutcome.Finished
+        assertTrue(modelCalls == 2)
+        assertTrue(sawRejectedFeedback)
+        assertFalse(outcome.control.toolUsed)
+        assertTrue(outcome.control.task.step == 0)
+    }
+
+
 }
