@@ -1,6 +1,8 @@
 package com.lumena.android.ollama
 
 import com.lumena.android.agent.core.AgentController
+import com.lumena.android.agent.core.EvidenceCandidateDirective
+import com.lumena.android.agent.core.EvidenceCandidateIngestReport
 import com.lumena.android.agent.core.ReflexOption
 import com.lumena.android.agent.core.ReflexRuntimeAdvice
 import com.lumena.android.agent.core.TaskState
@@ -699,5 +701,125 @@ class WorkflowRunnerTest {
         )
     }
 
+
+
+    @Test
+    fun modelEvidenceMetadataIsIngestedBeforeNormalReplyDecision() = runBlocking {
+        val sourceId =
+            "0123456789abcdef01234567"
+        var observedTask: TaskState? = null
+        var observed =
+            emptyList<EvidenceCandidateDirective>()
+        val progress = mutableListOf<String>()
+
+        val modelClient = object : ChatModelClient {
+            override suspend fun chat(
+                model: String,
+                messages: List<OllamaMessage>
+            ): Result<String> = Result.success(
+                """{"reply":"Source-backed answer.","evidence_candidates":[{"claim_key":"workmanager-persistent","statement":"Android WorkManager supports persistent background work.","source_ids":["$sourceId"]}]}"""
+            )
+        }
+
+        val task = TaskState(
+            id = "runtime-evidence-candidate",
+            projectId = "lumena",
+            goal = "Explain a remembered verified source",
+            status = TaskStatus.WAITING_MODEL
+        )
+
+        val outcome = WorkflowRunner(
+            modelClient = modelClient,
+            bridge = null,
+            model = "fixture",
+            onModelEvidenceCandidates = { currentTask, directives ->
+                observedTask = currentTask
+                observed = directives
+                EvidenceCandidateIngestReport(
+                    accepted = 1,
+                    rejected = 0
+                )
+            }
+        ).run(
+            history = listOf(
+                OllamaMessage("user", task.goal)
+            ),
+            task = task,
+            onProgress = { progress += it }
+        )
+
+        assertTrue(outcome is WorkflowOutcome.Finished)
+        assertEquals(task.id, observedTask?.id)
+        assertEquals(1, observed.size)
+        assertEquals(
+            "workmanager-persistent",
+            observed.single().claimKey
+        )
+        assertEquals(
+            listOf(sourceId),
+            observed.single().sourceIds
+        )
+        assertTrue(
+            progress.any {
+                it.contains(
+                    "EVIDENCE CANDIDATES · accepted=1 · rejected=0"
+                )
+            }
+        )
+    }
+
+    @Test
+    fun evidenceCandidatePersistenceFailureDoesNotBlockPublicReply() = runBlocking {
+        val sourceId =
+            "0123456789abcdef01234567"
+        val progress = mutableListOf<String>()
+
+        val modelClient = object : ChatModelClient {
+            override suspend fun chat(
+                model: String,
+                messages: List<OllamaMessage>
+            ): Result<String> = Result.success(
+                """{"reply":"Answer remains available.","evidence_candidates":[{"claim_key":"candidate","statement":"Grounded candidate statement.","source_ids":["$sourceId"]}]}"""
+            )
+        }
+
+        val task = TaskState(
+            id = "runtime-evidence-fail-open",
+            projectId = null,
+            goal = "Answer normally",
+            status = TaskStatus.WAITING_MODEL
+        )
+
+        val outcome = WorkflowRunner(
+            modelClient = modelClient,
+            bridge = null,
+            model = "fixture",
+            onModelEvidenceCandidates = { _, _ ->
+                throw IllegalStateException(
+                    "fixture evidence store unavailable"
+                )
+            }
+        ).run(
+            history = listOf(
+                OllamaMessage("user", task.goal)
+            ),
+            task = task,
+            onProgress = { progress += it }
+        )
+
+        assertTrue(outcome is WorkflowOutcome.Finished)
+        outcome as WorkflowOutcome.Finished
+        assertEquals(
+            "Answer remains available.",
+            outcome.text
+        )
+        assertTrue(
+            progress.any {
+                it.contains(
+                    "EVIDENCE CANDIDATES NOT SAVED"
+                )
+            }
+        )
+    }
 
 }
