@@ -1,6 +1,9 @@
 package com.lumena.android.settings
 
 import com.lumena.android.agent.core.EvidenceClaimNode
+import com.lumena.android.agent.core.EvidenceClaimCandidate
+import com.lumena.android.agent.core.EvidenceClaimCandidateProvenance
+import com.lumena.android.agent.core.EvidenceClaimCandidateStatus
 import com.lumena.android.agent.core.EvidenceGraphReducer
 import com.lumena.android.agent.core.EvidenceGraphState
 import com.lumena.android.agent.core.EvidenceSourceNode
@@ -56,6 +59,46 @@ class EvidenceGraphStoreTest {
 
         assertEquals(state, decoded)
         assertFalse(encoded.contains("requestId"))
+    }
+
+    @Test
+    fun codecRoundTripPreservesPendingClaimCandidates() {
+        val candidate = EvidenceClaimCandidate(
+            id = "candidate-1",
+            claimKey = "android-workmanager-persistent",
+            statement =
+                "Android WorkManager supports persistent background work.",
+            sourceIds = listOf("source-1"),
+            provenance =
+                EvidenceClaimCandidateProvenance.MODEL_PROPOSAL,
+            status = EvidenceClaimCandidateStatus.PENDING,
+            lexicalCoverage = 0.8,
+            proposedAt = now,
+            projectId = "lumena",
+            projectRelevance = 0.9
+        )
+        val state = EvidenceGraphState(
+            candidates = listOf(candidate)
+        )
+
+        val decoded = EvidenceGraphCodec.decode(
+            EvidenceGraphCodec.encode(state)
+        )
+
+        assertEquals(state, decoded)
+        assertEquals(
+            EvidenceClaimCandidateStatus.PENDING,
+            decoded.candidates.single().status
+        )
+    }
+
+    @Test
+    fun legacyEvidenceJsonWithoutCandidatesLoadsEmptyCandidateList() {
+        val decoded = EvidenceGraphCodec.decode(
+            """{"schemaVersion":1,"claims":[],"sources":[]}"""
+        )
+
+        assertTrue(decoded.candidates.isEmpty())
     }
 
     @Test
