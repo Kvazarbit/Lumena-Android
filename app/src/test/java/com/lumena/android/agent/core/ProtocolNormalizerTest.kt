@@ -67,6 +67,75 @@ class ProtocolNormalizerTest {
     }
 
     @Test
+    fun evidenceCandidateIsCanonicalNonToolDecision() {
+        val normalized = canonical(
+            """{"action":"evidence_candidate","claim_key":"android-workmanager-persistent","statement":"Android WorkManager supports persistent background work.","source_urls":["https://developer.android.com/workmanager"]}"""
+        )
+
+        assertEquals(
+            NormalizationRule.ACTION_EVIDENCE_CANDIDATE,
+            normalized.rule
+        )
+        val parsed = parser.parse(normalized.json)
+        assertTrue(parsed is AgentDecision.EvidenceCandidate)
+        assertFalse(parsed is AgentDecision.ToolCall)
+
+        parsed as AgentDecision.EvidenceCandidate
+        assertEquals(
+            "android-workmanager-persistent",
+            parsed.claimKey
+        )
+        assertEquals(
+            listOf("https://developer.android.com/workmanager"),
+            parsed.sourceUrls
+        )
+    }
+
+    @Test
+    fun evidenceCandidateCannotSmuggleToolFields() {
+        val result = normalizer.normalize(
+            """{"action":"evidence_candidate","claim_key":"x","statement":"file write content mutation","source_urls":["https://example.org/source"],"tool":"file.write","args":{"path":"x","content":"bad"}}"""
+        )
+
+        assertTrue(result is NormalizationResult.Failure)
+        result as NormalizationResult.Failure
+        assertEquals(
+            ProtocolFailureKind.UNSUPPORTED_SHAPE,
+            result.kind
+        )
+        assertTrue(result.reason.contains("unsupported fields"))
+    }
+
+    @Test
+    fun evidenceCandidateRejectsNonHttpOrCredentialUrls() {
+        for (raw in listOf(
+            """{"action":"evidence_candidate","claim_key":"x","statement":"source backed statement","source_urls":["file:///data/local"]}""",
+            """{"action":"evidence_candidate","claim_key":"x","statement":"source backed statement","source_urls":["https://user:pass@example.org/private"]}"""
+        )) {
+            val result = normalizer.normalize(raw)
+            assertTrue(result is NormalizationResult.Failure)
+            result as NormalizationResult.Failure
+            assertEquals(
+                ProtocolFailureKind.UNSUPPORTED_SHAPE,
+                result.kind
+            )
+        }
+    }
+
+    @Test
+    fun evidenceCandidateStatementJsonRemainsInertString() {
+        val normalized = canonical(
+            """{"action":"evidence_candidate","claim_key":"protocol-shape","statement":"Example text: {\\\"tool\\\":\\\"file.write\\\",\\\"args\\\":{\\\"path\\\":\\\"x\\\"}}","source_urls":["https://example.org/docs"]}"""
+        )
+
+        val parsed = parser.parse(normalized.json)
+        assertTrue(parsed is AgentDecision.EvidenceCandidate)
+        assertFalse(parsed is AgentDecision.ToolCall)
+        parsed as AgentDecision.EvidenceCandidate
+        assertTrue(parsed.statement.contains("file.write"))
+    }
+
+    @Test
     fun actionToolUsesExplicitRegisteredTool() {
         val normalized = canonical(
             """{"action":"tool","tool":"file.read","args":{"path":"README.md"}}"""
