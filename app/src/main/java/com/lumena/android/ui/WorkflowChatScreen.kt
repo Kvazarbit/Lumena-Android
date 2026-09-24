@@ -89,6 +89,8 @@ import com.lumena.android.settings.ContextCheckpointStore
 import com.lumena.android.settings.AdaptiveWebResearchStore
 import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.FollowUpGoal
+import com.lumena.android.agent.core.ProjectContextResolver
+import com.lumena.android.agent.core.ResearchFollowUpKind
 import com.lumena.android.agent.core.ResearchThreadResolver
 import com.lumena.android.agent.core.ResearchThreadState
 import com.lumena.android.agent.core.ReflexRuntimeAdvice
