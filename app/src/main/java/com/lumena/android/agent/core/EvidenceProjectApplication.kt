@@ -354,6 +354,14 @@ object EvidenceProjectApplicationPolicy {
                     bindingId = binding.id
                 )
             }
+            if (!isFullProjectTestRequest(request)) {
+                return EvidenceApplicationUpdate(
+                    state = state,
+                    accepted = false,
+                    reason = "SELECTED_TEST_SCOPE",
+                    bindingId = binding.id
+                )
+            }
             if (!testScopeContainsTarget(cwd, binding.target)) {
                 return EvidenceApplicationUpdate(
                     state = state,
@@ -419,6 +427,25 @@ object EvidenceProjectApplicationPolicy {
 
         return normalizeTarget(raw)
             .takeIf { it.isNotBlank() }
+    }
+
+    internal fun isFullProjectTestRequest(
+        request: ToolRequest
+    ): Boolean {
+        if (
+            ToolRegistry.canonicalize(request.tool) !=
+            "python.tests"
+        ) {
+            return false
+        }
+
+        val argv = request.args["argv"]
+            .orEmpty()
+            .trim()
+
+        // Bridge default is "-q". Anything else may contain a file/node
+        // selector, so it cannot prove every changed Python target in cwd.
+        return argv.isBlank() || argv == "-q"
     }
 
     internal fun testScopeContainsTarget(
@@ -662,10 +689,12 @@ object EvidenceProjectOutcomeRouter {
                     "python.tests" -> {
                         val cwd = request.args["cwd"].orEmpty()
                         EvidenceProjectApplicationPolicy
-                            .testScopeContainsTarget(
-                                cwd = cwd,
-                                target = binding.target
-                            )
+                            .isFullProjectTestRequest(request) &&
+                            EvidenceProjectApplicationPolicy
+                                .testScopeContainsTarget(
+                                    cwd = cwd,
+                                    target = binding.target
+                                )
                     }
 
                     else -> false
