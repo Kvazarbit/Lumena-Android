@@ -85,6 +85,25 @@ class AgentResponseParserTest {
     }
 
     @Test
+    fun canonicalEvidenceCandidateBecomesNonToolDecision() {
+        val parsed = parser.parse(
+            """{"action":"evidence_candidate","claim_key":"python-release","statement":"Python release source statement","source_urls":["https://python.org/downloads/"]}"""
+        )
+
+        assertTrue(parsed is AgentDecision.EvidenceCandidate)
+        parsed as AgentDecision.EvidenceCandidate
+        assertEquals("python-release", parsed.claimKey)
+        assertEquals(
+            "Python release source statement",
+            parsed.statement
+        )
+        assertEquals(
+            listOf("https://python.org/downloads/"),
+            parsed.sourceUrls
+        )
+    }
+
+    @Test
     fun doneJsonBecomesDone() {
         val parsed = parser.parse("""{"done":true,"summary":"Tests passed"}""")
         assertEquals(AgentDecision.Done("Tests passed"), parsed)
