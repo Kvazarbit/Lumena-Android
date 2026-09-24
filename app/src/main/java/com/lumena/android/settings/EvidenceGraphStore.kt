@@ -5,6 +5,7 @@ import android.util.AtomicFile
 import com.lumena.android.agent.core.EvidenceClaimNode
 import com.lumena.android.agent.core.EvidenceApplicationUpdate
 import com.lumena.android.agent.core.EvidenceProjectApplicationPolicy
+import com.lumena.android.agent.core.EvidenceProjectOutcomeRouter
 import com.lumena.android.agent.core.EvidenceClaimCandidateProvenance
 import com.lumena.android.agent.core.EvidenceClaimProposal
 import com.lumena.android.agent.core.EvidenceGraphClaimPolicy
@@ -500,6 +501,50 @@ object EvidenceGraphStore {
             save(context, trim(update.state))
         }
         update
+    }
+
+    fun recordMatchingProjectOutcomes(
+        context: Context,
+        taskProjectId: String,
+        request: ToolRequest,
+        result: ToolResult,
+        evidenceId: String?,
+        now: Long = System.currentTimeMillis()
+    ): List<EvidenceApplicationUpdate> = synchronized(lock) {
+        val current = load(context)
+        val bindingIds =
+            EvidenceProjectOutcomeRouter.matchingBindingIds(
+                state = current,
+                projectId = taskProjectId,
+                request = request
+            )
+        if (bindingIds.isEmpty()) {
+            return@synchronized emptyList()
+        }
+
+        var state = current
+        val updates = mutableListOf<EvidenceApplicationUpdate>()
+        bindingIds.forEach { bindingId ->
+            val update =
+                EvidenceProjectApplicationPolicy.observeToolResult(
+                    state = state,
+                    bindingId = bindingId,
+                    taskProjectId = taskProjectId,
+                    request = request,
+                    result = result,
+                    evidenceId = evidenceId,
+                    now = now
+                )
+            updates += update
+            if (update.accepted) {
+                state = update.state
+            }
+        }
+
+        if (state != current) {
+            save(context, trim(state))
+        }
+        updates
     }
 
     fun relevant(
