@@ -431,15 +431,15 @@ object EvidenceProjectApplicationPolicy {
 
     internal fun isFullProjectTestRequest(
         request: ToolRequest
-    ): Boolean {
-        if (
-            ToolRegistry.canonicalize(request.tool) !=
-            "python.tests"
-        ) {
-            return false
-        }
+    ): Boolean =
+        ToolRegistry.canonicalize(request.tool) ==
+            "python.tests" &&
+            isFullProjectTestArgs(request.args)
 
-        val argv = request.args["argv"]
+    internal fun isFullProjectTestArgs(
+        args: Map<String, String>
+    ): Boolean {
+        val argv = args["argv"]
             .orEmpty()
             .trim()
 
