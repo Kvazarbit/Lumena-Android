@@ -255,6 +255,11 @@ object EvidenceGraphInspectorPolicy {
             EvidenceVerificationState.RETRIEVED ->
             "At least one source was actually retrieved through a verified tool result. A single source is not independent corroboration."
 
+        semanticLinkCount > 0 &&
+            support.isEmpty() &&
+            contradictions.isEmpty() ->
+            "Model-grounded semantic proposal. Its quote was found inside a locally verified source excerpt, but the model interpretation itself remains advisory DISCOVERED context and cannot self-promote verification."
+
         claim.verificationState ==
             EvidenceVerificationState.DISCOVERED ->
             "Discovered from search-level evidence only. The source has not yet been promoted to retrieved/corroborated evidence."
@@ -262,11 +267,6 @@ object EvidenceGraphInspectorPolicy {
         support.isEmpty() &&
             contradictions.isNotEmpty() ->
             "Only contradicting source evidence is present; inspect the source records before relying on the claim."
-
-        semanticLinkCount > 0 &&
-            support.isEmpty() &&
-            contradictions.isEmpty() ->
-            "Model-grounded semantic proposal. Its quote was found inside a locally verified source excerpt, but the model interpretation itself remains advisory DISCOVERED context and cannot self-promote verification."
 
         claim.outcome ==
             EvidenceProjectOutcome.VERIFIED_BY_TEST ->
