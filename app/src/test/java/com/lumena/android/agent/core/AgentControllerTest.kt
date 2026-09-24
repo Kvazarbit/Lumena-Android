@@ -273,6 +273,98 @@ class AgentControllerTest {
         assertTrue(partial.state.task.status == TaskStatus.PARTIAL)
     }
 
+
+    @Test
+    fun fullProjectPytestClearsOnlyPendingPythonPathsInsideItsCwd() {
+        var state = controller.initial(task()).copy(
+            toolUsed = true,
+            verificationRequired = true,
+            pendingPythonPaths = setOf(
+                "e2e_step87/dir_a.py",
+                "e2e_step87/test_dir_a.py",
+                "other_project/keep.py"
+            ),
+            verificationReason = "verify changed python"
+        )
+
+        state = controller.afterTool(
+            state = state,
+            call = AgentDecision.ToolCall(
+                tool = "python.tests",
+                args = mapOf(
+                    "cwd" to "e2e_step87"
+                )
+            ),
+            ok = true,
+            stdout = "1 passed",
+            stderr = "",
+            error = null
+        ).state
+
+        assertEquals(
+            setOf("other_project/keep.py"),
+            state.pendingPythonPaths
+        )
+        assertTrue(state.verificationRequired)
+    }
+
+    @Test
+    fun fullProjectPytestCanCloseAllPendingVerificationButSelectedPytestCannot() {
+        val base = controller.initial(task()).copy(
+            toolUsed = true,
+            verificationRequired = true,
+            pendingPythonPaths = setOf(
+                "e2e_step87/dir_a.py",
+                "e2e_step87/test_dir_a.py"
+            ),
+            verificationReason = "verify changed python"
+        )
+
+        val selected = controller.afterTool(
+            state = base,
+            call = AgentDecision.ToolCall(
+                tool = "python.tests",
+                args = mapOf(
+                    "cwd" to "e2e_step87",
+                    "argv" to "-q test_dir_a.py"
+                )
+            ),
+            ok = true,
+            stdout = "1 passed",
+            stderr = "",
+            error = null
+        ).state
+
+        assertEquals(
+            base.pendingPythonPaths,
+            selected.pendingPythonPaths
+        )
+        assertTrue(selected.verificationRequired)
+
+        val full = controller.afterTool(
+            state = base,
+            call = AgentDecision.ToolCall(
+                tool = "python.tests",
+                args = mapOf(
+                    "cwd" to "e2e_step87"
+                )
+            ),
+            ok = true,
+            stdout = "1 passed",
+            stderr = "",
+            error = null
+        ).state
+
+        assertTrue(full.pendingPythonPaths.isEmpty())
+        assertFalse(full.verificationRequired)
+
+        val done = controller.interpret(
+            """{"done":true,"summary":"project verified"}""",
+            full
+        )
+        assertTrue(done is ControllerInstruction.Finish)
+    }
+
     @Test
     fun verifiedExperienceIsInjectedIntoDynamicContext() {
         val state = controller.initial(task())
