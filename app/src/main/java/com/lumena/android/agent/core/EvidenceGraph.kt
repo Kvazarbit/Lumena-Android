@@ -540,6 +540,7 @@ object EvidenceGraphReducer {
         MessageDigest.getInstance("SHA-256")
             .digest(value.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
+}
 
 /**
  * Conservative semantic-claim candidate layer.
@@ -867,6 +868,4 @@ object EvidenceGraphClaimPolicy {
         MessageDigest.getInstance("SHA-256")
             .digest(value.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
-}
-
 }
