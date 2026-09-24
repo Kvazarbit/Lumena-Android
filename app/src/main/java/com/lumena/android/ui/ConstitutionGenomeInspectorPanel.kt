@@ -33,7 +33,7 @@ internal fun ConstitutionGenomeInspectorPanel(
             style = MaterialTheme.typography.bodySmall
         )
         Text(
-            "Hard DNA ${snapshot.hardDna.size} · Learned ${snapshot.learned.size} · User constraints ${snapshot.userConstraints.size} · Contested ${snapshot.contested.size} · Imported ${snapshot.importedLearned.size + snapshot.importedUserConstraints.size}",
+            "Hard DNA ${snapshot.hardDna.size} · Active learned ${snapshot.learned.size} · Shadow ${snapshot.shadowCandidates.size} · User constraints ${snapshot.userConstraints.size} · Contested ${snapshot.contested.size} · Imported ${snapshot.importedLearned.size + snapshot.importedUserConstraints.size}",
             style = MaterialTheme.typography.labelSmall
         )
 
@@ -43,9 +43,14 @@ internal fun ConstitutionGenomeInspectorPanel(
             entries = snapshot.hardDna
         )
         LocalSection(
-            title = "Learned",
-            emptyText = "Локально підтверджених learned-правил ще немає.",
+            title = "Active learned genes",
+            emptyText = "Локально підтверджених active learned-правил ще немає.",
             entries = snapshot.learned
+        )
+        LocalSection(
+            title = "Shadow candidates",
+            emptyText = "Shadow-кандидатів, що очікують незалежної локальної перевірки, немає.",
+            entries = snapshot.shadowCandidates
         )
         LocalSection(
             title = "User constraints",
@@ -128,7 +133,7 @@ private fun LocalEntryCard(
                 entry.distinctLocalContexts > 0
             ) {
                 Text(
-                    "Local verified evidence: ${entry.localEvidenceCount} · contexts: ${entry.distinctLocalContexts} · tasks: ${entry.distinctTaskCount} · projects: ${entry.distinctProjectCount}",
+                    "Gene stage: ${entry.geneStage} · activation: ${entry.activationProgressPercent}% · Local verified evidence: ${entry.localEvidenceCount} · contexts: ${entry.distinctLocalContexts} · paired artifact+test contexts: ${entry.pairedProjectContexts} · tasks: ${entry.distinctTaskCount} · projects: ${entry.distinctProjectCount}",
                     style = MaterialTheme.typography.labelSmall
                 )
             }
