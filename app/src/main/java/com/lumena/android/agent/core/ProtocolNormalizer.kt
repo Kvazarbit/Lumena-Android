@@ -3,6 +3,7 @@ package com.lumena.android.agent.core
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import java.net.URI
 
 enum class ProtocolFailureKind {
     SYNTAX,
@@ -15,6 +16,7 @@ enum class NormalizationRule {
     ACTION_REPLY,
     ACTION_DONE,
     ACTION_PARTIAL,
+    ACTION_EVIDENCE_CANDIDATE,
     ACTION_TOOL,
     REGISTERED_ACTION_ALIAS,
     HERMES_TOOL_CALL,
@@ -115,6 +117,12 @@ class ProtocolNormalizer {
                 obj["summary"] ?: obj["result"] ?: obj["reply"],
                 envelope
             )
+
+            "evidence_candidate" ->
+                return canonicalEvidenceCandidate(
+                    obj = obj,
+                    envelope = envelope
+                )
 
             "tool", null, "" -> Unit
 
@@ -257,6 +265,112 @@ class ProtocolNormalizer {
 
         return canonicalJson(canonical, envelope, rule)
     }
+
+    private fun canonicalEvidenceCandidate(
+        obj: Map<String, Any?>,
+        envelope: Envelope
+    ): NormalizationResult {
+        val allowedKeys = setOf(
+            "action",
+            "claim_key",
+            "statement",
+            "source_urls"
+        )
+        val unexpected = obj.keys - allowedKeys
+        if (unexpected.isNotEmpty()) {
+            return NormalizationResult.Failure(
+                ProtocolFailureKind.UNSUPPORTED_SHAPE,
+                "evidence_candidate contains unsupported fields: " +
+                    unexpected.sorted().joinToString()
+            )
+        }
+
+        val claimKey = obj["claim_key"]
+            ?.toString()
+            ?.trim()
+            .orEmpty()
+        if (
+            claimKey.isBlank() ||
+            claimKey.length > 500 ||
+            '\u0000' in claimKey
+        ) {
+            return NormalizationResult.Failure(
+                ProtocolFailureKind.UNSUPPORTED_SHAPE,
+                "evidence_candidate claim_key must be 1..500 characters"
+            )
+        }
+
+        val statement = obj["statement"]
+            ?.toString()
+            ?.trim()
+            .orEmpty()
+        if (
+            statement.isBlank() ||
+            statement.length > 1_600 ||
+            '\u0000' in statement
+        ) {
+            return NormalizationResult.Failure(
+                ProtocolFailureKind.UNSUPPORTED_SHAPE,
+                "evidence_candidate statement must be 1..1600 characters"
+            )
+        }
+
+        val rawUrls = obj["source_urls"] as? List<*>
+            ?: return NormalizationResult.Failure(
+                ProtocolFailureKind.UNSUPPORTED_SHAPE,
+                "evidence_candidate source_urls must be a JSON array"
+            )
+
+        if (rawUrls.isEmpty() || rawUrls.size > 8) {
+            return NormalizationResult.Failure(
+                ProtocolFailureKind.UNSUPPORTED_SHAPE,
+                "evidence_candidate source_urls must contain 1..8 URLs"
+            )
+        }
+
+        val sourceUrls = mutableListOf<String>()
+        rawUrls.forEach { raw ->
+            val value = raw as? String
+                ?: return NormalizationResult.Failure(
+                    ProtocolFailureKind.UNSUPPORTED_SHAPE,
+                    "evidence_candidate source_urls must contain strings only"
+                )
+            val url = value.trim()
+            if (
+                url.isBlank() ||
+                url.length > 2_000 ||
+                '\u0000' in url ||
+                !isHttpSourceUrl(url)
+            ) {
+                return NormalizationResult.Failure(
+                    ProtocolFailureKind.UNSUPPORTED_SHAPE,
+                    "evidence_candidate source_urls must be valid http/https source URLs"
+                )
+            }
+            sourceUrls += url
+        }
+
+        val canonical = linkedMapOf<String, Any?>(
+            "action" to "evidence_candidate",
+            "claim_key" to claimKey,
+            "statement" to statement,
+            "source_urls" to sourceUrls.distinct()
+        )
+        return canonicalJson(
+            canonical,
+            envelope,
+            NormalizationRule.ACTION_EVIDENCE_CANDIDATE
+        )
+    }
+
+    private fun isHttpSourceUrl(
+        raw: String
+    ): Boolean = runCatching {
+        val uri = URI(raw)
+        uri.scheme?.lowercase() in setOf("http", "https") &&
+            !uri.host.isNullOrBlank() &&
+            uri.userInfo.isNullOrBlank()
+    }.getOrDefault(false)
 
     private fun normalizeNestedNamespaceTool(
         obj: Map<String, Any?>,
