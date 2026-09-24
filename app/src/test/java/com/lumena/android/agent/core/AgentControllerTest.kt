@@ -732,6 +732,144 @@ class AgentControllerTest {
     }
 
     @Test
+    fun evidenceCandidateIsAdvisoryAndConsumesNoToolStep() {
+        val conversational = TaskState(
+            id = "evidence-candidate",
+            projectId = "lumena",
+            goal = "Explain verified Android evidence",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val state = controller.initial(conversational)
+
+        val instruction = controller.interpret(
+            """{"action":"evidence_candidate","claim_key":"android-workmanager-persistent","statement":"Android WorkManager supports persistent background work.","source_urls":["https://developer.android.com/workmanager"]}""",
+            state
+        )
+
+        assertTrue(
+            instruction is
+                ControllerInstruction.ProposeEvidenceCandidate
+        )
+        instruction as
+            ControllerInstruction.ProposeEvidenceCandidate
+        assertTrue(
+            instruction.candidate.claimKey ==
+                "android-workmanager-persistent"
+        )
+        assertTrue(instruction.state.task.step == 0)
+        assertFalse(instruction.state.toolUsed)
+        assertTrue(
+            instruction.state.evidenceCandidatesProposed == 1
+        )
+        assertTrue(
+            instruction.state.task.status ==
+                TaskStatus.WAITING_MODEL
+        )
+    }
+
+    @Test
+    fun duplicateEvidenceCandidateIsProtocolCorrectedNotExecuted() {
+        val state = controller.initial(
+            TaskState(
+                id = "evidence-duplicate",
+                projectId = "lumena",
+                goal = "Explain verified Android evidence",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        val raw =
+            """{"action":"evidence_candidate","claim_key":"android-workmanager-persistent","statement":"Android WorkManager supports persistent background work.","source_urls":["https://developer.android.com/workmanager"]}"""
+
+        val first = controller.interpret(raw, state)
+        assertTrue(
+            first is
+                ControllerInstruction.ProposeEvidenceCandidate
+        )
+        first as
+            ControllerInstruction.ProposeEvidenceCandidate
+
+        val duplicate = controller.interpret(
+            raw,
+            first.state
+        )
+        assertTrue(
+            duplicate is
+                ControllerInstruction.AskModelAgain
+        )
+        assertFalse(
+            duplicate is ControllerInstruction.Execute
+        )
+        assertTrue(
+            duplicate.state.evidenceCandidatesProposed == 1
+        )
+        assertTrue(
+            duplicate.state.protocolRetries == 1
+        )
+    }
+
+    @Test
+    fun evidenceCandidateBudgetStopsUnboundedProposalLoop() {
+        val initial = controller.initial(
+            TaskState(
+                id = "evidence-budget",
+                projectId = "lumena",
+                goal = "Explain several verified findings",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        val first = controller.interpret(
+            """{"action":"evidence_candidate","claim_key":"claim-one","statement":"Verified source statement one","source_urls":["https://one.example/docs"]}""",
+            initial
+        ) as ControllerInstruction.ProposeEvidenceCandidate
+
+        val second = controller.interpret(
+            """{"action":"evidence_candidate","claim_key":"claim-two","statement":"Verified source statement two","source_urls":["https://two.example/docs"]}""",
+            first.state
+        ) as ControllerInstruction.ProposeEvidenceCandidate
+
+        val third = controller.interpret(
+            """{"action":"evidence_candidate","claim_key":"claim-three","statement":"Verified source statement three","source_urls":["https://three.example/docs"]}""",
+            second.state
+        )
+
+        assertTrue(
+            third is ControllerInstruction.AskModelAgain
+        )
+        assertTrue(
+            third.state.evidenceCandidatesProposed == 2
+        )
+        assertTrue(
+            third.state.protocolRetries == 1
+        )
+        assertFalse(third is ControllerInstruction.Execute)
+    }
+
+    @Test
+    fun mutationTextInsideEvidenceCandidateNeverBecomesToolCall() {
+        val state = controller.initial(
+            TaskState(
+                id = "evidence-inert",
+                projectId = null,
+                goal = "Explain a protocol example",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        val instruction = controller.interpret(
+            """{"action":"evidence_candidate","claim_key":"protocol-example","statement":"Example mentions file.write and path x but is only source text","source_urls":["https://example.org/docs"]}""",
+            state
+        )
+
+        assertTrue(
+            instruction is
+                ControllerInstruction.ProposeEvidenceCandidate
+        )
+        assertFalse(instruction is ControllerInstruction.Execute)
+        assertFalse(instruction.state.toolUsed)
+    }
+
+    @Test
     fun knownActionReplyEnvelopeFinishesWithoutProtocolRetry() {
         val conversational = TaskState(
             id = "normalized-reply",
