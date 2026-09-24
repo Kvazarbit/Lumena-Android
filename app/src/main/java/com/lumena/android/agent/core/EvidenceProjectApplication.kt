@@ -1,0 +1,458 @@
+package com.lumena.android.agent.core
+
+import com.lumena.android.agent.local.ToolRequest
+import com.lumena.android.agent.local.ToolResult
+import java.nio.file.Paths
+import java.security.MessageDigest
+
+data class EvidenceApplicationUpdate(
+    val state: EvidenceGraphState,
+    val accepted: Boolean,
+    val reason: String? = null,
+    val bindingId: String? = null
+)
+
+/**
+ * Links already-verified evidence claims to concrete project work without
+ * granting execution authority.
+ *
+ * Binding a claim to a target is advisory metadata only. Actual mutations still
+ * require the normal ToolRegistry -> ToolGate -> confirmation path. Outcomes
+ * advance only after successful local TOOL_RESULT evidence.
+ */
+object EvidenceProjectApplicationPolicy {
+    private val artifactTools = setOf(
+        "project.create",
+        "dir.create",
+        "file.write",
+        "file.patch"
+    )
+
+    private val verificationTools = setOf(
+        "python.syntax_check",
+        "python.tests"
+    )
+
+    fun bind(
+        state: EvidenceGraphState,
+        claimKey: String,
+        projectId: String,
+        target: String,
+        now: Long,
+        staleAfterMs: Long =
+            EvidenceGraphReducer.DEFAULT_STALE_AFTER_MS
+    ): EvidenceApplicationUpdate {
+        if (
+            claimKey.isBlank() ||
+            projectId.isBlank() ||
+            target.isBlank() ||
+            now <= 0
+        ) {
+            return EvidenceApplicationUpdate(
+                state = state,
+                accepted = false,
+                reason = "INVALID_BINDING"
+            )
+        }
+
+        val claim = state.claims.firstOrNull {
+            it.claimKey.trim() == claimKey.trim()
+        } ?: return EvidenceApplicationUpdate(
+            state = state,
+            accepted = false,
+            reason = "CLAIM_NOT_FOUND"
+        )
+
+        val effective =
+            EvidenceGraphReducer.effectiveVerificationState(
+                claim = claim,
+                now = now,
+                staleAfterMs = staleAfterMs
+            )
+
+        if (
+            effective !in setOf(
+                EvidenceVerificationState.RETRIEVED,
+                EvidenceVerificationState.CORROBORATED
+            )
+        ) {
+            return EvidenceApplicationUpdate(
+                state = state,
+                accepted = false,
+                reason = "CLAIM_NOT_APPLICABLE:$effective"
+            )
+        }
+
+        if (claim.outcome == EvidenceProjectOutcome.REJECTED) {
+            return EvidenceApplicationUpdate(
+                state = state,
+                accepted = false,
+                reason = "CLAIM_REJECTED"
+            )
+        }
+
+        val normalizedTarget = normalizeTarget(target)
+        if (normalizedTarget.isBlank()) {
+            return EvidenceApplicationUpdate(
+                state = state,
+                accepted = false,
+                reason = "INVALID_TARGET"
+            )
+        }
+
+        val bindingId = hash(
+            claim.claimKey.trim().lowercase() + "|" +
+                projectId.trim().lowercase() + "|" +
+                normalizedTarget
+        ).take(24)
+
+        val existing = state.applications.firstOrNull {
+            it.id == bindingId
+        }
+        if (existing != null) {
+            return EvidenceApplicationUpdate(
+                state = state,
+                accepted = true,
+                bindingId = existing.id
+            )
+        }
+
+        val binding = EvidenceApplicationBinding(
+            id = bindingId,
+            claimKey = claim.claimKey,
+            projectId = projectId.trim().take(160),
+            target = normalizedTarget.take(800),
+            status = EvidenceApplicationStatus.PENDING,
+            createdAt = now,
+            updatedAt = now
+        )
+
+        return EvidenceApplicationUpdate(
+            state = state.copy(
+                applications = (
+                    state.applications + binding
+                    )
+                    .distinctBy { it.id }
+                    .sortedBy { it.id }
+            ),
+            accepted = true,
+            bindingId = binding.id
+        )
+    }
+
+    fun observeToolResult(
+        state: EvidenceGraphState,
+        bindingId: String,
+        taskProjectId: String,
+        request: ToolRequest,
+        result: ToolResult,
+        evidenceId: String?,
+        now: Long
+    ): EvidenceApplicationUpdate {
+        val binding = state.applications.firstOrNull {
+            it.id == bindingId
+        } ?: return EvidenceApplicationUpdate(
+            state = state,
+            accepted = false,
+            reason = "BINDING_NOT_FOUND"
+        )
+
+        if (
+            taskProjectId.isBlank() ||
+            taskProjectId.trim() != binding.projectId
+        ) {
+            return EvidenceApplicationUpdate(
+                state = state,
+                accepted = false,
+                reason = "PROJECT_SCOPE_MISMATCH",
+                bindingId = binding.id
+            )
+        }
+
+        if (
+            !result.ok ||
+            result.outcomeUnknown ||
+            evidenceId.isNullOrBlank() ||
+            now <= 0
+        ) {
+            return EvidenceApplicationUpdate(
+                state = state,
+                accepted = false,
+                reason = when {
+                    result.outcomeUnknown -> "UNKNOWN_EFFECT"
+                    !result.ok -> "TOOL_RESULT_FAILED"
+                    evidenceId.isNullOrBlank() -> "MISSING_EVIDENCE_ID"
+                    else -> "INVALID_TIMESTAMP"
+                },
+                bindingId = binding.id
+            )
+        }
+
+        val canonical = ToolRegistry.canonicalize(request.tool)
+        val spec = ToolRegistry.get(canonical)
+            ?: return EvidenceApplicationUpdate(
+                state = state,
+                accepted = false,
+                reason = "UNKNOWN_TOOL",
+                bindingId = binding.id
+            )
+
+        return when {
+            canonical in artifactTools &&
+                spec.risk == ToolRisk.MUTATING ->
+                applyArtifactResult(
+                    state = state,
+                    binding = binding,
+                    request = request,
+                    tool = canonical,
+                    evidenceId = evidenceId,
+                    now = now
+                )
+
+            canonical in verificationTools &&
+                spec.risk == ToolRisk.EXECUTABLE ->
+                applyVerificationResult(
+                    state = state,
+                    binding = binding,
+                    request = request,
+                    tool = canonical,
+                    evidenceId = evidenceId,
+                    now = now
+                )
+
+            else -> EvidenceApplicationUpdate(
+                state = state,
+                accepted = false,
+                reason = "TOOL_NOT_PROJECT_PROOF",
+                bindingId = binding.id
+            )
+        }
+    }
+
+    private fun applyArtifactResult(
+        state: EvidenceGraphState,
+        binding: EvidenceApplicationBinding,
+        request: ToolRequest,
+        tool: String,
+        evidenceId: String,
+        now: Long
+    ): EvidenceApplicationUpdate {
+        if (
+            binding.status !in setOf(
+                EvidenceApplicationStatus.PENDING,
+                EvidenceApplicationStatus.APPLIED
+            )
+        ) {
+            return EvidenceApplicationUpdate(
+                state = state,
+                accepted = false,
+                reason = "BINDING_NOT_PENDING",
+                bindingId = binding.id
+            )
+        }
+
+        val actualTarget = mutationTarget(
+            tool = tool,
+            request = request
+        )
+        if (
+            actualTarget == null ||
+            actualTarget != binding.target
+        ) {
+            return EvidenceApplicationUpdate(
+                state = state,
+                accepted = false,
+                reason = "TARGET_MISMATCH",
+                bindingId = binding.id
+            )
+        }
+
+        val outcome = EvidenceGraphReducer.applyProjectOutcome(
+            state = state,
+            claimKey = binding.claimKey,
+            outcome = EvidenceProjectOutcome.APPLIED_TO_PROJECT,
+            proof = EvidenceOutcomeProof(
+                kind = EvidenceOutcomeProofKind.PROJECT_ARTIFACT,
+                evidenceId = evidenceId,
+                at = now
+            )
+        )
+        if (!outcome.accepted) {
+            return EvidenceApplicationUpdate(
+                state = state,
+                accepted = false,
+                reason = outcome.reason ?: "OUTCOME_REJECTED",
+                bindingId = binding.id
+            )
+        }
+
+        val updated = binding.copy(
+            status = EvidenceApplicationStatus.APPLIED,
+            updatedAt = maxOf(binding.updatedAt, now),
+            artifactEvidenceIds = (
+                binding.artifactEvidenceIds + evidenceId
+                )
+                .distinct()
+                .takeLast(32)
+        )
+
+        return EvidenceApplicationUpdate(
+            state = outcome.state.copy(
+                applications = replaceBinding(
+                    outcome.state.applications,
+                    updated
+                )
+            ),
+            accepted = true,
+            bindingId = binding.id
+        )
+    }
+
+    private fun applyVerificationResult(
+        state: EvidenceGraphState,
+        binding: EvidenceApplicationBinding,
+        request: ToolRequest,
+        tool: String,
+        evidenceId: String,
+        now: Long
+    ): EvidenceApplicationUpdate {
+        if (
+            binding.status !in setOf(
+                EvidenceApplicationStatus.APPLIED,
+                EvidenceApplicationStatus.VERIFIED
+            )
+        ) {
+            return EvidenceApplicationUpdate(
+                state = state,
+                accepted = false,
+                reason = "VERIFY_BEFORE_APPLY",
+                bindingId = binding.id
+            )
+        }
+
+        if (
+            tool == "python.syntax_check" &&
+            normalizeTarget(
+                request.args["script"].orEmpty()
+            ) != binding.target
+        ) {
+            return EvidenceApplicationUpdate(
+                state = state,
+                accepted = false,
+                reason = "TARGET_MISMATCH",
+                bindingId = binding.id
+            )
+        }
+
+        if (
+            tool == "python.tests" &&
+            request.args["cwd"].orEmpty().trim().isBlank()
+        ) {
+            return EvidenceApplicationUpdate(
+                state = state,
+                accepted = false,
+                reason = "MISSING_TEST_SCOPE",
+                bindingId = binding.id
+            )
+        }
+
+        val outcome = EvidenceGraphReducer.applyProjectOutcome(
+            state = state,
+            claimKey = binding.claimKey,
+            outcome = EvidenceProjectOutcome.VERIFIED_BY_TEST,
+            proof = EvidenceOutcomeProof(
+                kind = EvidenceOutcomeProofKind.PROJECT_TEST,
+                evidenceId = evidenceId,
+                at = now
+            )
+        )
+        if (!outcome.accepted) {
+            return EvidenceApplicationUpdate(
+                state = state,
+                accepted = false,
+                reason = outcome.reason ?: "OUTCOME_REJECTED",
+                bindingId = binding.id
+            )
+        }
+
+        val updated = binding.copy(
+            status = EvidenceApplicationStatus.VERIFIED,
+            updatedAt = maxOf(binding.updatedAt, now),
+            testEvidenceIds = (
+                binding.testEvidenceIds + evidenceId
+                )
+                .distinct()
+                .takeLast(32)
+        )
+
+        return EvidenceApplicationUpdate(
+            state = outcome.state.copy(
+                applications = replaceBinding(
+                    outcome.state.applications,
+                    updated
+                )
+            ),
+            accepted = true,
+            bindingId = binding.id
+        )
+    }
+
+    private fun mutationTarget(
+        tool: String,
+        request: ToolRequest
+    ): String? {
+        val raw = when (tool) {
+            "project.create" -> request.args["name"]
+            "dir.create",
+            "file.write",
+            "file.patch" -> request.args["path"]
+            else -> null
+        } ?: return null
+
+        return normalizeTarget(raw)
+            .takeIf { it.isNotBlank() }
+    }
+
+    internal fun normalizeTarget(
+        raw: String
+    ): String {
+        val clean = raw
+            .replace('\u0000', ' ')
+            .trim()
+            .replace('\\', '/')
+        if (clean.isBlank()) return ""
+
+        if (
+            clean.startsWith("http://", ignoreCase = true) ||
+            clean.startsWith("https://", ignoreCase = true)
+        ) {
+            return clean
+        }
+
+        return runCatching {
+            Paths.get(clean)
+                .normalize()
+                .toString()
+                .replace('\\', '/')
+        }.getOrDefault(clean)
+    }
+
+    private fun replaceBinding(
+        bindings: List<EvidenceApplicationBinding>,
+        replacement: EvidenceApplicationBinding
+    ): List<EvidenceApplicationBinding> =
+        (
+            bindings.filterNot {
+                it.id == replacement.id
+            } + replacement
+        ).sortedBy { it.id }
+
+    private fun hash(
+        value: String
+    ): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(Charsets.UTF_8))
+            .joinToString("") {
+                "%02x".format(it)
+            }
+}
