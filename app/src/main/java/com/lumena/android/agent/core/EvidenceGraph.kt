@@ -39,6 +39,17 @@ enum class EvidenceOutcomeProofKind {
     PROJECT_ARTIFACT
 }
 
+enum class EvidenceClaimCandidateProvenance {
+    MODEL_PROPOSAL,
+    USER_PROPOSAL
+}
+
+enum class EvidenceClaimCandidateStatus {
+    PENDING,
+    PROMOTED,
+    REJECTED
+}
+
 data class EvidenceObservation(
     val claimKey: String,
     val statement: String,
@@ -92,10 +103,35 @@ data class EvidenceClaimNode(
     val outcomeEvidenceIds: List<String> = emptyList()
 )
 
+data class EvidenceClaimCandidate(
+    val id: String,
+    val claimKey: String,
+    val statement: String,
+    val sourceIds: List<String>,
+    val provenance: EvidenceClaimCandidateProvenance,
+    val status: EvidenceClaimCandidateStatus = EvidenceClaimCandidateStatus.PENDING,
+    val lexicalCoverage: Double,
+    val proposedAt: Long,
+    val projectId: String? = null,
+    val projectRelevance: Double = 0.0,
+    val resolutionEvidenceIds: List<String> = emptyList()
+) {
+    init {
+        require(id.isNotBlank())
+        require(claimKey.isNotBlank())
+        require(statement.isNotBlank())
+        require(sourceIds.isNotEmpty())
+        require(lexicalCoverage in 0.0..1.0)
+        require(proposedAt > 0)
+        require(projectRelevance in 0.0..1.0)
+    }
+}
+
 data class EvidenceGraphState(
     val schemaVersion: Int = 1,
     val claims: List<EvidenceClaimNode> = emptyList(),
-    val sources: List<EvidenceSourceNode> = emptyList()
+    val sources: List<EvidenceSourceNode> = emptyList(),
+    val candidates: List<EvidenceClaimCandidate> = emptyList()
 )
 
 data class EvidenceGraphUpdate(
@@ -117,6 +153,32 @@ data class EvidenceOutcomeProof(
     }
 }
 
+data class EvidenceClaimProposal(
+    val claimKey: String,
+    val statement: String,
+    val sourceIds: List<String>,
+    val provenance: EvidenceClaimCandidateProvenance,
+    val proposedAt: Long,
+    val projectId: String? = null,
+    val projectRelevance: Double = 0.0
+) {
+    init {
+        require(claimKey.isNotBlank())
+        require(statement.isNotBlank())
+        require(sourceIds.isNotEmpty())
+        require(proposedAt > 0)
+        require(projectRelevance in 0.0..1.0)
+    }
+}
+
+data class EvidenceClaimCandidateUpdate(
+    val state: EvidenceGraphState,
+    val accepted: Boolean,
+    val reason: String? = null,
+    val candidateId: String? = null
+)
+
+
 /**
  * Pure reducer for typed evidence.
  *
@@ -126,6 +188,14 @@ data class EvidenceOutcomeProof(
  */
 object EvidenceGraphReducer {
     const val DEFAULT_STALE_AFTER_MS: Long = 30L * 24L * 60L * 60L * 1_000L
+
+    internal fun sourceIdForObservation(
+        observation: EvidenceObservation
+    ): String = sourceId(observation)
+
+    internal fun claimIdForKey(
+        claimKey: String
+    ): String = claimId(claimKey)
 
     fun record(
         state: EvidenceGraphState,
@@ -470,4 +540,333 @@ object EvidenceGraphReducer {
         MessageDigest.getInstance("SHA-256")
             .digest(value.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
+
+/**
+ * Conservative semantic-claim candidate layer.
+ *
+ * Model/user proposals never enter verified claims directly. A proposal must
+ * reference at least one already retrieved local source and must be lexically
+ * grounded in the bounded source text already stored in the graph. Even then it
+ * remains PENDING until a new verified EvidenceObservation explicitly supports
+ * or contradicts the same claim key from one of the bound sources.
+ */
+object EvidenceGraphClaimPolicy {
+    private const val MIN_MODEL_COVERAGE = 0.35
+    private const val MIN_USER_COVERAGE = 0.20
+    private const val MAX_CANDIDATE_SOURCES = 8
+
+    fun propose(
+        state: EvidenceGraphState,
+        proposal: EvidenceClaimProposal
+    ): EvidenceClaimCandidateUpdate {
+        val sourceIds = proposal.sourceIds
+            .distinct()
+            .take(MAX_CANDIDATE_SOURCES)
+
+        val sources = sourceIds.mapNotNull { id ->
+            state.sources.firstOrNull { it.id == id }
+        }
+
+        if (sources.size != sourceIds.size) {
+            return EvidenceClaimCandidateUpdate(
+                state = state,
+                accepted = false,
+                reason = "UNKNOWN_SOURCE"
+            )
+        }
+
+        if (
+            sources.none {
+                it.kind != EvidenceSourceKind.SEARCH_SNIPPET
+            }
+        ) {
+            return EvidenceClaimCandidateUpdate(
+                state = state,
+                accepted = false,
+                reason = "SEARCH_ONLY_SOURCE"
+            )
+        }
+
+        val sourceText = sourceIds
+            .flatMap { sourceId ->
+                state.claims
+                    .filter { claim ->
+                        sourceId in claim.supportSourceIds ||
+                            sourceId in claim.contradictionSourceIds ||
+                            sourceId in claim.mentionSourceIds
+                    }
+                    .map { claim ->
+                        claim.claimKey + " " + claim.statement
+                    }
+            }
+            .joinToString(" ")
+
+        val coverage = lexicalCoverage(
+            proposal.statement,
+            sourceText
+        )
+
+        val threshold = when (proposal.provenance) {
+            EvidenceClaimCandidateProvenance.MODEL_PROPOSAL ->
+                MIN_MODEL_COVERAGE
+            EvidenceClaimCandidateProvenance.USER_PROPOSAL ->
+                MIN_USER_COVERAGE
+        }
+
+        if (coverage < threshold) {
+            return EvidenceClaimCandidateUpdate(
+                state = state,
+                accepted = false,
+                reason = "INSUFFICIENT_SOURCE_GROUNDING"
+            )
+        }
+
+        val id = candidateId(proposal, sourceIds)
+        val existing = state.candidates.firstOrNull {
+            it.id == id
+        }
+        if (existing != null) {
+            return EvidenceClaimCandidateUpdate(
+                state = state,
+                accepted = true,
+                candidateId = existing.id
+            )
+        }
+
+        val candidate = EvidenceClaimCandidate(
+            id = id,
+            claimKey = proposal.claimKey.trim().take(500),
+            statement = proposal.statement
+                .replace(Regex("[\\r\\n\\t]+"), " ")
+                .replace(Regex("\\s{2,}"), " ")
+                .trim()
+                .take(1_600),
+            sourceIds = sourceIds,
+            provenance = proposal.provenance,
+            status = EvidenceClaimCandidateStatus.PENDING,
+            lexicalCoverage = coverage,
+            proposedAt = proposal.proposedAt,
+            projectId = proposal.projectId,
+            projectRelevance = proposal.projectRelevance
+        )
+
+        return EvidenceClaimCandidateUpdate(
+            state = state.copy(
+                candidates = (
+                    state.candidates + candidate
+                    )
+                    .distinctBy { it.id }
+                    .sortedBy { it.id }
+            ),
+            accepted = true,
+            candidateId = candidate.id
+        )
+    }
+
+    fun resolveWithVerifiedObservation(
+        state: EvidenceGraphState,
+        candidateId: String,
+        observation: EvidenceObservation
+    ): EvidenceClaimCandidateUpdate {
+        val candidate = state.candidates.firstOrNull {
+            it.id == candidateId
+        } ?: return EvidenceClaimCandidateUpdate(
+            state = state,
+            accepted = false,
+            reason = "CANDIDATE_NOT_FOUND"
+        )
+
+        if (candidate.status != EvidenceClaimCandidateStatus.PENDING) {
+            return EvidenceClaimCandidateUpdate(
+                state = state,
+                accepted = false,
+                reason = "CANDIDATE_ALREADY_RESOLVED",
+                candidateId = candidate.id
+            )
+        }
+
+        if (
+            !observation.verifiedToolResult ||
+            observation.outcomeUnknown
+        ) {
+            return EvidenceClaimCandidateUpdate(
+                state = state,
+                accepted = false,
+                reason = "UNVERIFIED_EVIDENCE",
+                candidateId = candidate.id
+            )
+        }
+
+        if (
+            observation.claimKey.trim() !=
+            candidate.claimKey.trim()
+        ) {
+            return EvidenceClaimCandidateUpdate(
+                state = state,
+                accepted = false,
+                reason = "CLAIM_KEY_MISMATCH",
+                candidateId = candidate.id
+            )
+        }
+
+        if (observation.relation == EvidenceRelation.MENTIONS) {
+            return EvidenceClaimCandidateUpdate(
+                state = state,
+                accepted = false,
+                reason = "MENTION_CANNOT_PROMOTE",
+                candidateId = candidate.id
+            )
+        }
+
+        val sourceId =
+            EvidenceGraphReducer.sourceIdForObservation(
+                observation
+            )
+        if (sourceId !in candidate.sourceIds) {
+            return EvidenceClaimCandidateUpdate(
+                state = state,
+                accepted = false,
+                reason = "SOURCE_NOT_BOUND_TO_CANDIDATE",
+                candidateId = candidate.id
+            )
+        }
+
+        val reduced = EvidenceGraphReducer.record(
+            state = state,
+            observation = observation
+        )
+        if (!reduced.accepted) {
+            return EvidenceClaimCandidateUpdate(
+                state = state,
+                accepted = false,
+                reason = reduced.reason ?: "EVIDENCE_REJECTED",
+                candidateId = candidate.id
+            )
+        }
+
+        val resolvedCandidate = candidate.copy(
+            status = EvidenceClaimCandidateStatus.PROMOTED,
+            resolutionEvidenceIds = (
+                candidate.resolutionEvidenceIds +
+                    observation.evidenceId
+                )
+                .distinct()
+                .takeLast(16)
+        )
+
+        return EvidenceClaimCandidateUpdate(
+            state = reduced.state.copy(
+                candidates = (
+                    reduced.state.candidates
+                        .filterNot { it.id == candidate.id } +
+                        resolvedCandidate
+                    )
+                    .sortedBy { it.id }
+            ),
+            accepted = true,
+            candidateId = candidate.id
+        )
+    }
+
+    fun reject(
+        state: EvidenceGraphState,
+        candidateId: String,
+        evidenceId: String
+    ): EvidenceClaimCandidateUpdate {
+        val candidate = state.candidates.firstOrNull {
+            it.id == candidateId
+        } ?: return EvidenceClaimCandidateUpdate(
+            state = state,
+            accepted = false,
+            reason = "CANDIDATE_NOT_FOUND"
+        )
+
+        if (evidenceId.isBlank()) {
+            return EvidenceClaimCandidateUpdate(
+                state = state,
+                accepted = false,
+                reason = "MISSING_REJECTION_EVIDENCE",
+                candidateId = candidate.id
+            )
+        }
+
+        val rejected = candidate.copy(
+            status = EvidenceClaimCandidateStatus.REJECTED,
+            resolutionEvidenceIds = (
+                candidate.resolutionEvidenceIds + evidenceId
+                )
+                .distinct()
+                .takeLast(16)
+        )
+        return EvidenceClaimCandidateUpdate(
+            state = state.copy(
+                candidates = (
+                    state.candidates
+                        .filterNot { it.id == candidate.id } +
+                        rejected
+                    )
+                    .sortedBy { it.id }
+            ),
+            accepted = true,
+            candidateId = candidate.id
+        )
+    }
+
+    private fun lexicalCoverage(
+        statement: String,
+        sourceText: String
+    ): Double {
+        val wanted = contentTokens(statement)
+        if (wanted.size < 2) return 0.0
+
+        val found = contentTokens(sourceText)
+        if (found.isEmpty()) return 0.0
+
+        val overlap = wanted.count { it in found }
+        return (
+            overlap.toDouble() /
+                wanted.size.toDouble()
+            )
+            .coerceIn(0.0, 1.0)
+    }
+
+    private fun contentTokens(
+        value: String
+    ): Set<String> {
+        val stop = setOf(
+            "the", "and", "for", "with", "from", "that", "this",
+            "про", "для", "та", "або", "цей", "ця", "це", "що",
+            "oraz", "dla", "ten", "ta", "to",
+            "это", "для", "или", "что"
+        )
+
+        return value
+            .lowercase()
+            .split(Regex("[^\\p{L}\\p{N}._+-]+"))
+            .map(String::trim)
+            .filter {
+                it.length >= 3 &&
+                    it !in stop
+            }
+            .take(48)
+            .toSet()
+    }
+
+    private fun candidateId(
+        proposal: EvidenceClaimProposal,
+        sourceIds: List<String>
+    ): String =
+        sha256(
+            proposal.provenance.name + "|" +
+                proposal.claimKey.trim().lowercase() + "|" +
+                proposal.statement.trim().lowercase() + "|" +
+                sourceIds.sorted().joinToString(",")
+        ).take(24)
+
+    private fun sha256(value: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+}
+
 }
