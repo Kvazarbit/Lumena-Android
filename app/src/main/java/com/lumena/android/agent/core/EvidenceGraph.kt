@@ -39,6 +39,48 @@ enum class EvidenceOutcomeProofKind {
     PROJECT_ARTIFACT
 }
 
+enum class EvidenceSemanticLinkStatus {
+    /**
+     * A model extracted a semantic relation from text that is already backed by
+     * a local verified source node. The quote is grounded, but the semantic
+     * interpretation itself is still advisory and does not promote claim
+     * verification.
+     */
+    MODEL_GROUNDED_PROPOSAL
+}
+
+data class EvidenceSemanticLinkProposal(
+    val claimKey: String,
+    val statement: String,
+    val relation: EvidenceRelation,
+    val sourceId: String,
+    val quotedFragment: String,
+    val extractorModelId: String,
+    val at: Long,
+    val projectId: String? = null
+) {
+    init {
+        require(claimKey.isNotBlank())
+        require(statement.isNotBlank())
+        require(sourceId.isNotBlank())
+        require(quotedFragment.isNotBlank())
+        require(extractorModelId.isNotBlank())
+        require(at > 0)
+    }
+}
+
+data class EvidenceSemanticLink(
+    val id: String,
+    val claimId: String,
+    val sourceId: String,
+    val relation: EvidenceRelation,
+    val quotedFragment: String,
+    val extractorModelId: String,
+    val sourceEvidenceIds: List<String>,
+    val status: EvidenceSemanticLinkStatus,
+    val at: Long
+)
+
 data class EvidenceObservation(
     val claimKey: String,
     val statement: String,
@@ -95,7 +137,8 @@ data class EvidenceClaimNode(
 data class EvidenceGraphState(
     val schemaVersion: Int = 1,
     val claims: List<EvidenceClaimNode> = emptyList(),
-    val sources: List<EvidenceSourceNode> = emptyList()
+    val sources: List<EvidenceSourceNode> = emptyList(),
+    val semanticLinks: List<EvidenceSemanticLink> = emptyList()
 )
 
 data class EvidenceGraphUpdate(
@@ -115,6 +158,263 @@ data class EvidenceOutcomeProof(
         require(evidenceId.isNotBlank())
         require(at > 0)
     }
+}
+
+/**
+ * Strict boundary between model extraction and verified source evidence.
+ *
+ * A model may propose a semantic claim only against an existing local source
+ * node and only with a quote that is present in the bounded source-backed
+ * excerpt already stored in the graph. Accepted proposals remain DISCOVERED
+ * and do not populate support/contradiction arrays, so model interpretation
+ * cannot self-promote a claim to RETRIEVED/CORROBORATED/CONTESTED.
+ */
+object EvidenceSemanticLinkPolicy {
+    const val MAX_LINKS = 1_024
+    private const val MAX_QUOTE_CHARS = 600
+    private const val MIN_QUOTE_CHARS = 8
+
+    fun propose(
+        state: EvidenceGraphState,
+        proposal: EvidenceSemanticLinkProposal
+    ): EvidenceGraphUpdate {
+        val source = state.sources.firstOrNull {
+            it.id == proposal.sourceId
+        } ?: return EvidenceGraphUpdate(
+            state = state,
+            accepted = false,
+            reason = "SOURCE_NOT_FOUND"
+        )
+
+        if (source.evidenceIds.isEmpty()) {
+            return EvidenceGraphUpdate(
+                state = state,
+                accepted = false,
+                reason = "SOURCE_HAS_NO_VERIFIED_EVIDENCE",
+                sourceId = source.id
+            )
+        }
+
+        val sourceClaim = state.claims.firstOrNull { claim ->
+            claim.claimKey.startsWith("source:") &&
+                source.id in (
+                    claim.supportSourceIds +
+                        claim.contradictionSourceIds +
+                        claim.mentionSourceIds
+                    )
+        } ?: return EvidenceGraphUpdate(
+            state = state,
+            accepted = false,
+            reason = "SOURCE_EXCERPT_NOT_FOUND",
+            sourceId = source.id
+        )
+
+        val quote = sanitize(
+            proposal.quotedFragment,
+            MAX_QUOTE_CHARS
+        )
+        if (quote.length < MIN_QUOTE_CHARS) {
+            return EvidenceGraphUpdate(
+                state = state,
+                accepted = false,
+                reason = "QUOTE_TOO_SHORT",
+                sourceId = source.id
+            )
+        }
+
+        val haystack = normalizedText(sourceClaim.statement)
+        val needle = normalizedText(quote)
+        if (
+            needle.isBlank() ||
+            !haystack.contains(needle)
+        ) {
+            return EvidenceGraphUpdate(
+                state = state,
+                accepted = false,
+                reason = "QUOTE_NOT_GROUNDED",
+                sourceId = source.id
+            )
+        }
+
+        val claimId = semanticClaimId(
+            proposal.claimKey
+        )
+        val existingClaim = state.claims.firstOrNull {
+            it.id == claimId
+        }
+        val semanticClaim = existingClaim
+            ?: EvidenceClaimNode(
+                id = claimId,
+                claimKey = sanitize(
+                    proposal.claimKey,
+                    500
+                ),
+                statement = sanitize(
+                    proposal.statement,
+                    2_000
+                ),
+                verificationState =
+                    EvidenceVerificationState.DISCOVERED,
+                firstObservedAt = proposal.at,
+                lastObservedAt = proposal.at,
+                projectId = proposal.projectId,
+                projectRelevance = 0.0
+            )
+
+        val linkId = semanticLinkId(
+            claimId = claimId,
+            sourceId = source.id,
+            relation = proposal.relation,
+            quote = quote,
+            modelId = proposal.extractorModelId
+        )
+        val link = EvidenceSemanticLink(
+            id = linkId,
+            claimId = claimId,
+            sourceId = source.id,
+            relation = proposal.relation,
+            quotedFragment = quote,
+            extractorModelId = sanitize(
+                proposal.extractorModelId,
+                160
+            ),
+            sourceEvidenceIds =
+                source.evidenceIds
+                    .distinct()
+                    .takeLast(32),
+            status =
+                EvidenceSemanticLinkStatus.MODEL_GROUNDED_PROPOSAL,
+            at = proposal.at
+        )
+
+        val nextLinks = (
+            state.semanticLinks
+                .filterNot { it.id == link.id } +
+                link
+            )
+            .sortedWith(
+                compareBy<EvidenceSemanticLink> {
+                    it.at
+                }.thenBy {
+                    it.id
+                }
+            )
+            .takeLast(MAX_LINKS)
+
+        val linkedTimes = nextLinks
+            .filter { it.claimId == claimId }
+            .map { it.at }
+
+        val nextClaim = semanticClaim.copy(
+            // Important: semantic model extraction is not verification.
+            verificationState =
+                EvidenceVerificationState.DISCOVERED,
+            supportSourceIds =
+                existingClaim?.supportSourceIds.orEmpty(),
+            contradictionSourceIds =
+                existingClaim?.contradictionSourceIds.orEmpty(),
+            mentionSourceIds =
+                existingClaim?.mentionSourceIds.orEmpty(),
+            evidenceIds =
+                existingClaim?.evidenceIds.orEmpty(),
+            firstObservedAt = minOf(
+                semanticClaim.firstObservedAt,
+                linkedTimes.minOrNull()
+                    ?: proposal.at
+            ),
+            lastObservedAt = maxOf(
+                semanticClaim.lastObservedAt,
+                linkedTimes.maxOrNull()
+                    ?: proposal.at
+            ),
+            projectId =
+                proposal.projectId
+                    ?: semanticClaim.projectId
+        )
+
+        return EvidenceGraphUpdate(
+            state = state.copy(
+                claims = (
+                    state.claims
+                        .filterNot {
+                            it.id == claimId
+                        } +
+                        nextClaim
+                    )
+                    .sortedBy { it.id },
+                semanticLinks = nextLinks
+            ),
+            accepted = true,
+            claimId = claimId,
+            sourceId = source.id
+        )
+    }
+
+    fun linksForClaim(
+        state: EvidenceGraphState,
+        claimId: String
+    ): List<EvidenceSemanticLink> =
+        state.semanticLinks
+            .filter { it.claimId == claimId }
+            .sortedByDescending { it.at }
+
+    private fun semanticClaimId(
+        claimKey: String
+    ): String =
+        sha256(
+            "semantic|" +
+                normalizedText(claimKey)
+        ).take(24)
+
+    private fun semanticLinkId(
+        claimId: String,
+        sourceId: String,
+        relation: EvidenceRelation,
+        quote: String,
+        modelId: String
+    ): String =
+        sha256(
+            listOf(
+                claimId,
+                sourceId,
+                relation.name,
+                normalizedText(quote),
+                modelId.trim().lowercase()
+            ).joinToString("|")
+        ).take(24)
+
+    private fun normalizedText(
+        value: String
+    ): String =
+        value
+            .lowercase()
+            .replace(Regex("[\\r\\n\\t]+"), " ")
+            .replace(Regex("\\s{2,}"), " ")
+            .trim()
+
+    private fun sanitize(
+        value: String,
+        maxChars: Int
+    ): String =
+        value
+            .replace('\u0000', ' ')
+            .replace(Regex("[\\r\\n\\t]+"), " ")
+            .replace(Regex("\\s{2,}"), " ")
+            .trim()
+            .take(maxChars)
+
+    private fun sha256(
+        value: String
+    ): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(
+                value.toByteArray(
+                    Charsets.UTF_8
+                )
+            )
+            .joinToString("") {
+                "%02x".format(it)
+            }
 }
 
 /**
