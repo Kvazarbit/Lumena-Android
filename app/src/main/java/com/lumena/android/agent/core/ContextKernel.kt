@@ -68,6 +68,74 @@ object ContextKernel {
         return same.size == 2 && same.all { it.ok } && same[0].digest == same[1].digest
     }
 
+    /**
+     * Prevents an already-successful identical mutation from consuming another
+     * task slot when no later failure on the same target justifies a replay.
+     */
+    fun redundantSuccessfulMutation(
+        state: ContextKernelState,
+        call: AgentDecision.ToolCall
+    ): Boolean {
+        val canonical = ToolRegistry.canonicalize(call.tool)
+        if (ToolRegistry.get(canonical)?.risk != ToolRisk.MUTATING) {
+            return false
+        }
+
+        val wantedSignature = signature(call)
+        val lastSuccess = state.evidence.indexOfLast {
+            it.signature == wantedSignature &&
+                it.ok &&
+                it.phase == CognitivePhase.ACT
+        }
+        if (lastSuccess < 0) return false
+
+        val wantedTarget = target(call)
+        val laterFailure = state.evidence
+            .drop(lastSuccess + 1)
+            .any {
+                !it.ok &&
+                    (
+                        wantedTarget.isBlank() ||
+                            it.target == wantedTarget
+                    )
+            }
+
+        return !laterFailure
+    }
+
+    /**
+     * A successful target-specific syntax verification stays fresh until that
+     * same target is mutated again. Unrelated project mutations must not force a
+     * duplicate syntax check of an unchanged file.
+     */
+    fun redundantTargetVerification(
+        state: ContextKernelState,
+        call: AgentDecision.ToolCall
+    ): Boolean {
+        val canonical = ToolRegistry.canonicalize(call.tool)
+        if (canonical !in setOf("python.syntax_check", "python.run")) {
+            return false
+        }
+
+        val wantedTarget = target(call)
+        if (wantedTarget.isBlank()) return false
+
+        val lastVerification = state.evidence.indexOfLast {
+            it.ok &&
+                it.phase == CognitivePhase.VERIFY &&
+                it.tool == canonical &&
+                it.target == wantedTarget
+        }
+        if (lastVerification < 0) return false
+
+        val lastTargetMutation = state.evidence.indexOfLast {
+            it.phase == CognitivePhase.ACT &&
+                it.target == wantedTarget
+        }
+
+        return lastVerification > lastTargetMutation
+    }
+
     fun completionBlocker(state: ContextKernelState): String? = when {
         state.inFlight != null -> "A tool outcome is unknown. Report partial; do not claim success or replay it automatically."
         state.pendingVerification.isNotEmpty() -> "Changed Python targets still require verification; use recorded pending targets or report partial."
