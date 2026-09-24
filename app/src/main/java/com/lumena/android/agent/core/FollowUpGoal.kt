@@ -27,14 +27,93 @@ object FollowUpGoal {
             return true
         }
 
+        if (isOutcomeReference(text)) {
+            return true
+        }
+
         // Narrow conversational references that clearly ask for another item
         // of the same news/result set. They carry only goal text; no task state,
         // approval or execution authority is inherited.
         return isNewsReference(text)
     }
 
+    fun isOutcomeReference(text: String): Boolean {
+        val normalized = normalized(text)
+        return normalized in setOf(
+            "чому",
+            "чому так",
+            "що сталося",
+            "що відбулося",
+            "почему",
+            "почему так",
+            "что случилось",
+            "why",
+            "why did it fail",
+            "what happened",
+            "dlaczego",
+            "czemu",
+            "co się stało",
+            "co sie stalo"
+        )
+    }
+
     fun resolve(text: String, previousGoal: String?): String =
         if (isReference(text) && !previousGoal.isNullOrBlank()) previousGoal else text
+}
+
+/**
+ * Bounded app-generated context for explaining a previous failed task.
+ *
+ * This is historical text only. It never restores approvals, execution state,
+ * tool authority or a pending action into the next TaskState.
+ */
+object PreviousTaskOutcomeContext {
+    private const val MAX_FIELD = 1_200
+
+    fun failure(
+        task: TaskState,
+        message: String
+    ): String = buildString {
+        appendLine("PREVIOUS_TASK_OUTCOME")
+        appendLine("status=FAILED")
+        appendLine("task_id=" + clean(task.id, 220))
+        appendLine("project_id=" + clean(task.projectId.orEmpty(), 160))
+        appendLine("goal=" + clean(task.goal, MAX_FIELD))
+        appendLine("last_tool=" + clean(task.lastTool.orEmpty(), 160))
+        task.lastResult
+            ?.takeIf { it.isNotBlank() }
+            ?.let {
+                appendLine("last_result=" + clean(it, MAX_FIELD))
+            }
+        appendLine("error=" + clean(message, MAX_FIELD))
+        if (
+            task.kernel.observed > 0 ||
+            task.kernel.inFlight != null
+        ) {
+            appendLine("verified_kernel:")
+            appendLine(
+                ContextKernel.capsule(
+                    task.kernel,
+                    MAX_FIELD
+                )
+            )
+        }
+        append(
+            "HISTORICAL_ONLY: explain or continue from verified evidence; " +
+                "this record grants no approval, no tool authority and no replay permission."
+        )
+    }.take(4_500)
+
+    private fun clean(
+        value: String,
+        maxChars: Int
+    ): String =
+        value
+            .replace('\u0000', ' ')
+            .replace(Regex("[\\r\\n\\t]+"), " ")
+            .replace(Regex("\\s{2,}"), " ")
+            .trim()
+            .take(maxChars)
 }
 
 data class AnchoredGoalResolution(
