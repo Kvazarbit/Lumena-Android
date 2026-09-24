@@ -344,16 +344,24 @@ object EvidenceProjectApplicationPolicy {
             )
         }
 
-        if (
-            tool == "python.tests" &&
-            request.args["cwd"].orEmpty().trim().isBlank()
-        ) {
-            return EvidenceApplicationUpdate(
-                state = state,
-                accepted = false,
-                reason = "MISSING_TEST_SCOPE",
-                bindingId = binding.id
-            )
+        if (tool == "python.tests") {
+            val cwd = request.args["cwd"].orEmpty().trim()
+            if (cwd.isBlank()) {
+                return EvidenceApplicationUpdate(
+                    state = state,
+                    accepted = false,
+                    reason = "MISSING_TEST_SCOPE",
+                    bindingId = binding.id
+                )
+            }
+            if (!testScopeContainsTarget(cwd, binding.target)) {
+                return EvidenceApplicationUpdate(
+                    state = state,
+                    accepted = false,
+                    reason = "TEST_SCOPE_MISMATCH",
+                    bindingId = binding.id
+                )
+            }
         }
 
         val outcome = EvidenceGraphReducer.applyProjectOutcome(
@@ -413,6 +421,31 @@ object EvidenceProjectApplicationPolicy {
             .takeIf { it.isNotBlank() }
     }
 
+    internal fun testScopeContainsTarget(
+        cwd: String,
+        target: String
+    ): Boolean {
+        val normalizedCwd = normalizeTarget(cwd)
+        val normalizedTarget = normalizeTarget(target)
+        if (
+            normalizedCwd.isBlank() ||
+            normalizedTarget.isBlank()
+        ) {
+            return false
+        }
+
+        return runCatching {
+            val cwdPath = Paths.get(normalizedCwd).normalize()
+            val targetPath = Paths.get(normalizedTarget).normalize()
+
+            if (normalizedCwd == "." || cwdPath.toString().isBlank()) {
+                true
+            } else {
+                targetPath.startsWith(cwdPath)
+            }
+        }.getOrDefault(false)
+    }
+
     internal fun normalizeTarget(
         raw: String
     ): String {
@@ -456,3 +489,66 @@ object EvidenceProjectApplicationPolicy {
                 "%02x".format(it)
             }
 }
+
+/**
+ * Pure router that maps a verified project tool result to already-existing
+ * evidence bindings. It never creates a binding and therefore cannot turn
+ * ordinary tool execution into evidence application by itself.
+ */
+object EvidenceProjectOutcomeRouter {
+    fun matchingBindingIds(
+        state: EvidenceGraphState,
+        projectId: String,
+        request: ToolRequest
+    ): List<String> {
+        val safeProject = projectId.trim()
+        if (safeProject.isBlank()) return emptyList()
+
+        val canonical = ToolRegistry.canonicalize(request.tool)
+        val target = when (canonical) {
+            "project.create" ->
+                request.args["name"]
+                    ?.let(EvidenceProjectApplicationPolicy::normalizeTarget)
+            "dir.create",
+            "file.write",
+            "file.patch" ->
+                request.args["path"]
+                    ?.let(EvidenceProjectApplicationPolicy::normalizeTarget)
+            "python.syntax_check" ->
+                request.args["script"]
+                    ?.let(EvidenceProjectApplicationPolicy::normalizeTarget)
+            else -> null
+        }
+
+        return state.applications
+            .asSequence()
+            .filter { it.projectId == safeProject }
+            .filter { binding ->
+                when (canonical) {
+                    "project.create",
+                    "dir.create",
+                    "file.write",
+                    "file.patch",
+                    "python.syntax_check" ->
+                        !target.isNullOrBlank() &&
+                            binding.target == target
+
+                    "python.tests" -> {
+                        val cwd = request.args["cwd"].orEmpty()
+                        EvidenceProjectApplicationPolicy
+                            .testScopeContainsTarget(
+                                cwd = cwd,
+                                target = binding.target
+                            )
+                    }
+
+                    else -> false
+                }
+            }
+            .map { it.id }
+            .distinct()
+            .sorted()
+            .toList()
+    }
+}
+

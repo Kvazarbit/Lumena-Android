@@ -570,6 +570,19 @@ fun WorkflowChatScreen(
                         evidenceId = eventId
                     )
                 }
+                task.projectId
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { projectId ->
+                        runCatching {
+                            EvidenceGraphStore.recordMatchingProjectOutcomes(
+                                context = context,
+                                taskProjectId = projectId,
+                                request = request,
+                                result = result,
+                                evidenceId = eventId
+                            )
+                        }
+                    }
 
                 val episodeSessionId = task.projectId
                     ?.takeIf { it.isNotBlank() }
