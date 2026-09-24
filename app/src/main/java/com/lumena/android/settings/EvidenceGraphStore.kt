@@ -530,11 +530,15 @@ object EvidenceGraphStore {
             retainedClaims
                 .map { it.id }
                 .toSet()
+        val actualRetainedSourceIds =
+            retainedSources
+                .map { it.id }
+                .toSet()
         val retainedSemanticLinks =
             state.semanticLinks
                 .filter {
                     it.claimId in retainedClaimIds &&
-                        it.sourceId in retainedSourceIds
+                        it.sourceId in actualRetainedSourceIds
                 }
                 .sortedByDescending { it.at }
                 .take(
