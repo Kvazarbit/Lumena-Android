@@ -21,7 +21,8 @@ data class TaskIntentProfile(
     val confidence: Int,
     val recommendedTools: List<String>,
     val guidance: String,
-    val preflight: IntentPreflight? = null
+    val preflight: IntentPreflight? = null,
+    val minimumToolSteps: Int = 4
 )
 
 /**
@@ -79,29 +80,42 @@ object TaskIntentRouter {
         }
 
         if (isCodeWork(lower)) {
+            val mixedWebResearch = isPublicWeb(lower)
+            val tools = buildList {
+                add("context.snapshot")
+                add("workspace.list")
+                add("file.search")
+                add("file.read")
+                if (mixedWebResearch) {
+                    add("web.search")
+                    add("web.read")
+                    add("http.json")
+                    add("http.get")
+                }
+                add("file.write")
+                add("file.patch")
+                add("python.syntax_check")
+                add("python.tests")
+                add("python.run")
+                add("git.status")
+                add("git.diff")
+            }
             return TaskIntentProfile(
                 intent = TaskIntent.CODE_WORK,
-                confidence = 82,
-                recommendedTools = listOf(
-                    "context.snapshot",
-                    "workspace.list",
-                    "file.search",
-                    "file.read",
-                    "file.write",
-                    "file.patch",
-                    "python.syntax_check",
-                    "python.tests",
-                    "python.run",
-                    "git.status",
-                    "git.diff"
-                ),
-                guidance = "Orient to verified workspace/project state before editing; verify code changes before completion.",
+                confidence = if (mixedWebResearch) 90 else 82,
+                recommendedTools = tools.distinct(),
+                guidance = if (mixedWebResearch) {
+                    "Research with verified web source TOOL_RESULT before applying code changes; orient to the project, then verify every changed Python target before completion."
+                } else {
+                    "Orient to verified workspace/project state before editing; verify code changes before completion."
+                },
                 preflight = IntentPreflight(
                     tool = "context.snapshot",
                     args = emptyMap(),
                     reason = "Load a compact verified environment/project snapshot before code work.",
                     mandatory = false
-                )
+                ),
+                minimumToolSteps = if (mixedWebResearch) 8 else 6
             )
         }
 
@@ -139,6 +153,7 @@ object TaskIntentRouter {
                     "image.search"
                 ),
                 guidance = "Search with web.search; read relevant source URLs with web.read or documented http.json APIs. Cite fetched URLs, compare sources for current claims. Snippets/homepages do not prove popularity or profit. If evidence is missing, report partial; distinguish observed failures from hypotheses.",
+                minimumToolSteps = 5,
                 preflight = if ("https://" in lower || "http://" in lower) null else IntentPreflight(
                     tool = "web.search",
                     args = mapOf("query" to publicSearchQuery(normalized)),

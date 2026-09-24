@@ -1,5 +1,6 @@
 package com.lumena.android.agent.core
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -25,6 +26,54 @@ class AgentControllerTest {
         val state = controller.initial(conversational)
         val instruction = controller.interpret("{\"reply\":\"hello\"}", state)
         assertTrue(instruction is ControllerInstruction.Finish)
+    }
+
+
+    @Test
+    fun mixedResearchCodeTaskStartsWithEightToolBudget() {
+        val mixed = TaskState(
+            id = "mixed-budget",
+            projectId = "e2e_step87",
+            goal = """
+                Працюй у проекті e2e_step87.
+                Прочитай через web.read https://docs.python.org/3/library/pathlib.html
+                Потім створи dir_a.py і test_dir_a.py.
+                Запусти python.syntax_check і python.tests.
+            """.trimIndent(),
+            status = TaskStatus.WAITING_MODEL
+        )
+
+        val state = controller.initial(mixed)
+
+        assertEquals(TaskIntent.CODE_WORK, state.intent)
+        assertEquals(8, state.task.maxSteps)
+        assertTrue("web.read" in state.recommendedTools)
+        assertTrue("python.tests" in state.recommendedTools)
+    }
+
+    @Test
+    fun simpleCodeTaskGetsSixButGeneralConversationStaysFour() {
+        val code = controller.initial(
+            TaskState(
+                id = "code-budget",
+                projectId = "demo",
+                goal = "Створи Python script і перевір тестами",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        assertEquals(TaskIntent.CODE_WORK, code.intent)
+        assertEquals(6, code.task.maxSteps)
+
+        val general = controller.initial(
+            TaskState(
+                id = "general-budget",
+                projectId = null,
+                goal = "Поясни різницю між RAM і SSD",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        assertEquals(TaskIntent.GENERAL, general.intent)
+        assertEquals(4, general.task.maxSteps)
     }
 
     @Test
@@ -222,6 +271,98 @@ class AgentControllerTest {
         val partial = controller.interpret("""{"partial":true,"summary":"demo.py still needs verification"}""", corrected)
         assertTrue(partial is ControllerInstruction.Finish)
         assertTrue(partial.state.task.status == TaskStatus.PARTIAL)
+    }
+
+
+    @Test
+    fun fullProjectPytestClearsOnlyPendingPythonPathsInsideItsCwd() {
+        var state = controller.initial(task()).copy(
+            toolUsed = true,
+            verificationRequired = true,
+            pendingPythonPaths = setOf(
+                "e2e_step87/dir_a.py",
+                "e2e_step87/test_dir_a.py",
+                "other_project/keep.py"
+            ),
+            verificationReason = "verify changed python"
+        )
+
+        state = controller.afterTool(
+            state = state,
+            call = AgentDecision.ToolCall(
+                tool = "python.tests",
+                args = mapOf(
+                    "cwd" to "e2e_step87"
+                )
+            ),
+            ok = true,
+            stdout = "1 passed",
+            stderr = "",
+            error = null
+        ).state
+
+        assertEquals(
+            setOf("other_project/keep.py"),
+            state.pendingPythonPaths
+        )
+        assertTrue(state.verificationRequired)
+    }
+
+    @Test
+    fun fullProjectPytestCanCloseAllPendingVerificationButSelectedPytestCannot() {
+        val base = controller.initial(task()).copy(
+            toolUsed = true,
+            verificationRequired = true,
+            pendingPythonPaths = setOf(
+                "e2e_step87/dir_a.py",
+                "e2e_step87/test_dir_a.py"
+            ),
+            verificationReason = "verify changed python"
+        )
+
+        val selected = controller.afterTool(
+            state = base,
+            call = AgentDecision.ToolCall(
+                tool = "python.tests",
+                args = mapOf(
+                    "cwd" to "e2e_step87",
+                    "argv" to "-q test_dir_a.py"
+                )
+            ),
+            ok = true,
+            stdout = "1 passed",
+            stderr = "",
+            error = null
+        ).state
+
+        assertEquals(
+            base.pendingPythonPaths,
+            selected.pendingPythonPaths
+        )
+        assertTrue(selected.verificationRequired)
+
+        val full = controller.afterTool(
+            state = base,
+            call = AgentDecision.ToolCall(
+                tool = "python.tests",
+                args = mapOf(
+                    "cwd" to "e2e_step87"
+                )
+            ),
+            ok = true,
+            stdout = "1 passed",
+            stderr = "",
+            error = null
+        ).state
+
+        assertTrue(full.pendingPythonPaths.isEmpty())
+        assertFalse(full.verificationRequired)
+
+        val done = controller.interpret(
+            """{"done":true,"summary":"project verified"}""",
+            full
+        )
+        assertTrue(done is ControllerInstruction.Finish)
     }
 
     @Test

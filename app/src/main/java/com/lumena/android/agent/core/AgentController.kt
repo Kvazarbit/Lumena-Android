@@ -73,9 +73,13 @@ class AgentController(
     fun initial(task: TaskState): AgentControlState {
         val profile = TaskIntentRouter.route(task.goal)
         val reserve = if (profile.preflight != null) 1 else 0
+        val initialToolBudget = maxOf(
+            task.maxSteps + reserve,
+            profile.minimumToolSteps
+        ).coerceAtMost(budget.maxTotalSteps)
         return AgentControlState(
             task = task.copy(
-                maxSteps = (task.maxSteps + reserve).coerceAtMost(budget.maxTotalSteps)
+                maxSteps = initialToolBudget
             ),
             intent = profile.intent,
             pendingPythonPaths = task.kernel.pendingVerification,
@@ -643,11 +647,40 @@ class AgentController(
             }
         }
         if (ok && call.tool in setOf("python.syntax_check", "python.run")) {
-            // A successful unrelated script (or selected pytest subset) proves
-            // nothing about the files changed by this task.
-            pendingPythonPaths.remove(normalizePath(call.args["script"].orEmpty()))
+            // A successful unrelated script proves nothing about the other
+            // files changed by this task.
+            pendingPythonPaths.remove(
+                normalizePath(
+                    call.args["script"].orEmpty()
+                )
+            )
             if (state.pendingPythonPaths.isNotEmpty()) {
-                verificationRequired = pendingPythonPaths.isNotEmpty()
+                verificationRequired =
+                    pendingPythonPaths.isNotEmpty()
+            }
+        }
+        if (
+            ok &&
+            ToolRegistry.canonicalize(call.tool) ==
+            "python.tests" &&
+            EvidenceProjectApplicationPolicy
+                .isFullProjectTestArgs(
+                    call.args
+                )
+        ) {
+            val cwd = call.args["cwd"]
+                .orEmpty()
+                .trim()
+            pendingPythonPaths.removeAll { path ->
+                EvidenceProjectApplicationPolicy
+                    .testScopeContainsTarget(
+                        cwd = cwd,
+                        target = path
+                    )
+            }
+            if (state.pendingPythonPaths.isNotEmpty()) {
+                verificationRequired =
+                    pendingPythonPaths.isNotEmpty()
             }
         }
         if (pendingPythonPaths.isNotEmpty()) {
