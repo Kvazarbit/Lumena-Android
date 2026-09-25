@@ -320,16 +320,37 @@ class AgentController(
             )
         }
 
-        val freshPendingVerifications =
-            state.pendingPythonPaths.size
         val remainingSlots =
             minOf(
                 state.task.maxSteps,
                 budget.maxTotalSteps
             ) - state.task.step
+
+        // Reserve by verification ACTION, not by pending file count.
+        // A successful full-project python.tests can verify several changed
+        // Python targets in one tool result. Counting every pending path here
+        // double-reserved the same work and could block a still-required
+        // mutation (for example writing the requested pytest file).
+        val pendingVerificationCoveredByRequiredTool =
+            pendingRequired.any {
+                it in setOf(
+                    "python.syntax_check",
+                    "python.run",
+                    "python.tests"
+                )
+            }
+        val extraVerificationReserve =
+            if (
+                state.pendingPythonPaths.isNotEmpty() &&
+                !pendingVerificationCoveredByRequiredTool
+            ) {
+                1
+            } else {
+                0
+            }
         val reservedSlots =
             pendingRequired.size +
-                freshPendingVerifications
+                extraVerificationReserve
 
         val satisfiesPendingPathVerification =
             canonical.tool in setOf(
