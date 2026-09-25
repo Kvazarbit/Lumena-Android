@@ -275,13 +275,99 @@ object TaskIntentRouter {
             "ollama", "локальн", "local model", "gguf model", "model loaded",
             "модель завантаж", "модель запущ", "модель працю", "модел запущ",
             "модел загруж", "модел работает"
-        ).any { containsTerm(lower, it) }
+        ).any { containsPositiveTerm(lower, it) }
         val action = listOf(
             "status", "стан", "статус", "запуст", "запущ", "start", "pull", "download",
             "generate", "генер", "завантаж", "loaded", "running", "працю", "работ",
             "uruchom", "działa", "dziala"
-        ).any { containsTerm(lower, it) }
+        ).any { containsPositiveTerm(lower, it) }
         return subject && action
+    }
+
+    /**
+     * Intent routing must not treat a forbidden tool mention as the user's
+     * requested operation. Example: "Не використовуй ollama.generate" is a
+     * constraint on another task, not an Ollama task.
+     *
+     * A later positive mention still wins, e.g.:
+     * "Не використовуй ollama.generate; перевір статус Ollama".
+     */
+    private fun containsPositiveTerm(
+        lower: String,
+        term: String
+    ): Boolean {
+        val indices = mutableListOf<Int>()
+        val lexicalAscii = term.isNotEmpty() && term.all { ch ->
+            ch in 'a'..'z' || ch in '0'..'9' || ch == '_'
+        }
+
+        if (lexicalAscii) {
+            Regex(
+                "(?<![a-z0-9_])" +
+                    Regex.escape(term) +
+                    "(?![a-z0-9_])"
+            )
+                .findAll(lower)
+                .forEach { indices += it.range.first }
+        } else {
+            var from = 0
+            while (true) {
+                val at = lower.indexOf(term, startIndex = from)
+                if (at < 0) break
+                indices += at
+                from = at + maxOf(1, term.length)
+            }
+        }
+
+        if (indices.isEmpty()) return false
+
+        val negationCues = listOf(
+            "не використовуй",
+            "не використовуйте",
+            "не запускай",
+            "не запускайте",
+            "не виконуй",
+            "не виконуйте",
+            "не роби",
+            "не робіть",
+            "не используй",
+            "не используйте",
+            "не запускай",
+            "не запускайте",
+            "do not use",
+            "do not run",
+            "don't use",
+            "don't run",
+            "never use",
+            "never run",
+            "nie używaj",
+            "nie uzywaj",
+            "nie uruchamiaj"
+        )
+
+        return indices.any { at ->
+            val prefix = lower
+                .substring(
+                    maxOf(0, at - 72),
+                    at
+                )
+                .substringAfterLast(';')
+                .substringAfterLast('.')
+                .substringAfterLast('!')
+                .substringAfterLast('?')
+                .trim()
+
+            negationCues.none { cue ->
+                prefix.endsWith(cue) ||
+                    prefix.contains(
+                        Regex(
+                            "(?:^|\\s)" +
+                                Regex.escape(cue) +
+                                "(?:\\s+[^,;.!?]{0,40})?$"
+                        )
+                    )
+            }
+        }
     }
 
     private fun isCodeWork(lower: String): Boolean {
