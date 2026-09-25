@@ -1303,6 +1303,71 @@ class AgentControllerTest {
     }
 
 
+
+    @Test
+    fun projectScopedTaskBlocksUnrequestedMutationOutsideProject() {
+        val state = controller.initial(
+            TaskState(
+                id = "project-scope",
+                projectId = "e2e_step87",
+                goal = "Створи e2e_step87/dir_a.py і перевір його.",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        val blocked = controller.interpret(
+            """{"tool":"file.write","args":{"path":"workspace/mkdir_test.py","content":"print('helper')"}}""",
+            state
+        )
+
+        assertTrue(blocked is ControllerInstruction.AskModelAgain)
+        blocked as ControllerInstruction.AskModelAgain
+        assertEquals(0, blocked.state.task.step)
+        assertTrue(
+            blocked.feedback.contains(
+                "outside that project"
+            )
+        )
+    }
+
+    @Test
+    fun projectScopedTaskAllowsMutationInsideProject() {
+        val state = controller.initial(
+            TaskState(
+                id = "project-scope-ok",
+                projectId = "e2e_step87",
+                goal = "Створи e2e_step87/dir_a.py.",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        val allowed = controller.interpret(
+            """{"tool":"file.write","args":{"path":"e2e_step87/dir_a.py","content":"print('ok')"}}""",
+            state
+        )
+
+        assertTrue(allowed is ControllerInstruction.Execute)
+    }
+
+    @Test
+    fun explicitlyNamedOutsideProjectMutationRemainsPossible() {
+        val state = controller.initial(
+            TaskState(
+                id = "project-scope-explicit",
+                projectId = "demo",
+                goal = "У проекті demo створи також shared/config.py.",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        val allowed = controller.interpret(
+            """{"tool":"file.write","args":{"path":"shared/config.py","content":"VALUE = 1"}}""",
+            state
+        )
+
+        assertTrue(allowed is ControllerInstruction.Execute)
+    }
+
     @Test
     fun protocolRepairRestoresExactActiveGoalAndPendingObligations() {
         val goal = """
