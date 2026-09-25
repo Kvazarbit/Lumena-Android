@@ -1231,6 +1231,81 @@ class AgentControllerTest {
         assertTrue(event.retryable == false)
     }
 
+
+    @Test
+    fun protocolRepairRestoresExactActiveGoalAndPendingObligations() {
+        val goal = """
+            Працюй у проекті e2e_step87.
+            Це Step 8.7 E2E, Task A.
+            Прочитай через web.read:
+            https://docs.python.org/3/library/pathlib.html#pathlib.Path.mkdir
+            Потім створи e2e_step87/dir_a.py і e2e_step87/test_dir_a.py.
+            Після запису файлів:
+            - python.syntax_check для e2e_step87/dir_a.py
+            - python.tests з cwd=e2e_step87
+            Не використовуй ollama.generate для перевірки SHADOW/ACTIVE.
+        """.trimIndent()
+
+        var state = controller.initial(
+            TaskState(
+                id = "repair-goal",
+                projectId = "e2e_step87",
+                goal = goal,
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        assertEquals(TaskIntent.CODE_WORK, state.intent)
+        assertEquals(11, state.task.maxSteps)
+
+        state = state.copy(
+            completedRequiredTools = setOf("web.read"),
+            task = state.task.copy(
+                step = 1,
+                lastTool = "context.snapshot",
+                lastResult = "ok=true stdout={fixture}"
+            )
+        )
+
+        val instruction = controller.interpret(
+            """{"action":"shell","tool":"file.write","args":{"path":"x","content":"bad"}}""",
+            state
+        )
+
+        assertTrue(instruction is ControllerInstruction.AskModelAgain)
+        instruction as ControllerInstruction.AskModelAgain
+        assertTrue(instruction.feedback.contains("PROTOCOL_REPAIR_MODE retry=1"))
+        assertTrue(instruction.feedback.contains("ACTIVE_TASK"))
+        assertTrue(instruction.feedback.contains("project=e2e_step87"))
+        assertTrue(instruction.feedback.contains("intent=CODE_WORK"))
+        assertTrue(instruction.feedback.contains("step=1/11"))
+        assertTrue(
+            instruction.feedback.contains(
+                "https://docs.python.org/3/library/pathlib.html#pathlib.Path.mkdir"
+            )
+        )
+        assertTrue(
+            instruction.feedback.contains(
+                "e2e_step87/dir_a.py"
+            )
+        )
+        assertTrue(
+            instruction.feedback.contains(
+                "pending_required_tools=python.syntax_check,python.tests"
+            )
+        )
+        assertTrue(
+            instruction.feedback.contains(
+                "completed_required_tools=web.read"
+            )
+        )
+        assertTrue(
+            instruction.feedback.contains(
+                "Do NOT ask the user to restate it"
+            )
+        )
+    }
+
     @Test
     fun protocolKernelStopsThirdInvalidEnvelope() {
         var state = controller.initial(
