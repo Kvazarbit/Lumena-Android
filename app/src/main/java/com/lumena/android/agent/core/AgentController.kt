@@ -429,6 +429,26 @@ class AgentController(
             )
         }
 
+        if (
+            ContextKernel.repeatedFailedVerificationWithoutMutation(
+                state.task.kernel,
+                canonical
+            )
+        ) {
+            return ControllerInstruction.AskModelAgain(
+                feedback =
+                    "This exact verification already failed and no intervening mutation changed the code under test. " +
+                        "Read-only inspection does not justify replaying the same failing verification. " +
+                        "Change the relevant project state with an authorized mutation, choose a meaningfully different verification route, " +
+                        "or return partial. The duplicate failed verification was not executed and consumed no tool step.",
+                state = state.copy(
+                    task = state.task.copy(
+                        status = TaskStatus.WAITING_MODEL
+                    )
+                )
+            )
+        }
+
         if (state.recoveryHint != null &&
             state.semanticRecoverySpent >= semanticRecoveryLimit(state, canonical)
         ) {
