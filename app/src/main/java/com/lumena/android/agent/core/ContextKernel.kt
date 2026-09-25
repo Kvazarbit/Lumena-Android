@@ -104,6 +104,48 @@ object ContextKernel {
     }
 
     /**
+     * A deterministic verification that already failed should not be replayed
+     * unchanged. Read-only inspection can explain the failure, but it does not
+     * change the code under test. Require an intervening mutation before the
+     * same syntax/test verification is executed again.
+     */
+    fun repeatedFailedVerificationWithoutMutation(
+        state: ContextKernelState,
+        call: AgentDecision.ToolCall
+    ): Boolean {
+        val canonical = ToolRegistry.canonicalize(call.tool)
+        if (canonical !in setOf("python.syntax_check", "python.tests")) {
+            return false
+        }
+
+        val wantedSignature = signature(call)
+        val lastFailure = state.evidence.indexOfLast {
+            !it.ok &&
+                it.phase == CognitivePhase.VERIFY &&
+                it.signature == wantedSignature
+        }
+        if (lastFailure < 0) return false
+
+        val wantedTarget = target(call)
+        val hasRelevantMutation =
+            state.evidence
+                .drop(lastFailure + 1)
+                .any { event ->
+                    if (event.phase != CognitivePhase.ACT) {
+                        false
+                    } else if (canonical == "python.syntax_check") {
+                        event.target == wantedTarget
+                    } else {
+                        // python.tests is a project-scope verification. Any
+                        // later project mutation can make a re-run meaningful.
+                        true
+                    }
+                }
+
+        return !hasRelevantMutation
+    }
+
+    /**
      * A successful target-specific syntax verification stays fresh until that
      * same target is mutated again. Unrelated project mutations must not force a
      * duplicate syntax check of an unchanged file.
