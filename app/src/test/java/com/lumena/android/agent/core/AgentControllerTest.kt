@@ -174,6 +174,77 @@ class AgentControllerTest {
         assertTrue(write is ControllerInstruction.Execute)
     }
 
+
+    @Test
+    fun pendingPythonPathsDoNotDoubleReserveRequiredVerificationSlots() {
+        val task = TaskState(
+            id = "reserve-no-double-count",
+            projectId = "e2e_step87",
+            goal = """
+                Прочитай через web.read https://docs.python.org/3/library/pathlib.html
+                Створи e2e_step87/file_b.py і e2e_step87/test_file_b.py.
+                Після запису:
+                - python.syntax_check для e2e_step87/file_b.py
+                - python.tests з cwd=e2e_step87
+            """.trimIndent(),
+            status = TaskStatus.WAITING_MODEL
+        )
+
+        val initial = controller.initial(task)
+        assertEquals(11, initial.task.maxSteps)
+
+        val state = initial.copy(
+            completedRequiredTools = setOf("web.read"),
+            pendingPythonPaths = setOf(
+                "e2e_step87/file_a.py",
+                "e2e_step87/file_b.py"
+            ),
+            task = initial.task.copy(
+                step = 7,
+                maxSteps = 11,
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        val writeMissingTest = controller.interpret(
+            """{"tool":"file.write","args":{"path":"e2e_step87/test_file_b.py","content":"def test_placeholder():\n    assert True\n"}}""",
+            state
+        )
+
+        assertTrue(writeMissingTest is ControllerInstruction.Execute)
+    }
+
+    @Test
+    fun oneExtraVerificationSlotIsReservedWhenNoRequiredVerificationToolExists() {
+        val task = TaskState(
+            id = "reserve-one-verification",
+            projectId = "demo",
+            goal = "Створи Python файл.",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val initial = controller.initial(task)
+        val state = initial.copy(
+            requiredTools = emptySet(),
+            completedRequiredTools = emptySet(),
+            pendingPythonPaths = setOf("demo/a.py", "demo/b.py"),
+            task = initial.task.copy(
+                step = initial.task.maxSteps - 1,
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        val unrelated = controller.interpret(
+            """{"tool":"workspace.list","args":{}}""",
+            state
+        )
+
+        assertTrue(unrelated is ControllerInstruction.AskModelAgain)
+        assertEquals(
+            initial.task.maxSteps - 1,
+            unrelated.state.task.step
+        )
+    }
+
     @Test
     fun doneIsBlockedUntilExplicitRequiredToolsHaveSuccessfulResults() {
         val task = TaskState(
