@@ -429,6 +429,25 @@ class AgentController(
             )
         }
 
+        if (
+            ContextKernel.redundantFailedVerification(
+                state.task.kernel,
+                canonical
+            )
+        ) {
+            return ControllerInstruction.AskModelAgain(
+                feedback =
+                    "This exact verification already failed and the verified world state has not changed since that failure. " +
+                        "Do not rerun the same check unchanged. Inspect the failure, mutate the relevant target or inputs, then verify again. " +
+                        "The duplicate failed verification was not executed and consumed no tool step.",
+                state = state.copy(
+                    task = state.task.copy(
+                        status = TaskStatus.WAITING_MODEL
+                    )
+                )
+            )
+        }
+
         if (state.recoveryHint != null &&
             state.semanticRecoverySpent >= semanticRecoveryLimit(state, canonical)
         ) {
@@ -876,13 +895,31 @@ class AgentController(
         }
 
         val nextStep = state.task.step + 1
-        val recoveryMaxSteps = if (recovered) {
-            maxOf(
-                state.task.maxSteps,
-                (nextStep + 2).coerceAtMost(budget.maxTotalSteps)
-            )
-        } else {
-            state.task.maxSteps
+        val failedVerification =
+            !ok &&
+                ToolRegistry.canonicalize(call.tool) in
+                    setOf("python.syntax_check", "python.tests")
+        val recoveryMaxSteps = when {
+            recovered ->
+                maxOf(
+                    state.task.maxSteps,
+                    (nextStep + 2)
+                        .coerceAtMost(budget.maxTotalSteps)
+                )
+
+            failedVerification ->
+                // A failed verification commonly needs inspect -> mutate ->
+                // verify. Give that bounded recovery route room inside the
+                // existing hard 12-step ceiling instead of forcing an
+                // unchanged verification retry at the edge of the budget.
+                maxOf(
+                    state.task.maxSteps,
+                    (nextStep + 3)
+                        .coerceAtMost(budget.maxTotalSteps)
+                )
+
+            else ->
+                state.task.maxSteps
         }
 
         val nextTask = state.task.copy(
