@@ -406,6 +406,25 @@ class AgentController(
         }
 
         if (
+            ContextKernel.failedVerificationReplayWithoutRepair(
+                state.task.kernel,
+                canonical
+            )
+        ) {
+            return ControllerInstruction.AskModelAgain(
+                feedback =
+                    "The same verification already failed and no relevant repair mutation occurred afterward. " +
+                        "Do not rerun it unchanged. Inspect the failure if needed, then repair a relevant target " +
+                        "inside the active project before verifying again. No tool step was consumed.",
+                state = state.copy(
+                    task = state.task.copy(
+                        status = TaskStatus.WAITING_MODEL
+                    )
+                )
+            )
+        }
+
+        if (
             ContextKernel.redundantSuccessfulMutation(
                 state.task.kernel,
                 canonical
@@ -779,7 +798,14 @@ class AgentController(
             ok && call.tool.startsWith("python.") && state.pythonFailures > 0
         val recoveredFromRepeatedToolFailure =
             ok && (state.repeatedToolFailures[signature] ?: 0) > 0
-        val recovered = recoveredFromPythonFailure || recoveredFromRepeatedToolFailure
+        val repairMutationProgress =
+            ok &&
+                ToolRegistry.get(canonicalTool)?.risk == ToolRisk.MUTATING &&
+                state.pythonFailures > 0
+        val recovered =
+            recoveredFromPythonFailure ||
+                recoveredFromRepeatedToolFailure ||
+                repairMutationProgress
 
         var failureEvent: FailureEvent? = null
         if (ok) {

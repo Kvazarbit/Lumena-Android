@@ -1368,6 +1368,86 @@ class AgentControllerTest {
         assertTrue(allowed is ControllerInstruction.Execute)
     }
 
+
+    @Test
+    fun unchangedFailedPytestReplayIsBlockedAndRepairMutationExtendsBudget() {
+        val tests = AgentDecision.ToolCall(
+            tool = "python.tests",
+            args = mapOf("cwd" to "e2e_step87")
+        )
+        val failedKernel = ContextKernel.record(
+            ContextKernelState(),
+            tests,
+            false,
+            "ImportError"
+        )
+        val base = controller.initial(
+            TaskState(
+                id = "repair-budget",
+                projectId = "e2e_step87",
+                goal = """
+                    Створи e2e_step87/dir_a.py і e2e_step87/test_dir_a.py.
+                    Запусти python.tests з cwd=e2e_step87.
+                """.trimIndent(),
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        val failedState = base.copy(
+            pythonFailures = 1,
+            semanticRecoverySpent = 1,
+            requiredTools = setOf("python.tests"),
+            completedRequiredTools = emptySet(),
+            pendingPythonPaths = setOf("e2e_step87/test_dir_a.py"),
+            task = base.task.copy(
+                step = 10,
+                maxSteps = 11,
+                kernel = failedKernel.copy(
+                    pendingVerification =
+                        setOf("e2e_step87/test_dir_a.py")
+                ),
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        val blocked = controller.interpret(
+            """{"tool":"python.tests","args":{"cwd":"e2e_step87"}}""",
+            failedState
+        )
+        assertTrue(blocked is ControllerInstruction.AskModelAgain)
+        blocked as ControllerInstruction.AskModelAgain
+        assertEquals(10, blocked.state.task.step)
+        assertTrue(
+            blocked.feedback.contains(
+                "no relevant repair mutation"
+            )
+        )
+
+        val repair = controller.interpret(
+            """{"tool":"file.write","args":{"path":"e2e_step87/test_dir_a.py","content":"from dir_a import ensure_directory\n"}}""",
+            blocked.state
+        )
+        assertTrue(repair is ControllerInstruction.Execute)
+        repair as ControllerInstruction.Execute
+
+        val repaired = controller.afterTool(
+            state = repair.state,
+            call = repair.call,
+            ok = true,
+            stdout = "wrote",
+            stderr = "",
+            error = null
+        ).state
+
+        assertEquals(11, repaired.task.step)
+        assertEquals(12, repaired.task.maxSteps)
+
+        val verifyAgain = controller.interpret(
+            """{"tool":"python.tests","args":{"cwd":"e2e_step87"}}""",
+            repaired
+        )
+        assertTrue(verifyAgain is ControllerInstruction.Execute)
+    }
+
     @Test
     fun protocolRepairRestoresExactActiveGoalAndPendingObligations() {
         val goal = """

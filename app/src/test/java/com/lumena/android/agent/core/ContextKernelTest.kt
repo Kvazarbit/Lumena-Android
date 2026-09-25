@@ -101,6 +101,57 @@ class ContextKernelTest {
         assertEquals(ContextKernelState(), adapter.fromJson("""{"id":"old","projectId":null,"goal":"hello"}""")!!.kernel)
     }
 
+
+    @Test
+    fun failedProjectTestCannotReplayUntilRelevantRepairMutation() {
+        val tests = AgentDecision.ToolCall(
+            "python.tests",
+            mapOf("cwd" to "e2e_step87")
+        )
+        var state = ContextKernel.record(
+            ContextKernelState(),
+            tests,
+            false,
+            "ImportError"
+        )
+        state = ContextKernel.record(
+            state,
+            AgentDecision.ToolCall(
+                "file.read",
+                mapOf("path" to "e2e_step87/test_dir_a.py")
+            ),
+            true,
+            "from .dir_a import ensure_directory"
+        )
+
+        assertTrue(
+            ContextKernel.failedVerificationReplayWithoutRepair(
+                state,
+                tests
+            )
+        )
+
+        state = ContextKernel.record(
+            state,
+            AgentDecision.ToolCall(
+                "file.write",
+                mapOf(
+                    "path" to "e2e_step87/test_dir_a.py",
+                    "content" to "from dir_a import ensure_directory"
+                )
+            ),
+            true,
+            "wrote"
+        )
+
+        assertFalse(
+            ContextKernel.failedVerificationReplayWithoutRepair(
+                state,
+                tests
+            )
+        )
+    }
+
     @Test fun verificationObligationSurvivesTaskOnlyRestore() {
         val written = controller.afterTool(controller.initial(task()),
             AgentDecision.ToolCall("file.write", mapOf("path" to "pending.py")), true, "written", "", null).state

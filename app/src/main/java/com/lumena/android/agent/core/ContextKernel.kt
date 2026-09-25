@@ -104,6 +104,64 @@ object ContextKernel {
     }
 
     /**
+     * A failed verification must not be replayed unchanged. Read-only
+     * inspection alone does not alter the condition that made the verification
+     * fail. Require a relevant mutation before running the same verification
+     * again so recovery follows inspect -> repair -> verify rather than
+     * fail -> inspect -> fail.
+     */
+    fun failedVerificationReplayWithoutRepair(
+        state: ContextKernelState,
+        call: AgentDecision.ToolCall
+    ): Boolean {
+        val canonical = ToolRegistry.canonicalize(call.tool)
+        if (
+            canonical !in setOf(
+                "python.syntax_check",
+                "python.run",
+                "python.tests"
+            )
+        ) {
+            return false
+        }
+
+        val wantedSignature = signature(call)
+        val lastFailure = state.evidence.indexOfLast {
+            !it.ok &&
+                it.phase == CognitivePhase.VERIFY &&
+                it.signature == wantedSignature
+        }
+        if (lastFailure < 0) return false
+
+        val verifyTarget = target(call)
+            .replace('\\', '/')
+            .removePrefix("./")
+
+        val relevantRepair = state.evidence
+            .drop(lastFailure + 1)
+            .any { event ->
+                if (event.phase != CognitivePhase.ACT) {
+                    false
+                } else if (canonical == "python.tests") {
+                    val repaired = event.target
+                        .replace('\\', '/')
+                        .removePrefix("./")
+                    verifyTarget.isBlank() ||
+                        verifyTarget == "." ||
+                        repaired == verifyTarget ||
+                        repaired.startsWith("$verifyTarget/")
+                } else {
+                    event.target
+                        .replace('\\', '/')
+                        .removePrefix("./") ==
+                        verifyTarget
+                }
+            }
+
+        return !relevantRepair
+    }
+
+    /**
      * A successful target-specific syntax verification stays fresh until that
      * same target is mutated again. Unrelated project mutations must not force a
      * duplicate syntax check of an unchanged file.
