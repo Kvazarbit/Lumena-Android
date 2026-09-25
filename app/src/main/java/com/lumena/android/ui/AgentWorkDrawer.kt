@@ -1,5 +1,8 @@
 package com.lumena.android.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,14 +25,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.runtime.AgentRunCoordinator
+import com.lumena.android.settings.LumenaDiagnosticReport
+import kotlinx.coroutines.launch
 
 @Composable
 fun AgentWorkDrawer(
@@ -43,6 +50,11 @@ fun AgentWorkDrawer(
     var modelOpen by remember { mutableStateOf(true) }
     var taskOpen by remember { mutableStateOf(false) }
     var eventsOpen by remember { mutableStateOf(true) }
+    var diagnosticsOpen by remember { mutableStateOf(false) }
+    var diagnosticText by remember { mutableStateOf("") }
+    var diagnosticStatus by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     val running = task?.status in setOf(
         TaskStatus.PLANNING,
@@ -239,5 +251,125 @@ fun AgentWorkDrawer(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+
+        HorizontalDivider()
+
+        Text(
+            if (diagnosticsOpen) "▼ Diagnostics"
+            else "▶ Diagnostics",
+            Modifier
+                .fillMaxWidth()
+                .clickable {
+                    diagnosticsOpen = !diagnosticsOpen
+                },
+            style = MaterialTheme.typography.titleSmall
+        )
+
+        if (diagnosticsOpen) {
+            Text(
+                "App-owned report: package/version, Bridge/Ollama probes, TaskState, ContextKernel, Evidence Graph and Constitution Genome. The bridge token is never included.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement =
+                    Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        diagnosticStatus =
+                            "Collecting diagnostics…"
+                        scope.launch {
+                            diagnosticText =
+                                runCatching {
+                                    LumenaDiagnosticReport
+                                        .build(context)
+                                }.getOrElse {
+                                    "LUMENA_DIAGNOSTIC_V1\n" +
+                                        "report_error=" +
+                                        (
+                                            it.message
+                                                ?: it::class
+                                                    .simpleName
+                                                ?: "unknown"
+                                            )
+                                                .replace(
+                                                    Regex(
+                                                        "[\\r\\n]+"
+                                                    ),
+                                                    " "
+                                                )
+                                }
+                            diagnosticStatus =
+                                "Report ready · " +
+                                    diagnosticText.length +
+                                    " chars"
+                        }
+                    }
+                ) {
+                    Text("Generate report")
+                }
+
+                OutlinedButton(
+                    enabled =
+                        diagnosticText.isNotBlank(),
+                    onClick = {
+                        val clipboard =
+                            context.getSystemService(
+                                Context.CLIPBOARD_SERVICE
+                            ) as? ClipboardManager
+                        clipboard?.setPrimaryClip(
+                            ClipData.newPlainText(
+                                "Lumena diagnostic report",
+                                diagnosticText
+                            )
+                        )
+                        diagnosticStatus =
+                            if (clipboard != null) {
+                                "Copied to clipboard"
+                            } else {
+                                "Clipboard unavailable"
+                            }
+                    }
+                ) {
+                    Text("Copy report")
+                }
+            }
+
+            if (diagnosticStatus.isNotBlank()) {
+                Text(
+                    diagnosticStatus,
+                    style =
+                        MaterialTheme.typography.labelSmall
+                )
+            }
+
+            if (diagnosticText.isNotBlank()) {
+                Card(
+                    Modifier.fillMaxWidth(),
+                    colors =
+                        CardDefaults.cardColors(
+                            containerColor =
+                                MaterialTheme
+                                    .colorScheme.surface
+                        )
+                ) {
+                    SelectionContainer {
+                        Text(
+                            diagnosticText,
+                            modifier =
+                                Modifier.padding(10.dp),
+                            style =
+                                MaterialTheme
+                                    .typography.bodySmall,
+                            fontFamily =
+                                FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+        }
     }
 }
