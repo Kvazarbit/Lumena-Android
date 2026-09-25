@@ -1079,6 +1079,7 @@ class AgentController(
             is RecoveryDecision.RetryVariant ->
                 ControllerInstruction.AskModelAgain(
                     feedback = protocolRepairFeedback(
+                        state = next,
                         problem = problem,
                         guidance = decision.guidance,
                         retry = retries
@@ -1089,6 +1090,7 @@ class AgentController(
             is RecoveryDecision.TryAlternative ->
                 ControllerInstruction.AskModelAgain(
                     feedback = protocolRepairFeedback(
+                        state = next,
                         problem = problem,
                         guidance = decision.guidance,
                         retry = retries
@@ -1111,26 +1113,123 @@ class AgentController(
     }
 
     private fun protocolRepairFeedback(
+        state: AgentControlState,
         problem: String,
         guidance: String,
         retry: Int
-    ): String = buildString {
-        appendLine("PROTOCOL_REPAIR_MODE retry=$retry")
-        appendLine("The previous model output was not executable and NOTHING from it was run.")
-        appendLine("Return EXACTLY ONE JSON object and no prose, markdown or extra JSON.")
-        appendLine("Allowed roots:")
-        appendLine("{\"tool\":\"registered.tool\",\"args\":{}}")
-        appendLine("{\"done\":true,\"summary\":\"...\"}")
-        appendLine("{\"partial\":true,\"summary\":\"...\"}")
-        appendLine("{\"reply\":\"...\"}")
-        appendLine("Do not echo the malformed output. Do not invent TOOL_RESULT.")
-        appendLine("Continue the SAME task from verified state only.")
-        appendLine("Problem: " + problem.take(1_200))
-        guidance.takeIf { it.isNotBlank() }?.let {
-            append("Recovery guidance: ")
-            append(it.take(500))
-        }
-    }.take(2_800)
+    ): String {
+        val pendingRequired =
+            (state.requiredTools - state.completedRequiredTools)
+                .sorted()
+        val completedRequired =
+            state.completedRequiredTools
+                .filter { it in state.requiredTools }
+                .sorted()
+        val goal = state.task.goal
+            .replace(Regex("[\\r\\n\\t]+"), " ")
+            .replace(Regex("\\s{2,}"), " ")
+            .trim()
+            .take(1_800)
+        val lastResult = state.task.lastResult
+            ?.replace(Regex("[\\r\\n\\t]+"), " ")
+            ?.replace(Regex("\\s{2,}"), " ")
+            ?.trim()
+            ?.take(900)
+            .orEmpty()
+
+        return buildString {
+            appendLine("PROTOCOL_REPAIR_MODE retry=$retry")
+            appendLine(
+                "The previous model output was not executable and NOTHING from it was run."
+            )
+            appendLine(
+                "Return EXACTLY ONE JSON object and no prose, markdown or extra JSON."
+            )
+            appendLine("Allowed roots:")
+            appendLine("{\"tool\":\"registered.tool\",\"args\":{}}")
+            appendLine("{\"done\":true,\"summary\":\"...\"}")
+            appendLine("{\"partial\":true,\"summary\":\"...\"}")
+            appendLine("{\"reply\":\"...\"}")
+            appendLine(
+                "Do not echo the malformed output. Do not invent TOOL_RESULT."
+            )
+            appendLine(
+                "Continue the SAME task from verified state only. " +
+                    "Do NOT ask the user to restate the objective; " +
+                    "the authoritative task is repeated below."
+            )
+            appendLine()
+            appendLine("AUTHORITATIVE TASK RECOVERY CAPSULE")
+            appendLine("task_id=" + state.task.id.take(220))
+            appendLine(
+                "project_id=" +
+                    state.task.projectId.orEmpty().take(220)
+            )
+            appendLine("goal=" + goal)
+            appendLine(
+                "progress=" +
+                    state.task.step +
+                    "/" +
+                    state.task.maxSteps
+            )
+            appendLine("intent=" + state.intent.name)
+            appendLine(
+                "completed_required=" +
+                    completedRequired
+                        .joinToString(",")
+                        .ifBlank { "(none)" }
+            )
+            appendLine(
+                "pending_required=" +
+                    pendingRequired
+                        .joinToString(",")
+                        .ifBlank { "(none)" }
+            )
+            appendLine(
+                "pending_python_targets=" +
+                    state.pendingPythonPaths
+                        .sorted()
+                        .joinToString(",")
+                        .ifBlank { "(none)" }
+            )
+            state.task.lastTool?.let {
+                appendLine(
+                    "last_verified_tool=" +
+                        it.take(160)
+                )
+            }
+            if (lastResult.isNotBlank()) {
+                appendLine(
+                    "last_verified_result=" +
+                        lastResult
+                )
+            }
+            if (state.recommendedTools.isNotEmpty()) {
+                appendLine(
+                    "recommended_tools=" +
+                        state.recommendedTools
+                            .take(16)
+                            .joinToString(",")
+                )
+            }
+            appendLine(
+                "Choose the next action that advances this goal. " +
+                    "Required TOOL_RESULT obligations are gates before done; " +
+                    "they do not replace intermediate mutations or reads " +
+                    "explicitly required by the goal."
+            )
+            appendLine(
+                "Problem: " +
+                    problem.take(900)
+            )
+            guidance
+                .takeIf { it.isNotBlank() }
+                ?.let {
+                    append("Recovery guidance: ")
+                    append(it.take(500))
+                }
+        }.take(5_200)
+    }
 
     private fun actionFamilyFailureLimit(
         state: AgentControlState,

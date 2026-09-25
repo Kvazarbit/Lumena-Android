@@ -1231,6 +1231,136 @@ class AgentControllerTest {
         assertTrue(event.retryable == false)
     }
 
+
+    @Test
+    fun protocolRepairRepeatsAuthoritativeGoalAndPendingObligations() {
+        val goal = """
+            Працюй у проекті e2e_step87.
+            Прочитай через web.read:
+            https://docs.python.org/3/library/pathlib.html#pathlib.Path.mkdir
+            Потім створи e2e_step87/dir_a.py і e2e_step87/test_dir_a.py.
+            Після запису файлів:
+            - python.syntax_check для e2e_step87/dir_a.py
+            - python.tests з cwd=e2e_step87
+            Не використовуй ollama.generate для перевірки SHADOW/ACTIVE.
+        """.trimIndent()
+
+        val initial = controller.initial(
+            TaskState(
+                id = "repair-goal",
+                projectId = "e2e_step87",
+                goal = goal,
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        val state = initial.copy(
+            preflightCompleted = true,
+            task = initial.task.copy(
+                step = 1,
+                lastTool = "context.snapshot",
+                lastResult = "ok=true stdout=verified workspace snapshot"
+            )
+        )
+
+        val instruction = controller.interpret(
+            """{"action":"shell","tool":"file.write","args":{"path":"x","content":"bad"}}""",
+            state
+        )
+
+        assertTrue(instruction is ControllerInstruction.AskModelAgain)
+        instruction as ControllerInstruction.AskModelAgain
+        assertTrue(
+            instruction.feedback.contains(
+                "AUTHORITATIVE TASK RECOVERY CAPSULE"
+            )
+        )
+        assertTrue(
+            instruction.feedback.contains(
+                "project_id=e2e_step87"
+            )
+        )
+        assertTrue(
+            instruction.feedback.contains(
+                "e2e_step87/dir_a.py"
+            )
+        )
+        assertTrue(
+            instruction.feedback.contains(
+                "progress=1/11"
+            )
+        )
+        assertTrue(
+            instruction.feedback.contains(
+                "intent=CODE_WORK"
+            )
+        )
+        assertTrue(
+            instruction.feedback.contains(
+                "pending_required=python.syntax_check,python.tests,web.read"
+            )
+        )
+        assertTrue(
+            instruction.feedback.contains(
+                "last_verified_tool=context.snapshot"
+            )
+        )
+        assertTrue(
+            instruction.feedback.contains(
+                "Do NOT ask the user to restate the objective"
+            )
+        )
+    }
+
+    @Test
+    fun protocolRepairCarriesCompletedEvidenceAndOnlyRemainingGates() {
+        val task = TaskState(
+            id = "repair-after-read",
+            projectId = "e2e_step87",
+            goal = """
+                Прочитай через web.read https://docs.python.org/3/library/pathlib.html
+                Створи Python файл, потім виконай python.syntax_check і python.tests.
+            """.trimIndent(),
+            status = TaskStatus.WAITING_MODEL
+        )
+        val initial = controller.initial(task)
+        val state = initial.copy(
+            completedRequiredTools = setOf("web.read"),
+            task = initial.task.copy(
+                step = 2,
+                lastTool = "web.read",
+                lastResult = "ok=true stdout=Path.mkdir documentation"
+            )
+        )
+
+        val instruction = controller.interpret(
+            """{"action":"shell","parameters":{}}""",
+            state
+        )
+
+        assertTrue(instruction is ControllerInstruction.AskModelAgain)
+        instruction as ControllerInstruction.AskModelAgain
+        assertTrue(
+            instruction.feedback.contains(
+                "completed_required=web.read"
+            )
+        )
+        assertTrue(
+            instruction.feedback.contains(
+                "pending_required=python.syntax_check,python.tests"
+            )
+        )
+        assertTrue(
+            instruction.feedback.contains(
+                "last_verified_tool=web.read"
+            )
+        )
+        assertTrue(
+            instruction.feedback.contains(
+                "last_verified_result=ok=true stdout=Path.mkdir documentation"
+            )
+        )
+    }
+
     @Test
     fun protocolKernelStopsThirdInvalidEnvelope() {
         var state = controller.initial(
