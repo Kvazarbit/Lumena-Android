@@ -10,11 +10,11 @@ android {
     ndkVersion = "27.2.12479018"
 
     defaultConfig {
-        applicationId = "com.lumena.android"
+        applicationId = "com.lumena.android.step87rc2"
         minSdk = 28
         targetSdk = 35
         versionCode = 29
-        versionName = "0.12.5"
+        versionName = "0.12.6-step87-rc2"
         ndk { abiFilters += listOf("arm64-v8a") }
         externalNativeBuild {
             cmake {
