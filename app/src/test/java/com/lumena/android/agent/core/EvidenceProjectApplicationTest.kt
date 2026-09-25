@@ -534,6 +534,136 @@ class EvidenceProjectApplicationTest {
         )
     }
 
+
+    @Test
+    fun laterIndependentBindingCanAdvanceWhileSharedClaimStaysVerified() {
+        val firstTarget = "app/task_a.py"
+        val secondTarget = "app/task_b.py"
+
+        val firstBound = bind(
+            retrievedState(),
+            bindTarget = firstTarget,
+            at = now + 1
+        )
+        assertTrue(firstBound.accepted)
+
+        val firstApplied =
+            EvidenceProjectApplicationPolicy.observeToolResult(
+                state = firstBound.state,
+                bindingId = firstBound.bindingId!!,
+                taskProjectId = "lumena",
+                request = ToolRequest(
+                    tool = "file.write",
+                    args = mapOf(
+                        "path" to firstTarget,
+                        "content" to "print('a')"
+                    )
+                ),
+                result = ToolResult(ok = true),
+                evidenceId = "task-a-write",
+                now = now + 2
+            )
+        assertTrue(firstApplied.accepted)
+
+        val firstVerified =
+            EvidenceProjectApplicationPolicy.observeToolResult(
+                state = firstApplied.state,
+                bindingId = firstBound.bindingId!!,
+                taskProjectId = "lumena",
+                request = ToolRequest(
+                    tool = "python.tests",
+                    args = mapOf("cwd" to "app")
+                ),
+                result = ToolResult(ok = true),
+                evidenceId = "task-a-tests",
+                now = now + 3
+            )
+        assertTrue(firstVerified.accepted)
+        assertEquals(
+            EvidenceProjectOutcome.VERIFIED_BY_TEST,
+            firstVerified.state.claims.single().outcome
+        )
+
+        val secondBound = bind(
+            firstVerified.state,
+            bindTarget = secondTarget,
+            at = now + 4
+        )
+        assertTrue(secondBound.accepted)
+        assertEquals(2, secondBound.state.applications.size)
+
+        val secondApplied =
+            EvidenceProjectApplicationPolicy.observeToolResult(
+                state = secondBound.state,
+                bindingId = secondBound.bindingId!!,
+                taskProjectId = "lumena",
+                request = ToolRequest(
+                    tool = "file.write",
+                    args = mapOf(
+                        "path" to secondTarget,
+                        "content" to "print('b')"
+                    )
+                ),
+                result = ToolResult(ok = true),
+                evidenceId = "task-b-write",
+                now = now + 5
+            )
+
+        assertTrue(secondApplied.accepted)
+        assertEquals(
+            EvidenceProjectOutcome.VERIFIED_BY_TEST,
+            secondApplied.state.claims.single().outcome
+        )
+        val secondAppliedBinding =
+            secondApplied.state.applications.first {
+                it.id == secondBound.bindingId
+            }
+        assertEquals(
+            EvidenceApplicationStatus.APPLIED,
+            secondAppliedBinding.status
+        )
+        assertEquals(
+            listOf("task-b-write"),
+            secondAppliedBinding.artifactEvidenceIds
+        )
+
+        val secondVerified =
+            EvidenceProjectApplicationPolicy.observeToolResult(
+                state = secondApplied.state,
+                bindingId = secondBound.bindingId!!,
+                taskProjectId = "lumena",
+                request = ToolRequest(
+                    tool = "python.tests",
+                    args = mapOf("cwd" to "app")
+                ),
+                result = ToolResult(ok = true),
+                evidenceId = "task-b-tests",
+                now = now + 6
+            )
+
+        assertTrue(secondVerified.accepted)
+        val finalSecondBinding =
+            secondVerified.state.applications.first {
+                it.id == secondBound.bindingId
+            }
+        assertEquals(
+            EvidenceApplicationStatus.VERIFIED,
+            finalSecondBinding.status
+        )
+        assertEquals(
+            listOf("task-b-write"),
+            finalSecondBinding.artifactEvidenceIds
+        )
+        assertEquals(
+            listOf("task-b-tests"),
+            finalSecondBinding.testEvidenceIds
+        )
+        assertEquals(
+            EvidenceProjectOutcome.VERIFIED_BY_TEST,
+            secondVerified.state.claims.single().outcome
+        )
+    }
+
     @Test
     fun verifiedOutcomeCannotRegressBackToApplied() {
         var state = retrievedState()
