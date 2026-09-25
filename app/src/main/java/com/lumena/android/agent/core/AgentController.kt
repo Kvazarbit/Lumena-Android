@@ -289,6 +289,20 @@ class AgentController(
 
         val canonical = decision.copy(tool = validation.canonicalTool)
 
+        projectMutationScopeViolation(
+            task = state.task,
+            call = canonical
+        )?.let { violation ->
+            return ControllerInstruction.AskModelAgain(
+                feedback = violation,
+                state = state.copy(
+                    task = state.task.copy(
+                        status = TaskStatus.WAITING_MODEL
+                    )
+                )
+            )
+        }
+
         val pendingRequired =
             state.requiredTools - state.completedRequiredTools
         val pendingResearchEvidence =
@@ -1253,6 +1267,58 @@ class AgentController(
     private fun signature(call: AgentDecision.ToolCall): String {
         val args = call.args.toSortedMap().entries.joinToString("&") { (k, v) -> "$k=${v.trim()}" }
         return "${ToolRegistry.canonicalize(call.tool)}|$args"
+    }
+
+    private fun projectMutationScopeViolation(
+        task: TaskState,
+        call: AgentDecision.ToolCall
+    ): String? {
+        val projectId = task.projectId
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+        val canonical = ToolRegistry.canonicalize(call.tool)
+        if (
+            canonical !in setOf(
+                "dir.create",
+                "file.write",
+                "file.patch"
+            )
+        ) {
+            return null
+        }
+
+        val rawTarget = call.args["path"]
+            .orEmpty()
+            .trim()
+        if (rawTarget.isBlank()) return null
+
+        val target = normalizePath(rawTarget)
+            .replace('\\', '/')
+            .removePrefix("./")
+        val project = normalizePath(projectId)
+            .replace('\\', '/')
+            .removePrefix("./")
+
+        val insideProject =
+            target == project ||
+                target.startsWith("$project/")
+        val explicitlyNamedOutsideProject =
+            task.goal
+                .replace('\\', '/')
+                .contains(rawTarget.replace('\\', '/'))
+
+        return if (
+            insideProject ||
+            explicitlyNamedOutsideProject
+        ) {
+            null
+        } else {
+            "The active task is scoped to project '$projectId'. " +
+                "The proposed mutation target '$rawTarget' is outside that project " +
+                "and was not explicitly requested by the user. No mutation was executed. " +
+                "Use a path inside '$projectId/' or return partial."
+        }
     }
 
     private fun normalizePath(path: String): String =
