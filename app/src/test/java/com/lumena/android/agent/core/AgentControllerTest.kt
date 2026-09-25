@@ -59,6 +59,50 @@ class AgentControllerTest {
         )
     }
 
+
+    @Test
+    fun exactE2eGoalWithForbiddenOllamaToolKeepsCodeBudgetAndObligations() {
+        val goal = """
+            Працюй у проекті e2e_step87.
+            Це Step 8.7 E2E, Task A.
+            Прочитай через web.read:
+            https://docs.python.org/3/library/pathlib.html#pathlib.Path.mkdir
+            Використовуй тільки успішний TOOL_RESULT як доказ.
+            Потім створи: e2e_step87/dir_a.py
+            У ньому функцію ensure_directory(path), яка використовує:
+            Path(path).mkdir(parents=True, exist_ok=True)
+            Створи також: e2e_step87/test_dir_a.py
+            Після запису файлів:
+            - python.syntax_check для e2e_step87/dir_a.py
+            - python.tests з cwd=e2e_step87
+            Не використовуй ollama.generate для перевірки SHADOW/ACTIVE.
+            Не створюй mock-файли зі state='ACTIVE' або percentage=100.
+        """.trimIndent()
+
+        val state = controller.initial(
+            TaskState(
+                id = "exact-e2e",
+                projectId = "e2e_step87",
+                goal = goal,
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        assertEquals(TaskIntent.CODE_WORK, state.intent)
+        assertEquals(11, state.task.maxSteps)
+        assertEquals(
+            setOf(
+                "web.read",
+                "python.syntax_check",
+                "python.tests"
+            ),
+            state.requiredTools
+        )
+        assertTrue("file.write" in state.recommendedTools)
+        assertTrue("web.read" in state.recommendedTools)
+        assertTrue("python.tests" in state.recommendedTools)
+    }
+
     @Test
     fun simpleCodeTaskGetsSixButGeneralConversationStaysFour() {
         val code = controller.initial(
