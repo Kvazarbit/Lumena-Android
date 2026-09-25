@@ -277,13 +277,30 @@ object EvidenceProjectApplicationPolicy {
                 at = now
             )
         )
-        if (!outcome.accepted) {
-            return EvidenceApplicationUpdate(
-                state = state,
-                accepted = false,
-                reason = outcome.reason ?: "OUTCOME_REJECTED",
-                bindingId = binding.id
-            )
+
+        // The claim-level outcome is an aggregate over all project
+        // applications and is intentionally monotonic. A later independent
+        // binding can therefore be PENDING even when an earlier binding has
+        // already raised the shared claim to VERIFIED_BY_TEST. Applying the
+        // new artifact must advance that binding without regressing the
+        // aggregate claim back to APPLIED_TO_PROJECT.
+        val aggregateState = when {
+            outcome.accepted -> outcome.state
+            outcome.reason == "OUTCOME_REGRESSION" &&
+                state.claims.firstOrNull {
+                    it.claimKey == binding.claimKey
+                }?.outcome ==
+                    EvidenceProjectOutcome.VERIFIED_BY_TEST ->
+                state
+
+            else -> {
+                return EvidenceApplicationUpdate(
+                    state = state,
+                    accepted = false,
+                    reason = outcome.reason ?: "OUTCOME_REJECTED",
+                    bindingId = binding.id
+                )
+            }
         }
 
         val updated = binding.copy(
@@ -297,9 +314,9 @@ object EvidenceProjectApplicationPolicy {
         )
 
         return EvidenceApplicationUpdate(
-            state = outcome.state.copy(
+            state = aggregateState.copy(
                 applications = replaceBinding(
-                    outcome.state.applications,
+                    aggregateState.applications,
                     updated
                 )
             ),
