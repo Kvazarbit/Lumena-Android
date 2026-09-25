@@ -104,6 +104,30 @@ object ContextKernel {
     }
 
     /**
+     * Prevents an unchanged failed verification from being executed again.
+     * A mutation changes worldRevision and therefore permits a meaningful
+     * re-verification. Read-only inspection alone does not.
+     */
+    fun redundantFailedVerification(
+        state: ContextKernelState,
+        call: AgentDecision.ToolCall
+    ): Boolean {
+        val canonical = ToolRegistry.canonicalize(call.tool)
+        if (canonical !in setOf("python.syntax_check", "python.tests")) {
+            return false
+        }
+
+        val wantedSignature = signature(call)
+        val lastFailure = state.evidence.lastOrNull {
+            !it.ok &&
+                it.phase == CognitivePhase.VERIFY &&
+                it.signature == wantedSignature
+        } ?: return false
+
+        return lastFailure.revision == state.worldRevision
+    }
+
+    /**
      * A successful target-specific syntax verification stays fresh until that
      * same target is mutated again. Unrelated project mutations must not force a
      * duplicate syntax check of an unchanged file.
