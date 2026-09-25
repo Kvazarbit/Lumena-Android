@@ -1377,6 +1377,105 @@ class AgentControllerTest {
         )
     }
 
+
+    @Test
+    fun repeatedFailedProjectTestsAfterReadOnlyInspectionAreBlockedWithoutStepSpend() {
+        val task = TaskState(
+            id = "failed-tests-no-replay",
+            projectId = "e2e_step87",
+            goal = """
+                Створи e2e_step87/dir_a.py і e2e_step87/test_dir_a.py.
+                Запусти python.syntax_check і python.tests з cwd=e2e_step87.
+            """.trimIndent(),
+            status = TaskStatus.WAITING_MODEL
+        )
+
+        val tests = AgentDecision.ToolCall(
+            tool = "python.tests",
+            args = mapOf("cwd" to "e2e_step87")
+        )
+        val read = AgentDecision.ToolCall(
+            tool = "file.read",
+            args = mapOf("path" to "e2e_step87/test_dir_a.py")
+        )
+
+        var kernel = ContextKernelState()
+        kernel = ContextKernel.record(
+            ContextKernel.before(kernel, tests),
+            tests,
+            false,
+            "ImportError: attempted relative import"
+        )
+        kernel = ContextKernel.record(
+            ContextKernel.before(kernel, read),
+            read,
+            true,
+            "from .dir_a import ensure_directory"
+        )
+
+        val initial = controller.initial(task)
+        val state = initial.copy(
+            semanticRecoverySpent = 1,
+            recoveryHint = "Correct the input from verified state.",
+            task = initial.task.copy(
+                step = 10,
+                maxSteps = 12,
+                kernel = kernel,
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        val blocked = controller.interpret(
+            """{"tool":"python.tests","args":{"cwd":"e2e_step87"}}""",
+            state
+        )
+
+        assertTrue(blocked is ControllerInstruction.AskModelAgain)
+        blocked as ControllerInstruction.AskModelAgain
+        assertEquals(10, blocked.state.task.step)
+        assertEquals(1, blocked.state.semanticRecoverySpent)
+        assertTrue(
+            blocked.feedback.contains(
+                "already failed and no intervening mutation"
+            )
+        )
+
+        val fixedKernel = ContextKernel.record(
+            ContextKernel.before(
+                blocked.state.task.kernel,
+                AgentDecision.ToolCall(
+                    "file.write",
+                    mapOf(
+                        "path" to "e2e_step87/test_dir_a.py",
+                        "content" to "from dir_a import ensure_directory"
+                    )
+                )
+            ),
+            AgentDecision.ToolCall(
+                "file.write",
+                mapOf(
+                    "path" to "e2e_step87/test_dir_a.py",
+                    "content" to "from dir_a import ensure_directory"
+                )
+            ),
+            true,
+            "wrote"
+        )
+        val afterFix = blocked.state.copy(
+            task = blocked.state.task.copy(
+                kernel = fixedKernel,
+                step = 11,
+                maxSteps = 12
+            )
+        )
+
+        val allowed = controller.interpret(
+            """{"tool":"python.tests","args":{"cwd":"e2e_step87"}}""",
+            afterFix
+        )
+        assertTrue(allowed is ControllerInstruction.Execute)
+    }
+
     @Test
     fun protocolKernelStopsThirdInvalidEnvelope() {
         var state = controller.initial(
