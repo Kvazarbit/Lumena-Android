@@ -291,6 +291,122 @@ class WorkflowRunnerTest {
         )
     }
 
+
+    @Test
+    fun codeTaskProtocolRepairCarriesRootGoalAfterPreflight() = runBlocking {
+        val modelCalls = AtomicInteger(0)
+        var repairMessages: List<OllamaMessage> = emptyList()
+
+        val goal = """
+            Працюй у проекті e2e_step87.
+            Прочитай через web.read:
+            https://docs.python.org/3/library/pathlib.html#pathlib.Path.mkdir
+            Потім створи e2e_step87/dir_a.py і e2e_step87/test_dir_a.py.
+            Після запису файлів:
+            - python.syntax_check для e2e_step87/dir_a.py
+            - python.tests з cwd=e2e_step87
+            Не використовуй ollama.generate для перевірки SHADOW/ACTIVE.
+        """.trimIndent()
+
+        val modelClient = object : ChatModelClient {
+            override suspend fun chat(
+                model: String,
+                messages: List<OllamaMessage>
+            ): Result<String> {
+                return when (modelCalls.incrementAndGet()) {
+                    1 -> Result.success(
+                        """{"action":"shell","tool":"file.write","args":{"path":"x","content":"bad"}}"""
+                    )
+                    else -> {
+                        repairMessages = messages
+                        Result.success(
+                            """{"partial":true,"summary":"Fixture stops after verifying repair context."}"""
+                        )
+                    }
+                }
+            }
+        }
+
+        val requests = mutableListOf<ToolRequest>()
+        val bridge = object : ToolExecutor {
+            override suspend fun execute(
+                toolRequest: ToolRequest
+            ): ToolResult {
+                requests += toolRequest
+                return ToolResult(
+                    ok = true,
+                    tool = toolRequest.tool,
+                    exitCode = 0,
+                    stdout = if (toolRequest.tool == "context.snapshot") {
+                        """{"workspace":"ok"}"""
+                    } else {
+                        "ok"
+                    }
+                )
+            }
+        }
+
+        val task = TaskState(
+            id = "repair-after-preflight",
+            projectId = "e2e_step87",
+            goal = goal,
+            status = TaskStatus.WAITING_MODEL
+        )
+
+        val outcome = WorkflowRunner(
+            modelClient = modelClient,
+            bridge = bridge,
+            model = "fixture"
+        ).run(
+            history = listOf(
+                OllamaMessage("user", goal)
+            ),
+            task = task
+        )
+
+        assertTrue(outcome is WorkflowOutcome.Finished)
+        assertEquals(2, modelCalls.get())
+        assertEquals(
+            listOf("context.snapshot"),
+            requests.map { it.tool }
+        )
+
+        val repair = repairMessages
+            .lastOrNull {
+                it.role == "user" &&
+                    it.content.contains(
+                        "PROTOCOL_REPAIR_MODE retry=1"
+                    )
+            }
+            ?.content
+            .orEmpty()
+
+        assertTrue(repair.contains("ACTIVE_TASK"))
+        assertTrue(repair.contains("project=e2e_step87"))
+        assertTrue(repair.contains("intent=CODE_WORK"))
+        assertTrue(repair.contains("step=1/11"))
+        assertTrue(
+            repair.contains(
+                "https://docs.python.org/3/library/pathlib.html#pathlib.Path.mkdir"
+            )
+        )
+        assertTrue(
+            repair.contains(
+                "e2e_step87/dir_a.py"
+            )
+        )
+        assertTrue(
+            repair.contains(
+                "pending_required_tools=python.syntax_check,python.tests,web.read"
+            )
+        )
+        assertTrue(
+            repair.contains(
+                "Do NOT ask the user to restate it"
+            )
+        )
+    }
+
     @Test
     fun exhaustedContextFailureStopsAfterOneModelAttempt() = runBlocking {
         val modelCalls = AtomicInteger(0)

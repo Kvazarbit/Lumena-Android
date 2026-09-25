@@ -1079,6 +1079,7 @@ class AgentController(
             is RecoveryDecision.RetryVariant ->
                 ControllerInstruction.AskModelAgain(
                     feedback = protocolRepairFeedback(
+                        state = next,
                         problem = problem,
                         guidance = decision.guidance,
                         retry = retries
@@ -1089,6 +1090,7 @@ class AgentController(
             is RecoveryDecision.TryAlternative ->
                 ControllerInstruction.AskModelAgain(
                     feedback = protocolRepairFeedback(
+                        state = next,
                         problem = problem,
                         guidance = decision.guidance,
                         retry = retries
@@ -1111,12 +1113,62 @@ class AgentController(
     }
 
     private fun protocolRepairFeedback(
+        state: AgentControlState,
         problem: String,
         guidance: String,
         retry: Int
     ): String = buildString {
+        val pendingRequired =
+            (state.requiredTools - state.completedRequiredTools)
+                .sorted()
+        val completedRequired =
+            state.completedRequiredTools
+                .sorted()
+        val compactGoal = state.task.goal
+            .replace(Regex("[\\r\\n]+"), " ")
+            .replace(Regex("\\s{2,}"), " ")
+            .trim()
+            .take(1_250)
+        val compactLastResult = state.task.lastResult
+            ?.replace(Regex("[\\r\\n]+"), " ")
+            ?.replace(Regex("\\s{2,}"), " ")
+            ?.trim()
+            ?.take(420)
+            .orEmpty()
+
         appendLine("PROTOCOL_REPAIR_MODE retry=$retry")
         appendLine("The previous model output was not executable and NOTHING from it was run.")
+        appendLine("The active task is application-owned and is restored below. Do NOT ask the user to restate it.")
+        appendLine("ACTIVE_TASK")
+        appendLine("project=${state.task.projectId.orEmpty().take(180)}")
+        appendLine("intent=${state.intent}")
+        appendLine("step=${state.task.step}/${state.task.maxSteps}")
+        appendLine("goal=$compactGoal")
+        appendLine(
+            "pending_required_tools=" +
+                pendingRequired.joinToString(",")
+                    .ifBlank { "(none)" }
+        )
+        appendLine(
+            "completed_required_tools=" +
+                completedRequired.joinToString(",")
+                    .ifBlank { "(none)" }
+        )
+        if (state.pendingPythonPaths.isNotEmpty()) {
+            appendLine(
+                "pending_python_targets=" +
+                    state.pendingPythonPaths
+                        .sorted()
+                        .joinToString(",")
+                        .take(600)
+            )
+        }
+        state.task.lastTool?.let {
+            appendLine("last_tool=" + it.take(160))
+        }
+        if (compactLastResult.isNotBlank()) {
+            appendLine("last_result=$compactLastResult")
+        }
         appendLine("Return EXACTLY ONE JSON object and no prose, markdown or extra JSON.")
         appendLine("Allowed roots:")
         appendLine("{\"tool\":\"registered.tool\",\"args\":{}}")
@@ -1124,13 +1176,13 @@ class AgentController(
         appendLine("{\"partial\":true,\"summary\":\"...\"}")
         appendLine("{\"reply\":\"...\"}")
         appendLine("Do not echo the malformed output. Do not invent TOOL_RESULT.")
-        appendLine("Continue the SAME task from verified state only.")
-        appendLine("Problem: " + problem.take(1_200))
+        appendLine("Continue the ACTIVE_TASK from verified state only.")
+        appendLine("Problem: " + problem.take(650))
         guidance.takeIf { it.isNotBlank() }?.let {
             append("Recovery guidance: ")
-            append(it.take(500))
+            append(it.take(280))
         }
-    }.take(2_800)
+    }.take(3_900)
 
     private fun actionFamilyFailureLimit(
         state: AgentControlState,
