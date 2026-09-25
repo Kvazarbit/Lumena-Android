@@ -157,6 +157,40 @@ class TaskIntentRouterTest {
         )
     }
 
+
+    @Test
+    fun negatedOllamaMentionDoesNotHijackMixedCodeResearchIntent() {
+        val goal = """
+            Працюй у проекті e2e_step87.
+            Прочитай через web.read:
+            https://docs.python.org/3/library/pathlib.html#pathlib.Path.mkdir
+            Потім створи e2e_step87/dir_a.py і e2e_step87/test_dir_a.py.
+            Після запису файлів:
+            - python.syntax_check для e2e_step87/dir_a.py
+            - python.tests з cwd=e2e_step87
+            Не використовуй ollama.generate для перевірки SHADOW/ACTIVE.
+        """.trimIndent()
+
+        val profile = TaskIntentRouter.route(goal)
+
+        assertEquals(TaskIntent.CODE_WORK, profile.intent)
+        assertTrue(profile.confidence >= 90)
+        assertEquals(8, profile.minimumToolSteps)
+        assertEquals("context.snapshot", profile.preflight?.tool)
+        assertTrue("web.read" in profile.recommendedTools)
+        assertTrue("python.tests" in profile.recommendedTools)
+    }
+
+    @Test
+    fun positiveOllamaOperationStillRoutesToOllama() {
+        val profile = TaskIntentRouter.route(
+            "Не використовуй ollama.generate; перевір статус Ollama."
+        )
+
+        assertEquals(TaskIntent.OLLAMA_OPERATION, profile.intent)
+        assertEquals("ollama.status", profile.preflight?.tool)
+    }
+
     @Test
     fun ordinaryConversationStaysGeneral() {
         val profile = TaskIntentRouter.route("поясни мені різницю між RAM і SSD")
