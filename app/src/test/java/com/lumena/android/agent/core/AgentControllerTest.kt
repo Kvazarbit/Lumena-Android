@@ -1304,6 +1304,70 @@ class AgentControllerTest {
 
 
     @Test
+    fun failedPytestGetsBoundedRecoveryRoomAndUnchangedReplayIsBlocked() {
+        val task = TaskState(
+            id = "pytest-recovery-room",
+            projectId = "e2e_step87",
+            goal = """
+                Створи e2e_step87/dir_a.py і e2e_step87/test_dir_a.py.
+                Запусти python.tests з cwd=e2e_step87.
+            """.trimIndent(),
+            status = TaskStatus.WAITING_MODEL
+        )
+
+        val initial = controller.initial(task).copy(
+            task = controller.initial(task).task.copy(
+                step = 8,
+                maxSteps = 11
+            )
+        )
+        val call = AgentDecision.ToolCall(
+            "python.tests",
+            mapOf("cwd" to "e2e_step87")
+        )
+        val failed = controller.afterTool(
+            state = initial,
+            call = call,
+            ok = false,
+            stdout = "ImportError",
+            stderr = "",
+            error = null
+        ).state
+
+        assertEquals(9, failed.task.step)
+        assertEquals(12, failed.task.maxSteps)
+
+        val inspect = controller.interpret(
+            """{"tool":"file.read","args":{"path":"e2e_step87/test_dir_a.py"}}""",
+            failed
+        )
+        assertTrue(inspect is ControllerInstruction.Execute)
+        inspect as ControllerInstruction.Execute
+
+        val afterInspect = controller.afterTool(
+            state = inspect.state,
+            call = inspect.call,
+            ok = true,
+            stdout = "from .dir_a import ensure_directory",
+            stderr = "",
+            error = null
+        ).state
+
+        val replay = controller.interpret(
+            """{"tool":"python.tests","args":{"cwd":"e2e_step87"}}""",
+            afterInspect
+        )
+        assertTrue(replay is ControllerInstruction.AskModelAgain)
+        assertEquals(10, replay.state.task.step)
+
+        val fix = controller.interpret(
+            """{"tool":"file.write","args":{"path":"e2e_step87/test_dir_a.py","content":"from dir_a import ensure_directory"}}""",
+            replay.state
+        )
+        assertTrue(fix is ControllerInstruction.Execute)
+    }
+
+    @Test
     fun protocolRepairRestoresExactActiveGoalAndPendingObligations() {
         val goal = """
             Працюй у проекті e2e_step87.
