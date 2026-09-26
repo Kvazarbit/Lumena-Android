@@ -132,6 +132,7 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import org.json.JSONObject
 
 private data class ChatBubble(
     val role: String,
@@ -549,6 +550,87 @@ fun WorkflowChatScreen(
             layaControlStatus =
                 if (result.ok) "Laya running · " + result.stdout.take(700)
                 else "Laya start failed: ${result.error ?: result.errorCode ?: "unknown"}"
+        }
+    }
+
+    fun layaSelfTest() {
+        val client = bridgeOrNull()
+        if (client == null) {
+            layaControlStatus = "Bridge token is required first"
+            return
+        }
+
+        val requestJson = """
+            {
+              "state": {
+                "failure_source": "TOOL",
+                "failure_class": "STATE_DRIFT",
+                "retryable": "false",
+                "effect_class": "READ_ONLY",
+                "action_family": "file.search",
+                "attempt": "2",
+                "outcome_unknown": "false",
+                "constitutional_anchor": "TRY_ALTERNATIVE",
+                "constitutional_reason": "Same read-only observation already seen. Do not blindly repeat it."
+              },
+              "questions": {
+                "recovery": {
+                  "type": "choice",
+                  "instructions": "Choose the safest bounded recovery disposition. Prefer progress without repeating an observation that cannot advance the task.",
+                  "criteria": {
+                    "RETRY_VARIANT": "Retry the same action family with a corrected variant.",
+                    "TRY_ALTERNATIVE": "Use a different bounded action family or evidence source.",
+                    "ASK_PLANNER": "Escalate to the deliberative planner.",
+                    "DEGRADE_PARTIAL": "Return verified partial progress.",
+                    "STOP": "Stop safely."
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        uiScope.launch {
+            layaControlStatus = "Running Laya self-test…"
+            val startedNs = System.nanoTime()
+            val result = runCatching {
+                client.execute(
+                    ToolRequest(
+                        tool = "laya.predict",
+                        args = mapOf(
+                            "request" to requestJson,
+                            "timeout" to "60"
+                        )
+                    )
+                )
+            }.getOrElse {
+                layaControlStatus = "Laya self-test error: ${it.message}"
+                return@launch
+            }
+            val elapsedMs =
+                ((System.nanoTime() - startedNs) / 1_000_000L)
+                    .coerceAtLeast(0L)
+
+            if (!result.ok) {
+                layaControlStatus =
+                    "Laya self-test failed: ${result.error ?: result.errorCode ?: "unknown"}"
+                return@launch
+            }
+
+            layaControlStatus = runCatching {
+                val root = JSONObject(result.stdout)
+                val answer = root
+                    .getJSONObject("answers")
+                    .getJSONObject("recovery")
+                val choice = answer.optString("choice", "unknown")
+                val confidence = answer.optDouble("confidence", Double.NaN)
+                val confidenceText =
+                    if (confidence.isFinite()) "%.3f".format(confidence)
+                    else "NA"
+                "Self-test OK · choice=$choice · confidence=$confidenceText · latency=${elapsedMs} ms"
+            }.getOrElse {
+                "Self-test response received · latency=${elapsedMs} ms · " +
+                    result.stdout.take(500)
+            }
         }
     }
 
@@ -1317,6 +1399,7 @@ fun WorkflowChatScreen(
                 onOpenTermux = { openTermux() },
                 onLayaStatus = { layaStatus() },
                 onLayaStart = { layaStart() },
+                onLayaSelfTest = { layaSelfTest() },
                 experiencePositive = experienceStats.positive,
                 experienceNegative = experienceStats.negative,
                 experienceUnresolved = experienceStats.unresolvedNegative,
@@ -1853,6 +1936,7 @@ private fun ModelAndConnectionSheet(
     onOpenTermux: () -> Unit,
     onLayaStatus: () -> Unit,
     onLayaStart: () -> Unit,
+    onLayaSelfTest: () -> Unit,
     experiencePositive: Int,
     experienceNegative: Int,
     experienceUnresolved: Int,
@@ -1993,6 +2077,9 @@ private fun ModelAndConnectionSheet(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onLayaStatus) { Text("Laya status") }
             Button(onClick = onLayaStart) { Text("Start Laya") }
+        }
+        OutlinedButton(onClick = onLayaSelfTest) {
+            Text("Laya self-test")
         }
         Text(
             layaControlStatus,
