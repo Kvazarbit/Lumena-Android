@@ -71,7 +71,7 @@ class WorkflowRunner(
     ) -> List<String> = { _, _ -> emptyList() },
     private val evidenceProvider: (TaskState) -> List<String> = { emptyList() },
     private val constitutionProvider: (TaskState) -> List<String> = { emptyList() },
-    private val reflexAdviceProvider: (
+    private val reflexAdviceProvider: suspend (
         FailureEvent,
         ReflexCandidateSet,
         TaskState
@@ -807,7 +807,7 @@ class WorkflowRunner(
         }
     }
 
-    private fun applyReflexAdvice(
+    private suspend fun applyReflexAdvice(
         transition: com.lumena.android.agent.core.ToolTransition,
         baseState: AgentControlState,
         onProgress: (String) -> Unit
