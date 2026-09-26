@@ -398,11 +398,23 @@ object TaskIntentRouter {
     }
 
     private fun isPublicWeb(lower: String): Boolean {
-        return listOf(
+        val explicitWeb = listOf(
             "інтернет", "internet", "web", "онлайн", "online", "api",
             "https://", "http://", "сайт", "website", "url", "latest",
             "останні новини", "актуальн"
         ).any { containsTerm(lower, it) }
+
+        if (explicitWeb) return true
+
+        val newsSubject = listOf(
+            "новин", "новост", "news", "wiadomo"
+        ).any { containsTerm(lower, it) }
+        val recency = listOf(
+            "годин", "сьогодн", "зараз", "останн",
+            "hour", "today", "now", "latest", "aktualn"
+        ).any { containsTerm(lower, it) }
+
+        return newsSubject && recency
     }
 
     /**
