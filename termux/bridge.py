@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.25
+Lumena Termux Bridge v0.26
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -49,18 +49,71 @@ TOKEN_FILE = STATE_DIR / "bridge_token"
 OLLAMA_LOG = STATE_DIR / "ollama.log"
 CONTEXT_CACHE_FILE = STATE_DIR / "context_snapshot.json"
 SEARCH_DIAGNOSTICS_FILE = STATE_DIR / "web_search_diagnostics.json"
+READ_ROOTS_FILE = Path(
+    os.environ.get(
+        "LUMENA_READ_ROOTS_FILE",
+        str(STATE_DIR / "read_roots.conf"),
+    )
+).expanduser()
 BRIDGE_RUN_ID = secrets.token_hex(8)
 WORKSPACE = Path(os.environ.get("LUMENA_WORKSPACE", str(HOME / "lumena-workspace"))).expanduser().resolve()
-READONLY_ROOTS_RAW = os.environ.get(
-    "LUMENA_READONLY_ROOTS",
-    str(HOME / "Lumena-Android"),
-)
-READONLY_ROOTS = tuple(
-    Path(item).expanduser().resolve()
-    for item in READONLY_ROOTS_RAW.split(os.pathsep)
-    if item.strip()
-)
-READONLY_ALIASES = {root.name: root for root in READONLY_ROOTS}
+ROOT_ALIAS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _configured_readonly_aliases() -> dict[str, Path]:
+    aliases: dict[str, Path] = {}
+
+    def add(alias: str, raw_path: str) -> None:
+        clean_alias = alias.strip()
+        clean_path = raw_path.strip()
+        if not clean_path or not ROOT_ALIAS_RE.fullmatch(clean_alias):
+            return
+        try:
+            root = Path(clean_path).expanduser().resolve()
+        except OSError:
+            return
+        if root == WORKSPACE or WORKSPACE in root.parents:
+            return
+        aliases[clean_alias] = root
+
+    env_raw = os.environ.get("LUMENA_READONLY_ROOTS")
+    if env_raw is None:
+        default_repo = HOME / "Lumena-Android"
+        if default_repo.exists():
+            add(default_repo.name, str(default_repo))
+    else:
+        for item in env_raw.split(os.pathsep):
+            if item.strip():
+                path = Path(item).expanduser()
+                add(path.name, item)
+
+    if READ_ROOTS_FILE.exists():
+        try:
+            for raw_line in READ_ROOTS_FILE.read_text(
+                encoding="utf-8",
+                errors="replace",
+            ).splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    alias, raw_path = line.split("=", 1)
+                else:
+                    raw_path = line
+                    alias = Path(raw_path).expanduser().name
+                add(alias, raw_path)
+        except OSError:
+            pass
+
+    return aliases
+
+
+READONLY_ALIASES = _configured_readonly_aliases()
+READONLY_ROOTS = tuple(READONLY_ALIASES.values())
+READONLY_ALIAS_BY_ROOT = {
+    root: alias
+    for alias, root in READONLY_ALIASES.items()
+}
 BACKUP_ROOT = WORKSPACE / ".lumena-backups"
 MAX_BODY = 512 * 1024
 MAX_OUTPUT = 128 * 1024
@@ -176,9 +229,9 @@ def _read_root(path: Path) -> tuple[Path, str]:
     resolved = path.resolve()
     if _inside(resolved, WORKSPACE):
         return WORKSPACE, ""
-    for root in READONLY_ROOTS:
+    for alias, root in READONLY_ALIASES.items():
         if _inside(resolved, root):
-            return root, f"@{root.name}"
+            return root, f"@{alias}"
     raise ValueError("Path is outside Lumena's allowed read roots")
 
 
@@ -1955,9 +2008,9 @@ def ollama_start() -> dict[str, Any]:
 def workspace_listing() -> str:
     lines: list[str] = []
 
-    for root in READONLY_ROOTS:
+    for alias, root in READONLY_ALIASES.items():
         if root.exists() and root.is_dir():
-            lines.append(f"@{root.name}/\t[read-only root]")
+            lines.append(f"@{alias}/\t[read-only root]")
 
     for path in sorted(WORKSPACE.rglob("*")):
         try:
@@ -2011,18 +2064,18 @@ def context_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     }]
     roots.extend(
         {
-            "name": root.name,
+            "name": alias,
             "path": str(root),
-            "alias": f"@{root.name}",
+            "alias": f"@{alias}",
             "mode": "read-only",
             "exists": root.exists(),
         }
-        for root in READONLY_ROOTS
+        for alias, root in READONLY_ALIASES.items()
     )
 
     git_state: dict[str, Any] = {}
     candidates: list[tuple[str, Path]] = [(".", WORKSPACE)]
-    candidates.extend((f"@{root.name}", root) for root in READONLY_ROOTS)
+    candidates.extend((f"@{alias}", root) for alias, root in READONLY_ALIASES.items())
 
     for label, root in candidates:
         if not root.exists() or not root.is_dir():
@@ -2076,8 +2129,9 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
             "stdout": (
                 f"Lumena bridge OK\n"
                 f"workspace={WORKSPACE}\n"
-                f"read_only_roots={','.join('@' + root.name for root in READONLY_ROOTS if root.exists()) or '(none)'}\n"
-                f"version=0.25\n"
+                f"read_only_roots={','.join('@' + alias for alias, root in READONLY_ALIASES.items() if root.exists()) or '(none)'}\n"
+                f"read_roots_config={READ_ROOTS_FILE}\n"
+                f"version=0.26\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
                 f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
