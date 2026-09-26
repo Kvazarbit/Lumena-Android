@@ -649,6 +649,107 @@ class AgentControllerTest {
     }
 
     @Test
+    fun repeatedWorkspaceListReplansToContentSearchWithoutProtocolFailure() {
+        val localTask = TaskState(
+            id = "duplicate-list-replan",
+            projectId = null,
+            goal = "Analyze local historical market data and update scripts from files on the phone.",
+            status = TaskStatus.WAITING_MODEL,
+            maxSteps = 5
+        )
+        var state = controller.initial(localTask)
+        val listCall = AgentDecision.ToolCall(
+            tool = "workspace.list",
+            args = emptyMap()
+        )
+
+        repeat(2) {
+            val instruction = controller.interpret(
+                """{"tool":"workspace.list","args":{}}""",
+                state
+            )
+            assertTrue(instruction is ControllerInstruction.Execute)
+            instruction as ControllerInstruction.Execute
+            state = controller.afterTool(
+                state = instruction.state,
+                call = instruction.call,
+                ok = true,
+                stdout = "data/ scripts/ btc_history.csv update_data.py",
+                stderr = "",
+                error = null
+            ).state
+        }
+
+        val duplicate = controller.interpret(
+            """{"tool":"workspace.list","args":{}}""",
+            state
+        )
+
+        assertTrue(duplicate is ControllerInstruction.AskModelAgain)
+        duplicate as ControllerInstruction.AskModelAgain
+        assertEquals(0, duplicate.state.protocolRetries)
+        assertTrue(duplicate.state.task.status == TaskStatus.WAITING_MODEL)
+        assertTrue(
+            duplicate.feedback.contains(
+                "READ_ONLY_DUPLICATE_REPLAN"
+            )
+        )
+        assertTrue(duplicate.feedback.contains("file.search"))
+        assertTrue(duplicate.feedback.contains("file.read"))
+        assertFalse(
+            duplicate.feedback.contains(
+                "PROTOCOL_REPAIR_MODE"
+            )
+        )
+
+        val search = controller.interpret(
+            """{"tool":"file.search","args":{"query":"bitcoin btc csv historical update"}}""",
+            duplicate.state
+        )
+        assertTrue(search is ControllerInstruction.Execute)
+    }
+
+    @Test
+    fun repeatedWorkspaceListNeverConsumesProtocolRetryBudget() {
+        val localTask = TaskState(
+            id = "duplicate-list-budget",
+            projectId = null,
+            goal = "Inspect local project files.",
+            status = TaskStatus.WAITING_MODEL,
+            maxSteps = 5
+        )
+        var state = controller.initial(localTask)
+        val call = AgentDecision.ToolCall("workspace.list")
+
+        repeat(2) {
+            val execute = controller.interpret(
+                """{"tool":"workspace.list","args":{}}""",
+                state
+            ) as ControllerInstruction.Execute
+            state = controller.afterTool(
+                state = execute.state,
+                call = execute.call,
+                ok = true,
+                stdout = "same-listing",
+                stderr = "",
+                error = null
+            ).state
+        }
+
+        repeat(3) {
+            val blocked = controller.interpret(
+                """{"tool":"workspace.list","args":{}}""",
+                state
+            )
+            assertTrue(blocked is ControllerInstruction.AskModelAgain)
+            blocked as ControllerInstruction.AskModelAgain
+            assertEquals(0, blocked.state.protocolRetries)
+            assertTrue(blocked.state.task.status != TaskStatus.FAILED)
+            state = blocked.state
+        }
+    }
+
+    @Test
     fun verifiedExperienceIsInjectedIntoDynamicContext() {
         val state = controller.initial(task())
         val context = controller.dynamicContext(
