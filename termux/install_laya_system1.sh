@@ -30,6 +30,37 @@ install_runtime() {
   grep -q "laya_predict" "$SRC"
   grep -q "Apache License" "$LICENSE_FILE"
 
+  # Upstream laya.cpp uses __builtin_setjmp/__builtin_longjmp for every
+  # Clang/GCC target. Android's AArch64 Clang rejects those builtins.
+  # <setjmp.h> is already included upstream, so keep upstream behaviour on
+  # other platforms and force the standard jmp_buf/setjmp/longjmp fallback
+  # only when the compiler defines __ANDROID__.
+  python - "$SRC" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+old = "#if defined(__GNUC__) || defined(__clang__)"
+new = "#if (defined(__GNUC__) || defined(__clang__)) && !defined(__ANDROID__)"
+
+if new not in text:
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(
+            f"Refusing to patch laya.c: expected exactly one setjmp compiler "
+            f"guard, found {count}"
+        )
+    text = text.replace(old, new, 1)
+    path.write_text(text, encoding="utf-8")
+
+patched = path.read_text(encoding="utf-8")
+if new not in patched:
+    raise SystemExit("Android setjmp portability patch was not applied")
+if "#include <setjmp.h>" not in patched:
+    raise SystemExit("Pinned laya.c no longer includes <setjmp.h>")
+PY
+
   echo "Compiling Laya System-1 runtime for this device..."
   clang -O3 -std=c11 "$SRC" -o "$BIN" -lm
   chmod 700 "$BIN"
