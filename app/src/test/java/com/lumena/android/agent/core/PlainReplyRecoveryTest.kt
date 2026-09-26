@@ -74,13 +74,14 @@ class PlainReplyRecoveryTest {
         assertEquals(afterSearch.task.kernel, second.state.task.kernel)
     }
 
-    @Test fun correctedProtocolCanStillCompleteWithExistingEvidence() {
+    @Test fun verifiedWebReadCanCompletePlainReplyWithoutProtocolCorrection() {
         val evidence = ContextKernel.record(ContextKernelState(),
             AgentDecision.ToolCall("web.read", mapOf("url" to "https://example.org/news")), true, "Read article")
         val state = webState().let { it.copy(task = it.task.copy(kernel = evidence)) }
-        val correction = controller.interpret("Підсумок", state) as ControllerInstruction.AskModelAgain
-        val result = controller.interpret("""{"done":true,"summary":"Перевірений підсумок"}""", correction.state)
+        val result = controller.interpret("Перевірений підсумок", state)
+        assertTrue(result is ControllerInstruction.Finish)
         assertEquals(TaskStatus.DONE, result.state.task.status)
+        assertEquals(0, result.state.protocolRetries)
     }
 
     @Test fun missingExecutionCannotTurnProseIntoSuccess() {
