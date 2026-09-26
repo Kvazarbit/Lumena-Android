@@ -137,7 +137,8 @@ data class LumenaDiagnosticInput(
             ok = false
         ),
     val layaShadow: DiagnosticLayaShadowView =
-        DiagnosticLayaShadowView()
+        DiagnosticLayaShadowView(),
+    val cognitiveRegression: CognitiveRegressionReport? = null
 )
 
 object LumenaDiagnosticFormatter {
@@ -430,6 +431,18 @@ object LumenaDiagnosticFormatter {
             }
             appendLine()
 
+            appendLine("[COGNITIVE_EXPERIENCE]")
+            val regression = input.cognitiveRegression
+            appendLine("memory_regression_available=${regression != null}")
+            if (regression != null) {
+                appendLine("counterexample_cases=${regression.cases}")
+                appendLine("replay_passed=${regression.passed}")
+                appendLine("replay_failed=${regression.failedCaseIds.size}")
+                appendLine("distinct_source_tasks=${regression.distinctTasks}")
+                appendLine("families=${regression.families.joinToString(",")}")
+            }
+            appendLine("scope=memory_control_regression_not_model_intelligence")
+            appendLine()
             appendLine("[E2E_FACTS]")
             appendLine(
                 "verified_project_applications=" +
@@ -663,7 +676,11 @@ object LumenaDiagnosticReport {
             tinyJevCalibration =
                 tinyJevCalibration,
             layaProbe = layaProbe,
-            layaShadow = layaShadow
+            layaShadow = layaShadow,
+            cognitiveRegression = runCatching {
+                val state = CoordinatorExperienceStore.load(app)
+                CognitiveRegressionSuite.replay(CognitiveRegressionSuite.corpus(state.learnedExamples))
+            }.getOrNull()
         )
 
         return LumenaDiagnosticFormatter.render(

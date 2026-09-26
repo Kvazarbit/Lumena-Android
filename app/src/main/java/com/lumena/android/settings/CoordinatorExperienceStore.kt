@@ -2,6 +2,7 @@ package com.lumena.android.settings
 
 import android.content.Context
 import android.util.AtomicFile
+import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.ToolRegistry
 import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.local.ToolResult
@@ -21,7 +22,9 @@ data class CoordinatorEpisodeEvent(
     val experienceId: String?,
     val at: Long,
     val surprise: Double,
-    val modelId: String? = null
+    val modelId: String? = null,
+    val scopeHash: String? = null,
+    val outcomeKnown: Boolean = true
 )
 
 data class CoordinatorEpisodeState(
@@ -32,7 +35,8 @@ data class CoordinatorEpisodeState(
 
 enum class CoordinatorExampleKind {
     RECOVERY,
-    VERIFIED_SEQUENCE
+    VERIFIED_SEQUENCE,
+    FAILED_RECOVERY
 }
 
 data class CoordinatorExecutionExample(
@@ -45,7 +49,9 @@ data class CoordinatorExecutionExample(
     val updatedAt: Long,
     val surprise: Double,
     val text: String,
-    val contributorModelIds: List<String> = emptyList()
+    val contributorModelIds: List<String> = emptyList(),
+    val scopeHash: String? = null,
+    val outcomes: List<Boolean> = emptyList()
 )
 
 /**
@@ -159,6 +165,15 @@ object CoordinatorExperiencePolicy {
             .map { it.first }
     }
 
+    fun scoped(state: CoordinatorEpisodeState, scopeHash: String, modelId: String?): CoordinatorEpisodeState {
+        // Retain all events of the scope as barriers; never splice across a
+        // different model by deleting its intermediate events.
+        val examples = (state.learnedExamples + deriveExamples(state.events))
+            .distinctBy { it.id }
+            .filter { it.scopeHash == scopeHash && it.contributorModelIds == listOfNotNull(modelId) }
+        return state.copy(events = emptyList(), learnedExamples = examples)
+    }
+
     fun formatForPrompt(example: CoordinatorExecutionExample): String =
         example.text
             .replace(Regex("[\\r\\n]+"), " ")
@@ -190,25 +205,25 @@ object CoordinatorExperiencePolicy {
         val out = mutableListOf<CoordinatorExecutionExample>()
         for (i in session.indices) {
             val failed = session[i]
-            if (failed.ok) continue
+            if (failed.ok || !failed.outcomeKnown) continue
 
             val end = (i + MAX_SEQUENCE_STEPS).coerceAtMost(session.lastIndex)
-            // A recovery example is only created when the originally failed
-            // operation later succeeds for the same tool + target. Intermediate
-            // discovery/repair steps are retained, but a random successful tool
-            // must never be mistaken for resolution.
+            // Evaluate the NEXT observed attempt, including failure. Skipping
+            // failed retries until a later success would teach survivorship bias.
             val successIndex = (i + 1..end).firstOrNull { index ->
                 val candidate = session[index]
-                candidate.ok &&
-                    candidate.tool == failed.tool &&
+                candidate.tool == failed.tool &&
                     candidate.target == failed.target
             } ?: continue
             val segment = session.subList(i, successIndex + 1)
+            if (segment.any { it.experienceId.isNullOrBlank() || !it.outcomeKnown }) continue
+            if (segment.map { it.scopeHash }.distinct().size != 1) continue
+            val recovered = segment.last().ok
 
             out += buildExample(
-                kind = CoordinatorExampleKind.RECOVERY,
+                kind = if (recovered) CoordinatorExampleKind.RECOVERY else CoordinatorExampleKind.FAILED_RECOVERY,
                 segment = segment,
-                label = "RECOVERY EXAMPLE"
+                label = if (recovered) "RECOVERY EXAMPLE" else "FAILED RECOVERY EXAMPLE (counterexample; avoid blind reuse)"
             )
         }
         return out
@@ -219,7 +234,7 @@ object CoordinatorExperiencePolicy {
     ): CoordinatorExecutionExample? {
         val successful = session
             .takeLast(MAX_SEQUENCE_STEPS)
-            .takeIf { it.size >= 2 && it.all(CoordinatorEpisodeEvent::ok) }
+            .takeIf { it.size >= 2 && it.all { event -> event.ok && event.outcomeKnown && !event.experienceId.isNullOrBlank() } }
             ?: return null
 
         return buildExample(
@@ -260,6 +275,8 @@ object CoordinatorExperiencePolicy {
             updatedAt = segment.maxOf { it.at },
             surprise = segment.maxOf { it.surprise },
             text = text,
+            scopeHash = first.scopeHash,
+            outcomes = segment.map { it.ok },
             contributorModelIds = segment
                 .mapNotNull { it.modelId }
                 .distinct()
@@ -332,9 +349,12 @@ object CoordinatorExperienceStore {
         result: ToolResult,
         experienceId: String?,
         modelId: String? = null,
+        scopeId: String? = null,
         now: Long = System.currentTimeMillis()
     ): CoordinatorEpisodeEvent? = synchronized(lock) {
-        if (result.outcomeUnknown) return@synchronized null
+        // Keep unknown outcomes as sequence barriers, never as training labels.
+        val verifiedOk = result.ok && !result.outcomeUnknown &&
+            ContextKernel.resultFailure(request.tool, result.ok, result.exitCode, result.tool, result.stdout) == null
 
         val canonicalTool = ToolRegistry.canonicalize(request.tool)
         if (ToolRegistry.get(canonicalTool) == null) return@synchronized null
@@ -351,7 +371,7 @@ object CoordinatorExperienceStore {
             sessionId = safeSessionId,
             tool = canonicalTool,
             target = target,
-            ok = result.ok
+            ok = verifiedOk
         )
         val requestIdentity = request.requestId?.takeIf { it.isNotBlank() }
             ?: CoordinatorExperiencePolicy.hash(
@@ -369,11 +389,13 @@ object CoordinatorExperienceStore {
             taskId = safeTaskId,
             tool = canonicalTool,
             target = target,
-            ok = result.ok,
+            ok = verifiedOk,
             experienceId = experienceId?.take(160),
             at = now,
             surprise = surprise,
-            modelId = safeModelId
+            modelId = safeModelId,
+            scopeHash = scopeId?.let(CoordinatorExperiencePolicy::hash),
+            outcomeKnown = !result.outcomeUnknown
         )
         val next = CoordinatorExperiencePolicy.record(state, event)
         save(context, next)
@@ -383,21 +405,24 @@ object CoordinatorExperienceStore {
     fun relevant(
         context: Context,
         query: String,
-        limit: Int = 4
-    ): List<String> = synchronized(lock) {
-        CoordinatorExperiencePolicy.examples(
-            state = load(context),
-            query = query,
-            limit = limit
-        ).map(CoordinatorExperiencePolicy::formatForPrompt)
-    }
+        limit: Int = 4,
+        scopeId: String? = null,
+        modelId: String? = null
+    ): List<String> = examples(context, query, limit, scopeId, modelId)
+        .map(CoordinatorExperiencePolicy::formatForPrompt)
 
     fun examples(
         context: Context,
         query: String = "",
-        limit: Int = 8
+        limit: Int = 8,
+        scopeId: String? = null,
+        modelId: String? = null
     ): List<CoordinatorExecutionExample> = synchronized(lock) {
-        CoordinatorExperiencePolicy.examples(load(context), query, limit)
+        val loaded = load(context)
+        val scoped = if (scopeId == null) loaded else CoordinatorExperiencePolicy.scoped(
+            loaded, CoordinatorExperiencePolicy.hash(scopeId), modelId?.let(::stableId)
+        )
+        CoordinatorExperiencePolicy.examples(scoped, query, limit)
     }
 
     fun examplesForTask(

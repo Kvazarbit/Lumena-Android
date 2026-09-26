@@ -427,4 +427,27 @@ class CoordinatorExperiencePolicyTest {
     }
 
 
+    @Test
+    fun failedAttemptIsRetainedEvenWhenLaterAttemptRecovers() {
+        val state = listOf(
+            event("f1", "s", "web.search", "query=x", false, 1),
+            event("f2", "s", "web.search", "query=x", false, 2),
+            event("ok", "s", "web.search", "query=x", true, 3)
+        ).fold(CoordinatorEpisodeState(), CoordinatorExperiencePolicy::record)
+        val examples = CoordinatorExperiencePolicy.examples(state, "", 64)
+        assertEquals(1, examples.count { it.kind.name == "FAILED_RECOVERY" })
+        assertEquals(1, examples.count { it.kind == CoordinatorExampleKind.RECOVERY })
+        assertTrue(examples.all { it.tools.size == 2 })
+    }
+
+    @Test
+    fun missingIntermediateEvidenceCannotBecomeVerifiedRecovery() {
+        val state = listOf(
+            event("f", "s", "file.read", "path=x", false, 1),
+            event("inspect", "s", "workspace.list", "", true, 2, evidence = null),
+            event("ok", "s", "file.read", "path=x", true, 3)
+        ).fold(CoordinatorEpisodeState(), CoordinatorExperiencePolicy::record)
+        assertTrue(CoordinatorExperiencePolicy.examples(state, "", 64).isEmpty())
+    }
+
 }

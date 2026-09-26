@@ -689,7 +689,9 @@ fun WorkflowChatScreen(
                     CoordinatorExperienceStore.relevant(
                         context = context,
                         query = task.goal,
-                        limit = 4
+                        limit = 4,
+                        scopeId = task.projectId ?: "global",
+                        modelId = constitutionContributorModelId
                     )
                 } catch (_: Exception) {
                     listOf(
@@ -748,7 +750,9 @@ fun WorkflowChatScreen(
                     val examples = CoordinatorExperienceStore.examples(
                         context = context,
                         query = query,
-                        limit = 64
+                        limit = 64,
+                        scopeId = task.projectId ?: "global",
+                        modelId = constitutionContributorModelId
                     )
                     val recommendation = ReflexExperienceRanker.rank(
                         event = event,
@@ -945,7 +949,8 @@ fun WorkflowChatScreen(
                         request = request,
                         result = result,
                         experienceId = eventId,
-                        modelId = constitutionContributorModelId
+                        modelId = constitutionContributorModelId,
+                        scopeId = task.projectId ?: "global"
                     )
                 }
                 val coordinatorFailure = coordinatorResult.exceptionOrNull()
