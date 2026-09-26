@@ -460,8 +460,10 @@ class AgentController(
                 fail(state, "Unknown tool outcome"))
         }
         if (ContextKernel.repeatedObservation(state.task.kernel, canonical)) {
-            return protocolRetry(state, "This exact observation returned the same result twice with no intervening mutation. " +
-                "Use the recorded evidence, choose a different relevant check, or return done/partial. Do not repeat it.")
+            return repeatedObservationReplan(
+                state = state,
+                call = canonical
+            )
         }
         val nextPlan = if (state.plan.isEmpty() && canonical.plan.isNotEmpty()) {
             canonical.plan
@@ -521,6 +523,62 @@ class AgentController(
             call = canonical,
             requiresConfirmation = validation.requiresConfirmation,
             state = next
+        )
+    }
+
+    private fun repeatedObservationReplan(
+        state: AgentControlState,
+        call: AgentDecision.ToolCall
+    ): ControllerInstruction.AskModelAgain {
+        val canonical = ToolRegistry.canonicalize(call.tool)
+        val nextHint = when (canonical) {
+            "workspace.list", "file.list" ->
+                "The verified directory listing is already recorded and unchanged. " +
+                    "Do NOT list the same directory again. Search its contents instead: use file.search with discriminative terms from the ACTIVE_TASK " +
+                    "(domain names, likely filenames, extensions, symbols), then file.read the relevant returned paths. " +
+                    "If the recorded listing already contains a plausible script/data path, read that path directly."
+
+            "file.search" ->
+                "The same file.search result is already recorded and unchanged. " +
+                    "Do NOT repeat the same query. Read one of the recorded matching paths with file.read, or use a materially narrower/different search term."
+
+            "web.search" ->
+                "The same web.search result is already recorded and unchanged. " +
+                    "Do NOT repeat the same query. Read a relevant recorded source with web.read, or issue a materially different/refined search query tied to the ACTIVE_TASK."
+
+            "web.read", "http.get", "http.json" ->
+                "The same read-only source result is already recorded and unchanged. " +
+                    "Use that evidence, inspect a different relevant source/tool, or conclude done/partial if the goal is sufficiently supported."
+
+            else ->
+                "The same read-only observation is already recorded and unchanged. " +
+                    "Use the recorded evidence and choose a different evidence-producing check, or conclude done/partial."
+        }
+
+        val recovery = (
+            "READ_ONLY_DUPLICATE_REPLAN (valid tool protocol; no protocol failure). " +
+                nextHint
+            ).take(1_600)
+
+        return ControllerInstruction.AskModelAgain(
+            feedback = recovery,
+            state = state.copy(
+                protocolRetries = 0,
+                modelFailures = 0,
+                recoveryHint = listOf(
+                    state.recoveryHint,
+                    recovery
+                )
+                    .filterNotNull()
+                    .map(String::trim)
+                    .filter(String::isNotBlank)
+                    .distinct()
+                    .joinToString(" ")
+                    .take(2_000),
+                task = state.task.copy(
+                    status = TaskStatus.WAITING_MODEL
+                )
+            )
         )
     }
 
