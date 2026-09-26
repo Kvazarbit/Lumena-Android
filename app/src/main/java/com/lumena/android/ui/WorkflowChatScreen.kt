@@ -1,5 +1,7 @@
 package com.lumena.android.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -62,12 +64,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.core.AgentControlState
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.TermuxBridgeClient
+import com.lumena.android.agent.local.TermuxBridgeAutoStarter
+import com.lumena.android.agent.local.LayaSystem1Client
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.runtime.AgentRunCoordinator
@@ -106,6 +111,7 @@ import com.lumena.android.settings.CoordinatorExperienceStore
 import com.lumena.android.settings.ReflexExperienceRanker
 import com.lumena.android.settings.TinyJevAssetLoader
 import com.lumena.android.settings.TinyJevCalibrationStore
+import com.lumena.android.settings.LayaShadowStore
 import com.lumena.android.settings.GenomeCapsule
 import com.lumena.android.settings.GenomeUnpackedUnit
 import com.lumena.android.settings.LumenaPreferences
@@ -126,6 +132,7 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import org.json.JSONObject
 
 private data class ChatBubble(
     val role: String,
@@ -194,6 +201,8 @@ fun WorkflowChatScreen(
     var ggufPickerStatus by rememberSaveable { mutableStateOf("") }
     var models by remember { mutableStateOf<List<String>>(emptyList()) }
     var status by remember { mutableStateOf("Checking Ollama…") }
+    var bridgeControlStatus by rememberSaveable { mutableStateOf("Bridge not checked") }
+    var layaControlStatus by rememberSaveable { mutableStateOf("Laya not checked") }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var progressExpanded by rememberSaveable { mutableStateOf(false) }
     var currentTask by remember { mutableStateOf(restored.task) }
@@ -429,6 +438,214 @@ fun WorkflowChatScreen(
         return TermuxBridgeClient(effectiveUrl, effectiveToken, context)
     }
 
+    fun copyToClipboard(label: String, value: String) {
+        val clipboard = context.getSystemService(ClipboardManager::class.java)
+        clipboard?.setPrimaryClip(ClipData.newPlainText(label, value))
+    }
+
+    fun bridgeInstallCommand(): String {
+        val dollar = '$'
+        return """
+            set -euo pipefail
+            COMMIT="8dd084e9c663be212a0996bfa6d9cb0298139331"
+            BASE="https://raw.githubusercontent.com/Kvazarbit/Lumena-Android/${dollar}COMMIT/termux"
+            TMP="${dollar}HOME/.lumena-update"
+            mkdir -p "${dollar}TMP"
+            curl -fL "${dollar}BASE/bridge.py" -o "${dollar}TMP/bridge.py"
+            curl -fL "${dollar}BASE/install_bridge.sh" -o "${dollar}TMP/install_bridge.sh"
+            curl -fL "${dollar}BASE/configure_read_roots.sh" -o "${dollar}TMP/configure_read_roots.sh"
+            curl -fL "${dollar}BASE/install_laya_system1.sh" -o "${dollar}TMP/install_laya_system1.sh"
+            chmod 700 "${dollar}TMP/"*.sh
+            bash "${dollar}TMP/install_bridge.sh"
+            ~/.lumena/configure_read_roots.sh add shared "${dollar}HOME/storage/shared" 2>/dev/null || true
+            pkill -f "${dollar}HOME/.lumena/bridge.py" 2>/dev/null || true
+            nohup python "${dollar}HOME/.lumena/bridge.py" > "${dollar}HOME/.lumena/bridge.log" 2>&1 &
+            sleep 2
+            echo "===== BRIDGE ROOT ====="
+            curl -s http://127.0.0.1:8765/
+            echo
+            echo "===== BRIDGE TOKEN ====="
+            TOKEN="${dollar}(cat "${dollar}HOME/.lumena/bridge_token")"
+            echo "${dollar}TOKEN"
+            echo "===== BRIDGE HEALTH ====="
+            curl -s -X POST http://127.0.0.1:8765/tool \
+              -H "Authorization: Bearer ${dollar}TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"tool":"health","args":{}}'
+            echo
+        """.trimIndent()
+    }
+    fun runBridgeSelfTest() {
+        val client = bridgeOrNull()
+        if (client == null) {
+            bridgeControlStatus = "Bridge token is empty"
+            return
+        }
+        uiScope.launch {
+            bridgeControlStatus = "Checking bridge…"
+            val result = runCatching {
+                client.execute(ToolRequest(tool = "health"))
+            }.getOrElse {
+                bridgeControlStatus = "Bridge error: ${it.message}"
+                return@launch
+            }
+            bridgeControlStatus =
+                if (result.ok) {
+                    result.stdout.lineSequence()
+                        .filter { it.isNotBlank() }
+                        .take(6)
+                        .joinToString(" · ")
+                        .ifBlank { "Bridge OK" }
+                } else {
+                    "Bridge failed: ${result.error ?: result.errorCode ?: "unknown"}"
+                }
+        }
+    }
+
+    fun startBridge() {
+        val url = bridgeUrl.trim().trimEnd('/').toHttpUrlOrNull()
+        if (url == null) {
+            bridgeControlStatus = "Bridge URL is invalid"
+            return
+        }
+        uiScope.launch {
+            bridgeControlStatus = "Starting bridge…"
+            val result = TermuxBridgeAutoStarter.ensureRunning(context, url)
+            bridgeControlStatus =
+                if (result.isSuccess) "Bridge running · tap Self-test"
+                else "Bridge start failed: ${result.exceptionOrNull()?.message ?: "unknown"}"
+        }
+    }
+
+    fun layaStatus() {
+        val client = bridgeOrNull()
+        if (client == null) {
+            layaControlStatus = "Bridge token is required first"
+            return
+        }
+        uiScope.launch {
+            layaControlStatus = "Checking Laya…"
+            val result = runCatching { LayaSystem1Client(client).status() }
+                .getOrElse {
+                    layaControlStatus = "Laya error: ${it.message}"
+                    return@launch
+                }
+            layaControlStatus =
+                if (result.ok) result.stdout.take(900).ifBlank { "Laya OK" }
+                else "Laya unavailable: ${result.error ?: result.errorCode ?: "unknown"}"
+        }
+    }
+
+    fun layaStart() {
+        val client = bridgeOrNull()
+        if (client == null) {
+            layaControlStatus = "Bridge token is required first"
+            return
+        }
+        uiScope.launch {
+            layaControlStatus = "Starting Laya…"
+            val result = runCatching { LayaSystem1Client(client).start() }
+                .getOrElse {
+                    layaControlStatus = "Laya start error: ${it.message}"
+                    return@launch
+                }
+            layaControlStatus =
+                if (result.ok) "Laya running · " + result.stdout.take(700)
+                else "Laya start failed: ${result.error ?: result.errorCode ?: "unknown"}"
+        }
+    }
+
+    fun layaSelfTest() {
+        val client = bridgeOrNull()
+        if (client == null) {
+            layaControlStatus = "Bridge token is required first"
+            return
+        }
+
+        val requestJson = """
+            {
+              "state": {
+                "failure_source": "TOOL",
+                "failure_class": "STATE_DRIFT",
+                "retryable": "false",
+                "effect_class": "READ_ONLY",
+                "action_family": "file.search",
+                "attempt": "2",
+                "outcome_unknown": "false",
+                "constitutional_anchor": "TRY_ALTERNATIVE",
+                "constitutional_reason": "Same read-only observation already seen. Do not blindly repeat it."
+              },
+              "questions": {
+                "recovery": {
+                  "type": "choice",
+                  "instructions": "Choose the safest bounded recovery disposition. Prefer progress without repeating an observation that cannot advance the task.",
+                  "criteria": {
+                    "RETRY_VARIANT": "Retry the same action family with a corrected variant.",
+                    "TRY_ALTERNATIVE": "Use a different bounded action family or evidence source.",
+                    "ASK_PLANNER": "Escalate to the deliberative planner.",
+                    "DEGRADE_PARTIAL": "Return verified partial progress.",
+                    "STOP": "Stop safely."
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        uiScope.launch {
+            layaControlStatus = "Running Laya self-test…"
+            val startedNs = System.nanoTime()
+            val result = runCatching {
+                client.execute(
+                    ToolRequest(
+                        tool = "laya.predict",
+                        args = mapOf(
+                            "request" to requestJson,
+                            "timeout" to "60"
+                        )
+                    )
+                )
+            }.getOrElse {
+                layaControlStatus = "Laya self-test error: ${it.message}"
+                return@launch
+            }
+            val elapsedMs =
+                ((System.nanoTime() - startedNs) / 1_000_000L)
+                    .coerceAtLeast(0L)
+
+            if (!result.ok) {
+                layaControlStatus =
+                    "Laya self-test failed: ${result.error ?: result.errorCode ?: "unknown"}"
+                return@launch
+            }
+
+            layaControlStatus = runCatching {
+                val root = JSONObject(result.stdout)
+                val answer = root
+                    .getJSONObject("answers")
+                    .getJSONObject("recovery")
+                val choice = answer.optString("choice", "unknown")
+                val confidence = answer.optDouble("confidence", Double.NaN)
+                val confidenceText =
+                    if (confidence.isFinite()) "%.3f".format(confidence)
+                    else "NA"
+                "Self-test OK · choice=$choice · confidence=$confidenceText · latency=${elapsedMs} ms"
+            }.getOrElse {
+                "Self-test response received · latency=${elapsedMs} ms · " +
+                    result.stdout.take(500)
+            }
+        }
+    }
+
+    fun openTermux() {
+        val launchIntent =
+            context.packageManager.getLaunchIntentForPackage(TermuxBridgeAutoStarter.TERMUX_PACKAGE)
+        if (launchIntent != null) {
+            context.startActivity(launchIntent)
+        } else {
+            bridgeControlStatus = "Termux is not installed"
+        }
+    }
+
     fun modelClient(): ChatModelClient =
         if (inferenceBackend == "embedded") {
             EmbeddedLlamaClient(context, ggufPath, computeMode = computeMode)
@@ -558,6 +775,34 @@ fun WorkflowChatScreen(
                         val option =
                             TinyJevReflexAdapter.bestOption(tinyDecision)
                                 ?: choice.best()
+
+                        val layaResult =
+                            bridgeOrNull()?.let { bridge ->
+                                runCatching {
+                                    LayaSystem1Client(bridge)
+                                        .predictReflex(
+                                            event = event,
+                                            candidates = candidates
+                                        )
+                                }.getOrNull()
+                            }
+
+                        if (layaResult != null) {
+                            runCatching {
+                                LayaShadowStore.record(
+                                    context = context,
+                                    taskId = task.id,
+                                    family =
+                                        event.actionFamily
+                                            ?.takeIf { it.isNotBlank() }
+                                            ?: event.failureClass.name,
+                                    attempt = event.attempt,
+                                    candidates = candidates,
+                                    referenceOption = option,
+                                    result = layaResult
+                                )
+                            }
+                        }
 
                         val calibrationEstimate =
                             if (
@@ -1137,6 +1382,26 @@ fun WorkflowChatScreen(
                     bridgeToken = clean
                     LumenaPreferences.saveBridgeToken(context, clean)
                 },
+                bridgeControlStatus = bridgeControlStatus,
+                layaControlStatus = layaControlStatus,
+                onBridgeStart = { startBridge() },
+                onBridgeSelfTest = { runBridgeSelfTest() },
+                onCopyBridgeToken = {
+                    val token = LumenaPreferences.normalizeBridgeToken(bridgeToken)
+                    if (token.isBlank()) bridgeControlStatus = "Bridge token is empty"
+                    else {
+                        copyToClipboard("Lumena bridge token", token)
+                        bridgeControlStatus = "Bridge token copied"
+                    }
+                },
+                onCopyBridgeInstallCommand = {
+                    copyToClipboard("Lumena Bridge install/update", bridgeInstallCommand())
+                    bridgeControlStatus = "Install/update command copied"
+                },
+                onOpenTermux = { openTermux() },
+                onLayaStatus = { layaStatus() },
+                onLayaStart = { layaStart() },
+                onLayaSelfTest = { layaSelfTest() },
                 experiencePositive = experienceStats.positive,
                 experienceNegative = experienceStats.negative,
                 experienceUnresolved = experienceStats.unresolvedNegative,
@@ -1664,6 +1929,16 @@ private fun ModelAndConnectionSheet(
     onBridgeUrl: (String) -> Unit,
     bridgeToken: String,
     onBridgeToken: (String) -> Unit,
+    bridgeControlStatus: String,
+    layaControlStatus: String,
+    onBridgeStart: () -> Unit,
+    onBridgeSelfTest: () -> Unit,
+    onCopyBridgeToken: () -> Unit,
+    onCopyBridgeInstallCommand: () -> Unit,
+    onOpenTermux: () -> Unit,
+    onLayaStatus: () -> Unit,
+    onLayaStart: () -> Unit,
+    onLayaSelfTest: () -> Unit,
     experiencePositive: Int,
     experienceNegative: Int,
     experienceUnresolved: Int,
@@ -1674,6 +1949,7 @@ private fun ModelAndConnectionSheet(
     onClearExperience: () -> Unit
 ) {
     var unpackedGenome by remember(genomeCapsules) { mutableStateOf<String?>(null) }
+    var revealBridgeToken by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
@@ -1750,7 +2026,12 @@ private fun ModelAndConnectionSheet(
         }
 
         HorizontalDivider()
-        Text("Local tools", style = MaterialTheme.typography.titleMedium)
+        Text("Bridge & Laya", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Local control center · loopback only · Bridge can auto-start through Termux RUN_COMMAND.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         OutlinedTextField(
             value = bridgeUrl,
             onValueChange = onBridgeUrl,
@@ -1762,8 +2043,50 @@ private fun ModelAndConnectionSheet(
             onValueChange = onBridgeToken,
             label = { Text("Bridge token") },
             singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
+            visualTransformation =
+                if (revealBridgeToken) VisualTransformation.None
+                else PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth()
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { revealBridgeToken = !revealBridgeToken }) {
+                Text(if (revealBridgeToken) "Hide token" else "Show token")
+            }
+            OutlinedButton(onClick = onCopyBridgeToken) { Text("Copy token") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onBridgeStart) { Text("Start Bridge") }
+            OutlinedButton(onClick = onBridgeSelfTest) { Text("Self-test") }
+        }
+        Text(
+            bridgeControlStatus,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onCopyBridgeInstallCommand) {
+                Text("Copy install/update")
+            }
+            TextButton(onClick = onOpenTermux) { Text("Open Termux") }
+        }
+        Text(
+            "The copied install/update command prints the current Bridge token and health after start.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Text("Laya System-1", style = MaterialTheme.typography.titleSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onLayaStatus) { Text("Laya status") }
+            Button(onClick = onLayaStart) { Text("Start Laya") }
+        }
+        OutlinedButton(onClick = onLayaSelfTest) {
+            Text("Laya self-test")
+        }
+        Text(
+            layaControlStatus,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         HorizontalDivider()

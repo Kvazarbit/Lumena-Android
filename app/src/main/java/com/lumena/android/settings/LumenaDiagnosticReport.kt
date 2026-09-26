@@ -87,6 +87,18 @@ data class DiagnosticTinyJevCalibrationView(
     val latencyP50Ms: Long? = null,
     val latencyP95Ms: Long? = null
 )
+data class DiagnosticLayaShadowView(
+    val error: String = "",
+    val samples: Int = 0,
+    val successful: Int = 0,
+    val unavailable: Int = 0,
+    val agreementWithReference: Double? = null,
+    val meanConfidence: Double? = null,
+    val latencyP50Ms: Long? = null,
+    val latencyP95Ms: Long? = null,
+    val lastChoice: String = "",
+    val lastErrorCode: String = ""
+)
 
 data class LumenaDiagnosticInput(
     val generatedAtMs: Long,
@@ -117,7 +129,15 @@ data class LumenaDiagnosticInput(
     val evidence: DiagnosticEvidenceView,
     val genome: DiagnosticGenomeView,
     val tinyJevCalibration: DiagnosticTinyJevCalibrationView =
-        DiagnosticTinyJevCalibrationView()
+        DiagnosticTinyJevCalibrationView(),
+    val layaProbe: DiagnosticProbe =
+        DiagnosticProbe(
+            name = "laya",
+            configured = false,
+            ok = false
+        ),
+    val layaShadow: DiagnosticLayaShadowView =
+        DiagnosticLayaShadowView()
 )
 
 object LumenaDiagnosticFormatter {
@@ -345,6 +365,71 @@ object LumenaDiagnosticFormatter {
             }
             appendLine()
 
+            appendLine("[LAYA_SYSTEM1]")
+            appendLine("mode=SHADOW")
+            appendLine("authority=advisory_only")
+            appendProbe(input.layaProbe)
+            val layaShadow = input.layaShadow
+            if (layaShadow.error.isNotBlank()) {
+                appendLine(
+                    "shadow_error=" +
+                        clean(layaShadow.error, 1200)
+                )
+            } else {
+                appendLine("shadow_samples=${layaShadow.samples}")
+                appendLine("shadow_successful=${layaShadow.successful}")
+                appendLine("shadow_unavailable=${layaShadow.unavailable}")
+                appendLine(
+                    "agreement_with_reference=" +
+                        (
+                            layaShadow.agreementWithReference
+                                ?.let(::metric)
+                                ?: "NA"
+                            )
+                )
+                appendLine(
+                    "mean_confidence=" +
+                        (
+                            layaShadow.meanConfidence
+                                ?.let(::metric)
+                                ?: "NA"
+                            )
+                )
+                appendLine(
+                    "latency_p50_ms=" +
+                        (
+                            layaShadow.latencyP50Ms
+                                ?.toString()
+                                ?: "NA"
+                            )
+                )
+                appendLine(
+                    "latency_p95_ms=" +
+                        (
+                            layaShadow.latencyP95Ms
+                                ?.toString()
+                                ?: "NA"
+                            )
+                )
+                appendLine(
+                    "last_choice=" +
+                        clean(
+                            layaShadow.lastChoice
+                                .ifBlank { "NA" },
+                            120
+                        )
+                )
+                appendLine(
+                    "last_error_code=" +
+                        clean(
+                            layaShadow.lastErrorCode
+                                .ifBlank { "NA" },
+                            160
+                        )
+                )
+            }
+            appendLine()
+
             appendLine("[E2E_FACTS]")
             appendLine(
                 "verified_project_applications=" +
@@ -468,6 +553,11 @@ object LumenaDiagnosticReport {
             name = "ollama",
             tool = "ollama.status"
         )
+        val layaProbe = probe(
+            context = app,
+            name = "laya",
+            tool = "laya.status"
+        )
 
         val evidence = evidenceView(
             context = app,
@@ -477,6 +567,8 @@ object LumenaDiagnosticReport {
         val genome = genomeView(app)
         val tinyJevCalibration =
             tinyJevCalibrationView(app)
+        val layaShadow =
+            layaShadowView(app)
 
         val input = LumenaDiagnosticInput(
             generatedAtMs = now,
@@ -569,13 +661,47 @@ object LumenaDiagnosticReport {
             evidence = evidence,
             genome = genome,
             tinyJevCalibration =
-                tinyJevCalibration
+                tinyJevCalibration,
+            layaProbe = layaProbe,
+            layaShadow = layaShadow
         )
 
         return LumenaDiagnosticFormatter.render(
             input
         )
     }
+
+    private fun layaShadowView(
+        context: Context
+    ): DiagnosticLayaShadowView =
+        runCatching {
+            val metrics =
+                LayaShadowStore.metrics(context)
+            DiagnosticLayaShadowView(
+                samples = metrics.samples,
+                successful = metrics.successful,
+                unavailable = metrics.unavailable,
+                agreementWithReference =
+                    metrics.agreementWithReference,
+                meanConfidence =
+                    metrics.meanConfidence,
+                latencyP50Ms =
+                    metrics.latencyP50Ms,
+                latencyP95Ms =
+                    metrics.latencyP95Ms,
+                lastChoice =
+                    metrics.lastChoice.orEmpty(),
+                lastErrorCode =
+                    metrics.lastErrorCode.orEmpty()
+            )
+        }.getOrElse { failure ->
+            DiagnosticLayaShadowView(
+                error =
+                    failure.message
+                        ?: failure::class.simpleName
+                        ?: "Laya shadow metrics unavailable"
+            )
+        }
 
     private fun tinyJevCalibrationView(
         context: Context

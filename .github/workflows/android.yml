@@ -69,6 +69,10 @@ jobs:
       - name: Validate Termux bridge
         run: |
           python -m py_compile termux/bridge.py
+          bash -n termux/install_laya_system1.sh
+          grep -q '941e64863193c1290bffece6c22f8ac828dffecd' termux/install_laya_system1.sh
+          grep -q '!defined(__ANDROID__)' termux/install_laya_system1.sh
+          grep -q '#include <setjmp.h>' <(curl -fsSL https://raw.githubusercontent.com/shpati/laya.cpp/941e64863193c1290bffece6c22f8ac828dffecd/laya.c)
           python -m unittest discover -s termux -p 'test_*.py' -v
           python - <<'PY'
           import importlib.util
