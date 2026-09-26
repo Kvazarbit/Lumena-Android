@@ -207,15 +207,15 @@ object CoordinatorExperiencePolicy {
             val failed = session[i]
             if (failed.ok || !failed.outcomeKnown) continue
 
-            val end = (i + MAX_SEQUENCE_STEPS).coerceAtMost(session.lastIndex)
+            val end = (i + MAX_SEQUENCE_STEPS - 1).coerceAtMost(session.lastIndex)
             // Evaluate the NEXT observed attempt, including failure. Skipping
             // failed retries until a later success would teach survivorship bias.
-            val successIndex = (i + 1..end).firstOrNull { index ->
+            val attemptIndex = (i + 1..end).firstOrNull { index ->
                 val candidate = session[index]
                 candidate.tool == failed.tool &&
                     candidate.target == failed.target
             } ?: continue
-            val segment = session.subList(i, successIndex + 1)
+            val segment = session.subList(i, attemptIndex + 1)
             if (segment.any { it.experienceId.isNullOrBlank() || !it.outcomeKnown }) continue
             if (segment.map { it.scopeHash }.distinct().size != 1) continue
             val recovered = segment.last().ok

@@ -110,4 +110,16 @@ class CognitiveExperienceFeedbackTest {
         assertTrue(CognitiveRegressionSuite.corpus(listOf(example.copy(evidenceIds = emptyList()))).isEmpty())
         assertTrue(CognitiveRegressionSuite.corpus(listOf(episode("success", true))).isEmpty())
     }
+    @Test fun sevenStepEpisodeCannotBeSilentlyTruncatedDuringExport() {
+        val events = (0..6).map { i -> CoordinatorEpisodeEvent(
+            id = "long-$i", sessionId = "s", taskId = "t",
+            tool = if (i == 0 || i == 6) "web.search" else "web.read",
+            target = if (i == 0 || i == 6) "query" else "page-$i",
+            ok = i != 0, experienceId = "long-ev-$i", at = i + 1L, surprise = 0.5
+        ) }
+        val state = events.fold(CoordinatorEpisodeState(), CoordinatorExperiencePolicy::record)
+        assertTrue(state.learnedExamples.all { it.tools.size <= 6 })
+        assertTrue(state.learnedExamples.none { it.kind == CoordinatorExampleKind.RECOVERY })
+    }
+
 }
