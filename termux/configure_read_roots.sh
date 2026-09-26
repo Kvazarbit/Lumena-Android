@@ -64,7 +64,7 @@ case "$cmd" in
     fi
 
     tmp="$CONF.tmp"
-    grep -vE "^${alias_name}=" "$CONF" > "$tmp" || true
+    awk -F= -v a="$alias_name" '$1 != a' "$CONF" > "$tmp"
     printf '%s=%s\n' "$alias_name" "$resolved" >> "$tmp"
     mv "$tmp" "$CONF"
     chmod 600 "$CONF"
@@ -78,7 +78,7 @@ case "$cmd" in
       exit 2
     fi
     tmp="$CONF.tmp"
-    grep -vE "^${alias_name}=" "$CONF" > "$tmp" || true
+    awk -F= -v a="$alias_name" '$1 != a' "$CONF" > "$tmp"
     mv "$tmp" "$CONF"
     chmod 600 "$CONF"
     echo "Removed read-only root: @$alias_name"
