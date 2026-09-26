@@ -68,6 +68,7 @@ import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.TermuxBridgeClient
+import com.lumena.android.agent.local.LayaSystem1Client
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.runtime.AgentRunCoordinator
@@ -106,6 +107,7 @@ import com.lumena.android.settings.CoordinatorExperienceStore
 import com.lumena.android.settings.ReflexExperienceRanker
 import com.lumena.android.settings.TinyJevAssetLoader
 import com.lumena.android.settings.TinyJevCalibrationStore
+import com.lumena.android.settings.LayaShadowStore
 import com.lumena.android.settings.GenomeCapsule
 import com.lumena.android.settings.GenomeUnpackedUnit
 import com.lumena.android.settings.LumenaPreferences
@@ -558,6 +560,34 @@ fun WorkflowChatScreen(
                         val option =
                             TinyJevReflexAdapter.bestOption(tinyDecision)
                                 ?: choice.best()
+
+                        val layaResult =
+                            bridgeOrNull()?.let { bridge ->
+                                runCatching {
+                                    LayaSystem1Client(bridge)
+                                        .predictReflex(
+                                            event = event,
+                                            candidates = candidates
+                                        )
+                                }.getOrNull()
+                            }
+
+                        if (layaResult != null) {
+                            runCatching {
+                                LayaShadowStore.record(
+                                    context = context,
+                                    taskId = task.id,
+                                    family =
+                                        event.actionFamily
+                                            ?.takeIf { it.isNotBlank() }
+                                            ?: event.failureClass.name,
+                                    attempt = event.attempt,
+                                    candidates = candidates,
+                                    referenceOption = option,
+                                    result = layaResult
+                                )
+                            }
+                        }
 
                         val calibrationEstimate =
                             if (

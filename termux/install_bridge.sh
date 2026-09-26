@@ -20,6 +20,11 @@ if [ -f "$HERE/configure_read_roots.sh" ]; then
   cp "$HERE/configure_read_roots.sh" "$STATE/configure_read_roots.sh"
   chmod 700 "$STATE/configure_read_roots.sh"
 fi
+
+if [ -f "$HERE/install_laya_system1.sh" ]; then
+  cp "$HERE/install_laya_system1.sh" "$STATE/install_laya_system1.sh"
+  chmod 700 "$STATE/install_laya_system1.sh"
+fi
 touch "$STATE/read_roots.conf"
 chmod 600 "$STATE/read_roots.conf"
 
@@ -46,6 +51,12 @@ Configure allowed phone folders with:
   $STATE/configure_read_roots.sh add shared "$HOME/storage/shared"
 
 For Android shared storage, run termux-setup-storage once first.
+
+Optional local learned System-1 (Laya):
+  $STATE/install_laya_system1.sh runtime
+  $STATE/install_laya_system1.sh model
+  $STATE/install_laya_system1.sh start
+
 Lumena can now start the bridge automatically when a local tool is first used.
 Manual start still works with:
   python "$STATE/bridge.py"

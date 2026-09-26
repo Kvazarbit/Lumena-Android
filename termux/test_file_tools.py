@@ -107,7 +107,7 @@ class FileReadRangeTest(unittest.TestCase):
 
         health = self.b.execute_tool("health", {})
         self.assertIn("read_only_roots=@phone", health["stdout"])
-        self.assertIn("version=0.26", health["stdout"])
+        self.assertIn("version=0.27", health["stdout"])
 
     def test_read_only_root_never_expands_write_scope(self):
         with self.assertRaises(ValueError):
