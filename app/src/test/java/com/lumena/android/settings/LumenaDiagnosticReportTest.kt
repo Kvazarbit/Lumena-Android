@@ -225,6 +225,50 @@ class LumenaDiagnosticReportTest {
     }
 
     @Test
+    fun reportIncludesLayaShadowTelemetryWithoutCallingItAccuracy() {
+        val report =
+            LumenaDiagnosticFormatter.render(
+                input().copy(
+                    layaProbe = DiagnosticProbe(
+                        name = "laya",
+                        configured = true,
+                        ok = true,
+                        stdout =
+                            """{"installed":true,"running":true,"model_ready":true}"""
+                    ),
+                    layaShadow =
+                        DiagnosticLayaShadowView(
+                            samples = 9,
+                            successful = 8,
+                            unavailable = 1,
+                            agreementWithReference = 0.75,
+                            meanConfidence = 0.61,
+                            latencyP50Ms = 42L,
+                            latencyP95Ms = 88L,
+                            lastChoice = "TRY_ALTERNATIVE"
+                        )
+                )
+            )
+
+        assertTrue(report.contains("[LAYA_SYSTEM1]"))
+        assertTrue(report.contains("mode=SHADOW"))
+        assertTrue(report.contains("authority=advisory_only"))
+        assertTrue(report.contains("laya_ok=true"))
+        assertTrue(report.contains("shadow_samples=9"))
+        assertTrue(
+            report.contains(
+                "agreement_with_reference=0.75"
+            )
+        )
+        assertTrue(report.contains("latency_p95_ms=88"))
+        assertFalse(
+            report.contains(
+                "laya_accuracy="
+            )
+        )
+    }
+
+    @Test
     fun formatterRedactsBearerSecrets() {
         val dirty = input().copy(
             bridgeProbe = DiagnosticProbe(
