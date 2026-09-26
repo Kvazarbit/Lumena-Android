@@ -861,9 +861,15 @@ class AgentController(
     private fun canFinishPublicWebPlainReply(
         state: AgentControlState
     ): Boolean {
-        if (state.intent != TaskIntent.PUBLIC_WEB) return false
         if (!state.toolUsed) return false
         if (state.verificationRequired) return false
+        if (state.intent in setOf(
+                TaskIntent.CODE_WORK,
+                TaskIntent.OLLAMA_OPERATION
+            )
+        ) {
+            return false
+        }
         if (state.requiredTools - state.completedRequiredTools != emptySet<String>()) {
             return false
         }
@@ -871,15 +877,24 @@ class AgentController(
             return false
         }
 
-        val evidenceTools = setOf(
+        val evidence = state.task.kernel.evidence
+        if (evidence.any {
+                it.phase == CognitivePhase.ACT ||
+                    it.phase == CognitivePhase.VERIFY
+            }
+        ) {
+            return false
+        }
+
+        val sourceTools = setOf(
             "web.read",
             "http.get",
             "http.json"
         )
-        return state.task.kernel.evidence.any { event ->
+        return evidence.any { event ->
             event.ok &&
                 event.phase == CognitivePhase.OBSERVE &&
-                event.tool in evidenceTools
+                event.tool in sourceTools
         }
     }
 
