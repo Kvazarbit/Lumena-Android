@@ -41,15 +41,35 @@ import sys
 
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
-old = "#if defined(__GNUC__) || defined(__clang__)"
-new = "#if (defined(__GNUC__) || defined(__clang__)) && !defined(__ANDROID__)"
+old = """#if defined(__GNUC__) || defined(__clang__)
+/* The compiler builtins restore registers without unwinding, which is robust across threads and on 64-bit MinGW
+ * (where longjmp goes through SEH unwinding). */
+typedef void *laya_jmp[5];
+#define LAYA_SETJMP(b) __builtin_setjmp(b)
+#define LAYA_LONGJMP(b) __builtin_longjmp((b), 1)
+#else
+typedef jmp_buf laya_jmp;
+#define LAYA_SETJMP(b) setjmp(b)
+#define LAYA_LONGJMP(b) longjmp((b), 1)
+#endif"""
+
+new = """#if (defined(__GNUC__) || defined(__clang__)) && !defined(__ANDROID__)
+/* The compiler builtins restore registers without unwinding, which is robust across threads and on 64-bit MinGW
+ * (where longjmp goes through SEH unwinding). */
+typedef void *laya_jmp[5];
+#define LAYA_SETJMP(b) __builtin_setjmp(b)
+#define LAYA_LONGJMP(b) __builtin_longjmp((b), 1)
+#else
+typedef jmp_buf laya_jmp;
+#define LAYA_SETJMP(b) setjmp(b)
+#define LAYA_LONGJMP(b) longjmp((b), 1)
+#endif"""
 
 if new not in text:
     count = text.count(old)
     if count != 1:
         raise SystemExit(
-            f"Refusing to patch laya.c: expected exactly one setjmp compiler "
-            f"guard, found {count}"
+            f"Refusing to patch laya.c: expected exactly one setjmp block, found {count}"
         )
     text = text.replace(old, new, 1)
     path.write_text(text, encoding="utf-8")
