@@ -16,6 +16,13 @@ mkdir -p "$STATE" "$WORKSPACE"
 cp "$HERE/bridge.py" "$STATE/bridge.py"
 chmod 700 "$STATE/bridge.py"
 
+if [ -f "$HERE/configure_read_roots.sh" ]; then
+  cp "$HERE/configure_read_roots.sh" "$STATE/configure_read_roots.sh"
+  chmod 700 "$STATE/configure_read_roots.sh"
+fi
+touch "$STATE/read_roots.conf"
+chmod 600 "$STATE/read_roots.conf"
+
 # Allow Lumena Android to invoke Termux's documented RUN_COMMAND service.
 # The APK can only start the fixed ~/.lumena/bridge.py path; tool access remains
 # restricted by bridge.py's allow-list and 127.0.0.1 binding.
@@ -33,9 +40,12 @@ cat <<MSG
 
 Lumena bridge installed.
 Workspace (read/write): $WORKSPACE
-Read-only repo root: $HOME/Lumena-Android
-Read-only alias: @Lumena-Android
+Persistent read-only roots config: $STATE/read_roots.conf
+Configure allowed phone folders with:
+  $STATE/configure_read_roots.sh list
+  $STATE/configure_read_roots.sh add shared "$HOME/storage/shared"
 
+For Android shared storage, run termux-setup-storage once first.
 Lumena can now start the bridge automatically when a local tool is first used.
 Manual start still works with:
   python "$STATE/bridge.py"

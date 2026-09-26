@@ -649,6 +649,76 @@ class AgentControllerTest {
     }
 
     @Test
+    fun missingInspectBatchArgsUsesSchemaRepairWithoutProtocolFailure() {
+        val localTask = TaskState(
+            id = "schema-repair",
+            projectId = null,
+            goal = "Find Bitcoin files on the phone.",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val initial = controller.initial(localTask)
+
+        val repair = controller.interpret(
+            """{"tool":"inspect.batch","args":{}}""",
+            initial
+        )
+
+        assertTrue(repair is ControllerInstruction.AskModelAgain)
+        repair as ControllerInstruction.AskModelAgain
+        assertEquals(0, repair.state.protocolRetries)
+        assertEquals(1, repair.state.schemaRepairs)
+        assertTrue(repair.state.task.status == TaskStatus.WAITING_MODEL)
+        assertTrue(repair.feedback.contains("TOOL_SCHEMA_REPAIR"))
+        assertTrue(repair.feedback.contains("requests"))
+        assertFalse(repair.feedback.contains("PROTOCOL_REPAIR_MODE"))
+
+        val corrected = controller.interpret(
+            """{"tool":"inspect.batch","args":{"requests":"[{\"tool\":\"workspace.list\",\"args\":{}}]"}}""",
+            repair.state
+        )
+
+        assertTrue(corrected is ControllerInstruction.Execute)
+        corrected as ControllerInstruction.Execute
+        assertEquals(0, corrected.state.protocolRetries)
+        assertEquals(0, corrected.state.schemaRepairs)
+        assertTrue(corrected.call.tool == "inspect.batch")
+    }
+
+    @Test
+    fun repeatedMissingRequiredArgsDegradesPartialInsteadOfFailed() {
+        val localTask = TaskState(
+            id = "schema-repair-bounded",
+            projectId = null,
+            goal = "Inspect local files.",
+            status = TaskStatus.WAITING_MODEL
+        )
+        var state = controller.initial(localTask)
+
+        repeat(2) {
+            val repair = controller.interpret(
+                """{"tool":"inspect.batch","args":{}}""",
+                state
+            )
+            assertTrue(repair is ControllerInstruction.AskModelAgain)
+            repair as ControllerInstruction.AskModelAgain
+            assertEquals(0, repair.state.protocolRetries)
+            state = repair.state
+        }
+
+        val bounded = controller.interpret(
+            """{"tool":"inspect.batch","args":{}}""",
+            state
+        )
+
+        assertTrue(bounded is ControllerInstruction.Finish)
+        bounded as ControllerInstruction.Finish
+        assertTrue(bounded.state.task.status == TaskStatus.PARTIAL)
+        assertFalse(bounded.state.task.status == TaskStatus.FAILED)
+        assertEquals(0, bounded.state.protocolRetries)
+        assertTrue(bounded.text.contains("Частково виконано"))
+    }
+
+    @Test
     fun repeatedWorkspaceListReplansToContentSearchWithoutProtocolFailure() {
         val localTask = TaskState(
             id = "duplicate-list-replan",

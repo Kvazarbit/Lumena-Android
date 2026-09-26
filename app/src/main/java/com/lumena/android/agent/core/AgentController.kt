@@ -11,6 +11,7 @@ data class AgentControlState(
     val plan: List<String> = emptyList(),
     val toolUsed: Boolean = false,
     val protocolRetries: Int = 0,
+    val schemaRepairs: Int = 0,
     val protocolNormalizations: Int = 0,
     val lastNormalizationRule: String? = null,
     val modelFailures: Int = 0,
@@ -271,8 +272,22 @@ class AgentController(
 
         val validation = ToolRegistry.validate(decision)
         if (!validation.allowed || validation.canonicalTool == null) {
+            val problem =
+                validation.error ?: "Unknown tool ${decision.tool}"
+            val knownTool = validation.canonicalTool
+            if (
+                knownTool != null &&
+                problem.startsWith("Missing required args:")
+            ) {
+                return toolSchemaRepair(
+                    state = state,
+                    tool = knownTool,
+                    problem = problem
+                )
+            }
+
             val event = FailureEvents.policyDenied(
-                reason = validation.error ?: "Unknown tool ${decision.tool}",
+                reason = problem,
                 actionFamily = ToolRegistry.canonicalize(decision.tool),
                 effectClass = ToolRegistry.get(decision.tool)?.risk?.let {
                     if (it == ToolRisk.READ_ONLY) EffectClass.READ_ONLY
@@ -509,6 +524,7 @@ class AgentController(
         val next = state.copy(
             plan = nextPlan,
             protocolRetries = 0,
+            schemaRepairs = 0,
             modelFailures = 0,
             lastToolSignature = signature,
             identicalToolCalls = identical,
@@ -523,6 +539,79 @@ class AgentController(
             call = canonical,
             requiresConfirmation = validation.requiresConfirmation,
             state = next
+        )
+    }
+
+    private fun toolSchemaRepair(
+        state: AgentControlState,
+        tool: String,
+        problem: String
+    ): ControllerInstruction {
+        val repairs = state.schemaRepairs + 1
+        val schema = ToolRegistry.renderForPrompt(
+            allowed = setOf(tool),
+            compact = false
+        )
+        val toolSpecific =
+            if (tool == "inspect.batch") {
+                """
+                For inspect.batch, args.requests must be ONE string containing a JSON array.
+                Example value for requests:
+                [{"tool":"file.search","args":{"query":"bitcoin","path":"@shared"}}]
+                """.trimIndent()
+            } else {
+                ""
+            }
+
+        if (repairs > 2) {
+            val report =
+                "Частково виконано. Модель повторно не сформувала обов'язкові аргументи " +
+                    "для інструмента $tool; інструмент не виконувався. " +
+                    "Використай уже перевірені результати або продовж із іншим валідним інструментом."
+            return ControllerInstruction.Finish(
+                report,
+                state.copy(
+                    protocolRetries = 0,
+                    schemaRepairs = repairs,
+                    task = state.task.copy(
+                        status = TaskStatus.PARTIAL,
+                        lastResult = report.take(4_000),
+                        errors = (
+                            state.task.errors +
+                                "TOOL_SCHEMA_REPAIR exhausted: $tool · $problem"
+                            ).takeLast(8)
+                    )
+                )
+            )
+        }
+
+        val feedback = buildString {
+            appendLine(
+                "TOOL_SCHEMA_REPAIR attempt=$repairs/2 " +
+                    "(valid model protocol; no tool executed; no protocol failure)."
+            )
+            appendLine(problem)
+            appendLine("Required tool schema:")
+            appendLine(schema)
+            if (toolSpecific.isNotBlank()) {
+                appendLine(toolSpecific)
+            }
+            appendLine(
+                "Return exactly one corrected JSON tool object using the required args. " +
+                    "Do not repeat the malformed call and do not invent TOOL_RESULT."
+            )
+        }.take(2_400)
+
+        return ControllerInstruction.AskModelAgain(
+            feedback = feedback,
+            state = state.copy(
+                protocolRetries = 0,
+                schemaRepairs = repairs,
+                modelFailures = 0,
+                task = state.task.copy(
+                    status = TaskStatus.WAITING_MODEL
+                )
+            )
         )
     }
 
