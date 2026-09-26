@@ -17,7 +17,8 @@ data class PersistedChatImage(
 data class PersistedChatMessage(
     val role: String,
     val text: String,
-    val images: List<PersistedChatImage> = emptyList()
+    val images: List<PersistedChatImage> = emptyList(),
+    val id: String = java.util.UUID.randomUUID().toString()
 )
 
 data class PersistedHistoryMessage(
