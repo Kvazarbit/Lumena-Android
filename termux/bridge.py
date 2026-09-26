@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.26
+Lumena Termux Bridge v0.27
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -43,10 +43,19 @@ HOST = "127.0.0.1"
 PORT = int(os.environ.get("LUMENA_BRIDGE_PORT", "8765"))
 OLLAMA_HOST = "127.0.0.1:11434"
 OLLAMA_API = f"http://{OLLAMA_HOST}"
+LAYA_HOST = "127.0.0.1"
+LAYA_PORT = int(os.environ.get("LUMENA_LAYA_PORT", "29417"))
+LAYA_API = f"http://{LAYA_HOST}:{LAYA_PORT}"
 HOME = Path.home()
 STATE_DIR = HOME / ".lumena"
 TOKEN_FILE = STATE_DIR / "bridge_token"
 OLLAMA_LOG = STATE_DIR / "ollama.log"
+LAYA_STATE_DIR = STATE_DIR / "laya"
+LAYA_BIN = Path(os.environ.get("LUMENA_LAYA_BIN", str(LAYA_STATE_DIR / "laya"))).expanduser()
+LAYA_MODEL_DIR = Path(os.environ.get("LUMENA_LAYA_MODEL_DIR", str(HOME / "models" / "laya"))).expanduser()
+LAYA_LOG = LAYA_STATE_DIR / "laya.log"
+LAYA_SOURCE_COMMIT = "941e64863193c1290bffece6c22f8ac828dffecd"
+LAYA_REQUIRED_FILES = ("model.safetensors", "rl_agent_config.json", "tokenizer.json", "config.json")
 CONTEXT_CACHE_FILE = STATE_DIR / "context_snapshot.json"
 SEARCH_DIAGNOSTICS_FILE = STATE_DIR / "web_search_diagnostics.json"
 READ_ROOTS_FILE = Path(
@@ -1780,6 +1789,191 @@ def backup_file(path: Path) -> Path:
     return backup
 
 
+def _laya_status_payload() -> dict[str, Any]:
+    binary_present = LAYA_BIN.is_file() and os.access(LAYA_BIN, os.X_OK)
+    model_files = {name: (LAYA_MODEL_DIR / name).is_file() for name in LAYA_REQUIRED_FILES}
+    model_ready = all(model_files.values())
+    running = False
+    service: dict[str, Any] | None = None
+    error = None
+    try:
+        with urllib.request.urlopen(f"{LAYA_API}/status", timeout=1.5) as response:
+            raw = response.read(128 * 1024)
+        decoded = raw.decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(decoded)
+            service = parsed if isinstance(parsed, dict) else {"raw": decoded[:4000]}
+        except json.JSONDecodeError:
+            service = {"raw": decoded[:4000]}
+        running = True
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+
+    return {
+        "installed": binary_present,
+        "running": running,
+        "model_ready": model_ready,
+        "binary": str(LAYA_BIN),
+        "model_dir": str(LAYA_MODEL_DIR),
+        "model_files": model_files,
+        "endpoint": LAYA_API,
+        "source_commit": LAYA_SOURCE_COMMIT,
+        "service": service,
+        "probe_error": error,
+        "authority": "shadow-only; never executes Lumena tools",
+    }
+
+
+def laya_status() -> dict[str, Any]:
+    payload = _laya_status_payload()
+    return {
+        "ok": True,
+        "exitCode": 0,
+        "stdout": json.dumps(payload, ensure_ascii=False, indent=2),
+        "stderr": "",
+        "error": None,
+    }
+
+
+def laya_start() -> dict[str, Any]:
+    payload = _laya_status_payload()
+    if payload["running"]:
+        return laya_status()
+    if not payload["installed"]:
+        return {
+            "ok": False,
+            "exitCode": None,
+            "stdout": "",
+            "stderr": "",
+            "error": "Laya runtime is not installed. Run ~/.lumena/install_laya_system1.sh runtime",
+            "errorCode": "LAYA_NOT_INSTALLED",
+            "failureClass": "AUTH_OR_CONFIG",
+            "retryable": False,
+            "dependency": "laya_system1",
+        }
+    if not payload["model_ready"]:
+        return {
+            "ok": False,
+            "exitCode": None,
+            "stdout": "",
+            "stderr": "",
+            "error": "Laya model files are incomplete. Run ~/.lumena/install_laya_system1.sh model",
+            "errorCode": "LAYA_MODEL_MISSING",
+            "failureClass": "AUTH_OR_CONFIG",
+            "retryable": False,
+            "dependency": "laya_system1",
+        }
+
+    LAYA_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    log = open(LAYA_LOG, "ab", buffering=0)
+    subprocess.Popen(
+        [str(LAYA_BIN), str(LAYA_MODEL_DIR), "--serve", str(LAYA_PORT), "--bind", LAYA_HOST],
+        cwd=str(LAYA_STATE_DIR),
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
+    for _ in range(120):
+        time.sleep(0.25)
+        current = _laya_status_payload()
+        if current["running"]:
+            return laya_status()
+    return {
+        "ok": False,
+        "exitCode": None,
+        "stdout": "",
+        "stderr": "",
+        "error": "Laya System-1 did not become ready within 30 seconds",
+        "errorCode": "LAYA_START_TIMEOUT",
+        "failureClass": "MODEL_RUNTIME",
+        "retryable": True,
+        "dependency": "laya_system1",
+    }
+
+
+def _validate_laya_request(raw: str) -> dict[str, Any]:
+    if not raw.strip():
+        raise ValueError("laya.predict requires request")
+    if len(raw.encode("utf-8")) > 64 * 1024:
+        raise ValueError("laya.predict request exceeds 64 KiB")
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("laya.predict request must be a JSON object")
+    if "state" not in payload:
+        raise ValueError("laya.predict request requires state")
+    questions = payload.get("questions")
+    if not isinstance(questions, dict) or not (1 <= len(questions) <= 16):
+        raise ValueError("laya.predict questions must contain 1..16 items")
+    state_encoded = json.dumps(payload["state"], ensure_ascii=False)
+    if len(state_encoded.encode("utf-8")) > 24 * 1024:
+        raise ValueError("laya.predict state exceeds 24 KiB")
+    for qid, qdef in questions.items():
+        if not isinstance(qid, str) or not qid or len(qid) > 80:
+            raise ValueError("laya.predict question id is invalid")
+        if not isinstance(qdef, dict) or qdef.get("type") != "choice":
+            raise ValueError("laya.predict shadow mode supports choice questions only")
+        criteria = qdef.get("criteria")
+        if isinstance(criteria, dict):
+            count = len(criteria)
+        elif isinstance(criteria, list):
+            count = len(criteria)
+        else:
+            raise ValueError("laya.predict choice criteria must be an object or array")
+        if not (1 <= count <= 32):
+            raise ValueError("laya.predict choice criteria must contain 1..32 options")
+    return payload
+
+
+def laya_predict(args: dict[str, Any]) -> dict[str, Any]:
+    raw = str(args.get("request", ""))
+    _validate_laya_request(raw)
+    status = _laya_status_payload()
+    if not status["running"]:
+        return {
+            "ok": False,
+            "exitCode": None,
+            "stdout": "",
+            "stderr": "",
+            "error": "Laya System-1 is not running",
+            "errorCode": "LAYA_NOT_RUNNING",
+            "failureClass": "MODEL_RUNTIME",
+            "retryable": True,
+            "dependency": "laya_system1",
+        }
+
+    timeout = _bounded_int(args.get("timeout"), 30, 2, 120)
+    request = urllib.request.Request(
+        f"{LAYA_API}/predict",
+        data=raw.encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read(256 * 1024 + 1)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read(4096).decode("utf-8", errors="replace")
+        raise ValueError(f"Laya HTTP {exc.code}: {detail[:1000]}") from exc
+    except urllib.error.URLError as exc:
+        raise ValueError(f"Laya request failed: {exc.reason}") from exc
+
+    if len(body) > 256 * 1024:
+        raise ValueError("Laya response exceeds 256 KiB")
+    decoded = body.decode("utf-8", errors="strict")
+    parsed = json.loads(decoded)
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("answers"), dict):
+        raise ValueError("Laya returned an invalid typed-decision response")
+    return {
+        "ok": True,
+        "exitCode": 0,
+        "stdout": decoded,
+        "stderr": "",
+        "error": None,
+    }
+
+
 def ollama_binary() -> str:
     path = shutil.which("ollama")
     if not path:
@@ -2131,7 +2325,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + alias for alias, root in READONLY_ALIASES.items() if root.exists()) or '(none)'}\n"
                 f"read_roots_config={READ_ROOTS_FILE}\n"
-                f"version=0.26\n"
+                f"version=0.27\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
                 f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
@@ -2159,6 +2353,15 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
             "stderr": "",
             "error": None,
         }
+
+    if tool == "laya.status":
+        return laya_status()
+
+    if tool == "laya.start":
+        return laya_start()
+
+    if tool == "laya.predict":
+        return laya_predict(args)
 
     if tool == "system.info":
         return system_info()
@@ -2467,7 +2670,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.26",
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.27",
                              "bridge_run_id": BRIDGE_RUN_ID})
             return
         self._json(404, {"ok": False, "error": "Not found"})
@@ -2521,7 +2724,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     _mark_interrupted_search_from_previous_run()
-    print("Lumena Termux Bridge v0.25")
+    print("Lumena Termux Bridge v0.27")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")
