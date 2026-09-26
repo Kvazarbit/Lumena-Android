@@ -861,16 +861,36 @@ class AgentController(
     private fun canFinishPublicWebPlainReply(
         state: AgentControlState
     ): Boolean {
-        if (state.intent != TaskIntent.PUBLIC_WEB) return false
-        if (!state.toolUsed) return false
-        if (state.verificationRequired) return false
-        if (state.requiredTools - state.completedRequiredTools != emptySet<String>()) {
+        if (
+            state.intent !in setOf(
+                TaskIntent.PUBLIC_WEB,
+                TaskIntent.GENERAL
+            )
+        ) {
             return false
         }
-        if (ContextKernel.completionBlocker(state.task.kernel) != null) {
+        if (!state.toolUsed) return false
+        if (state.verificationRequired) return false
+        if (
+            (state.requiredTools - state.completedRequiredTools)
+                .isNotEmpty()
+        ) {
+            return false
+        }
+        if (
+            ContextKernel.completionBlocker(
+                state.task.kernel
+            ) != null
+        ) {
             return false
         }
 
+        return hasVerifiedWebSourceEvidence(state)
+    }
+
+    private fun hasVerifiedWebSourceEvidence(
+        state: AgentControlState
+    ): Boolean {
         val evidenceTools = setOf(
             "web.read",
             "http.get",
@@ -883,11 +903,29 @@ class AgentController(
         }
     }
 
+    private fun hasWebResearchEvidence(
+        state: AgentControlState
+    ): Boolean =
+        state.task.kernel.evidence.any { event ->
+            event.tool in setOf(
+                "web.search",
+                "web.read",
+                "http.get",
+                "http.json"
+            )
+        }
+
     private fun recoverPlainReply(state: AgentControlState, text: String, problem: String): ControllerInstruction {
         if (state.protocolRetries == 0) {
-            val researchHint = if (state.intent == TaskIntent.PUBLIC_WEB)
-                " Search snippets alone are not verification: read relevant source URLs with web.read and cite them."
-            else ""
+            val researchHint =
+                if (
+                    state.intent == TaskIntent.PUBLIC_WEB ||
+                    hasWebResearchEvidence(state)
+                ) {
+                    " Search snippets alone are not verification: read relevant source URLs with web.read and cite them."
+                } else {
+                    ""
+                }
             return protocolRetry(state, "$problem$researchHint " +
                 "Choose ONE next tool call, or {\"done\":true,\"summary\":\"verified result\"} only after completing checks, " +
                 "or {\"partial\":true,\"summary\":\"what is known and what remains unverified\"}. JSON only.")
