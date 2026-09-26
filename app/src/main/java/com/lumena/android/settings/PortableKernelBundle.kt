@@ -338,7 +338,8 @@ object PortableKernelPolicy {
             require(example.id.length in 1..128)
             require(
                 example.kind == CoordinatorExampleKind.RECOVERY.name ||
-                    example.kind == CoordinatorExampleKind.VERIFIED_SEQUENCE.name
+                    example.kind == CoordinatorExampleKind.VERIFIED_SEQUENCE.name ||
+                    example.kind == CoordinatorExampleKind.FAILED_RECOVERY.name
             )
             require(example.sourceSessionHash.matches(Regex("[0-9a-f]{8,64}")))
             require(example.tools.isNotEmpty() && example.tools.size <= 6)
@@ -515,7 +516,9 @@ object PortableKernelPolicy {
                 .orEmpty()
             "$tool$target"
         }.joinToString(" -> ")
-        val kind = if (seed.kind == CoordinatorExampleKind.RECOVERY.name) {
+        val kind = if (seed.kind == CoordinatorExampleKind.FAILED_RECOVERY.name) {
+            "PORTABLE FAILED RECOVERY COUNTEREXAMPLE"
+        } else if (seed.kind == CoordinatorExampleKind.RECOVERY.name) {
             "PORTABLE RECOVERY EXAMPLE"
         } else {
             "PORTABLE VERIFIED EXECUTION SEQUENCE"

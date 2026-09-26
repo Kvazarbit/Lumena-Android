@@ -190,7 +190,8 @@ fun CompanionScreen() {
                         request = plan.request,
                         result = result,
                         experienceId = experienceRef,
-                        modelId = contributorModelId
+                        modelId = contributorModelId,
+                        scopeId = command.sessionId ?: "global"
                     )
                 }
             }.getOrNull()
@@ -233,7 +234,9 @@ fun CompanionScreen() {
                         CoordinatorExperienceStore.relevant(
                             context = context,
                             query = memoryQuery,
-                            limit = 2
+                            limit = 2,
+                            scopeId = command.sessionId ?: "global",
+                            modelId = contributorModelId
                         ) +
                             ExperienceMemoryStore.relevant(
                                 context = context,

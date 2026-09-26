@@ -162,7 +162,7 @@ object ConstitutionContributionPolicy {
         var next = state
         examples
             .asSequence()
-            .filter { it.kind == CoordinatorExampleKind.RECOVERY }
+            .filter { it.kind in setOf(CoordinatorExampleKind.RECOVERY, CoordinatorExampleKind.FAILED_RECOVERY) }
             .sortedWith(
                 compareBy<CoordinatorExecutionExample> { it.updatedAt }
                     .thenBy { it.id }
@@ -187,7 +187,8 @@ object ConstitutionContributionPolicy {
         example: CoordinatorExecutionExample,
         contributorModelId: String? = null
     ): ConstitutionRule? {
-        if (example.kind != CoordinatorExampleKind.RECOVERY) return null
+        if (example.kind !in setOf(CoordinatorExampleKind.RECOVERY, CoordinatorExampleKind.FAILED_RECOVERY)) return null
+        val failed = example.kind == CoordinatorExampleKind.FAILED_RECOVERY
         if (example.updatedAt <= 0) return null
         if (example.evidenceIds.isEmpty()) return null
         if (example.tools.size < 2 || example.tools.size > 6) return null
@@ -210,12 +211,16 @@ object ConstitutionContributionPolicy {
         val claimKey = "recovery:$failedFamily:$pattern"
             .take(160)
 
-        val statement = if (middle.isEmpty()) {
+        val statement = if (failed) {
+            "For $failedFamily failure in this scope, this recovery pattern has a verified failed attempt; do not assume it will recover the operation. Reinspect current conditions before reuse."
+        } else if (middle.isEmpty()) {
             "For $failedFamily failure in this scope, a bounded retry of the same operation has a verified recovery example; recheck current state before reuse."
         } else {
             "For $failedFamily failure in this scope, verified recovery used intermediate discovery/repair steps before the same operation succeeded; prefer a state-aware alternative before retrying."
         }
-        val rationale = if (middle.isEmpty()) {
+        val rationale = if (failed) {
+            "A linked local attempt ended in another failure. This is a counterexample to unconditional reuse, not proof that the approach can never work. Conflicting positive experience requires review."
+        } else if (middle.isEmpty()) {
             "This pattern is derived from verified TOOL_RESULT-linked recovery episodes, not from model prose. It is advisory and remains subject to current state, budgets, ToolRegistry, ToolGate and confirmation."
         } else {
             "Verified recovery episodes show that repeating the failed operation only after intermediate discovery/repair can be more useful than an unchanged retry. The rule is scoped, advisory, and must be rechecked against current state."
@@ -270,7 +275,7 @@ object ConstitutionContributionPolicy {
         val proposed = ConstitutionGenomePolicy.propose(
             source = firstSource,
             claimKey = claimKey,
-            stance = ConstitutionStance.AFFIRM,
+            stance = if (failed) ConstitutionStance.REJECT else ConstitutionStance.AFFIRM,
             kind = ConstitutionRuleKind.RECOVERY,
             statement = statement,
             rationale = rationale,

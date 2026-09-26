@@ -651,4 +651,27 @@ class PortableKernelBundleTest {
     }
 
 
+    @Test
+    fun failedRecoveryExportRoundTripKeepsNegativeMeaning() {
+        val example = CoordinatorExecutionExample(
+            id = "negative-example", kind = CoordinatorExampleKind.FAILED_RECOVERY,
+            sourceSessionHash = "abcdef1234567890",
+            tools = listOf("web.search", "web.search"), targets = listOf("query=x", "query=x"),
+            evidenceIds = listOf("e1", "e2"), updatedAt = 900, surprise = 0.9,
+            text = "untrusted text must not be copied"
+        )
+        val payload = PortableKernelPolicy.buildPayload(
+            localAnchors = emptyList(), localRules = emptyList(), imported = null,
+            exportedAt = 1000, sourceAppVersionCode = 29,
+            sourceDeviceHash = PortableKernelPolicy.hash("device"),
+            localExecutionExamples = listOf(example)
+        )
+        val decoded = PortableKernelCodec.decode(PortableKernelCodec.encode(payload))
+        assertEquals("FAILED_RECOVERY", decoded.executionExamples.single().kind)
+        val advice = PortableKernelPolicy.advice(decoded, "web search", 4).single()
+        assertTrue(advice.contains("FAILED RECOVERY COUNTEREXAMPLE"))
+        assertTrue(advice.contains("revalidate locally"))
+        assertFalse(advice.contains("untrusted text"))
+    }
+
 }

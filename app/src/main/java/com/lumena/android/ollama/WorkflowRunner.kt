@@ -804,6 +804,11 @@ class WorkflowRunner(
         return buildList {
             add(OllamaMessage("system", mergedSystem))
             addAll(history.filterNot { it.role == "system" })
+            // A fresh, bounded user turn survives backend history compaction.
+            // It is derived only from current task state, never past chats.
+            com.lumena.android.agent.core.TaskExecutionRecap.render(state)
+                .takeIf { it.isNotBlank() }
+                ?.let { add(OllamaMessage("user", it)) }
         }
     }
 
