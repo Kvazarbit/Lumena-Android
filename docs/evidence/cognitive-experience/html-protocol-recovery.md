@@ -48,3 +48,11 @@ HTTP fixtures for output limits across all fallback paths, and a WorkflowRunner
 test requiring normal write approval after truncated-output recovery. The
 fixtures do not run Gemma or create an aquarium on the phone. That end-to-end
 result remains pending a corrected-build device test.
+
+The first full CI run completed 593 tests with one failure in the new workflow
+fixture: it incorrectly expected the consecutive protocol retry counter to
+remain at one after a valid tool envelope. The corrected fixture checks the
+WAITING_MODEL transition at one and the normal reset to zero at confirmation.
+Truncation details are now also retained in task errors after recovery so the
+diagnostic retains that observation. No approval or no-execution assertion was
+removed.
