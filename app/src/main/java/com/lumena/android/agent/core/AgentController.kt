@@ -900,9 +900,21 @@ class AgentController(
 
     private fun recoverPlainReply(state: AgentControlState, text: String, problem: String): ControllerInstruction {
         if (state.protocolRetries == 0) {
-            val researchHint = if (state.intent == TaskIntent.PUBLIC_WEB)
-                " Search snippets alone are not verification: read relevant source URLs with web.read and cite them."
-            else ""
+            val hasSuccessfulWebSearch =
+                state.task.kernel.evidence.any {
+                    it.ok &&
+                        it.phase == CognitivePhase.OBSERVE &&
+                        it.tool == "web.search"
+                }
+            val researchHint =
+                if (
+                    state.intent == TaskIntent.PUBLIC_WEB ||
+                    hasSuccessfulWebSearch
+                ) {
+                    " Search snippets alone are not verification: read relevant source URLs with web.read and cite them."
+                } else {
+                    ""
+                }
             return protocolRetry(state, "$problem$researchHint " +
                 "Choose ONE next tool call, or {\"done\":true,\"summary\":\"verified result\"} only after completing checks, " +
                 "or {\"partial\":true,\"summary\":\"what is known and what remains unverified\"}. JSON only.")
