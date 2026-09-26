@@ -872,6 +872,20 @@ class WorkflowRunner(
             append(advice.evidenceCount)
             append("; calibrated=")
             append(advice.calibrated)
+            if (
+                advice.calibrated &&
+                advice.calibratedConfidence != null
+            ) {
+                append("; calibratedConfidence=")
+                append(
+                    (
+                        advice.calibratedConfidence
+                            .coerceIn(0.0, 1.0) * 100.0
+                        ).toInt()
+                )
+                append("%; calibrationSamples=")
+                append(advice.calibrationSamples)
+            }
             append(". The model must choose the next action through the normal ")
             append("protocol; ToolRegistry, ToolGate and confirmation remain authoritative.")
         }.take(900)
@@ -887,10 +901,27 @@ class WorkflowRunner(
             .joinToString(" ")
             .take(2_000)
 
+        val calibrationTrace =
+            if (
+                advice.calibrated &&
+                advice.calibratedConfidence != null
+            ) {
+                " · calibrated=" +
+                    (
+                        advice.calibratedConfidence
+                            .coerceIn(0.0, 1.0) * 100.0
+                        ).toInt() +
+                    "% · calibrationSamples=" +
+                    advice.calibrationSamples
+            } else {
+                ""
+            }
+
         onProgress(
             "REFLEX ADVICE · " + advice.option.name +
                 " · strength=" + strengthPercent + "%" +
                 " · evidence=" + advice.evidenceCount +
+                calibrationTrace +
                 " · advisory only"
         )
 

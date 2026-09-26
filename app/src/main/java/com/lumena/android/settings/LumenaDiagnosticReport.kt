@@ -74,6 +74,20 @@ data class DiagnosticGenomeView(
     val rules: List<DiagnosticGeneRow> = emptyList()
 )
 
+data class DiagnosticTinyJevCalibrationView(
+    val error: String = "",
+    val pending: Int = 0,
+    val resolved: Int = 0,
+    val accuracy: Double = 0.0,
+    val brierScore: Double = 0.0,
+    val ece: Double = 0.0,
+    val selectiveThreshold: Double = 0.75,
+    val selectiveCoverage: Double = 0.0,
+    val selectiveAccuracy: Double? = null,
+    val latencyP50Ms: Long? = null,
+    val latencyP95Ms: Long? = null
+)
+
 data class LumenaDiagnosticInput(
     val generatedAtMs: Long,
     val packageName: String,
@@ -101,7 +115,9 @@ data class LumenaDiagnosticInput(
     val bridgeProbe: DiagnosticProbe,
     val ollamaProbe: DiagnosticProbe,
     val evidence: DiagnosticEvidenceView,
-    val genome: DiagnosticGenomeView
+    val genome: DiagnosticGenomeView,
+    val tinyJevCalibration: DiagnosticTinyJevCalibrationView =
+        DiagnosticTinyJevCalibrationView()
 )
 
 object LumenaDiagnosticFormatter {
@@ -272,6 +288,63 @@ object LumenaDiagnosticFormatter {
             }
             appendLine()
 
+            appendLine("[TINYJEV_CALIBRATION]")
+            val calibration = input.tinyJevCalibration
+            if (calibration.error.isNotBlank()) {
+                appendLine(
+                    "error=" +
+                        clean(calibration.error, 1200)
+                )
+            } else {
+                appendLine("pending=${calibration.pending}")
+                appendLine("resolved=${calibration.resolved}")
+                appendLine(
+                    "accuracy=" +
+                        metric(calibration.accuracy)
+                )
+                appendLine(
+                    "brier=" +
+                        metric(calibration.brierScore)
+                )
+                appendLine(
+                    "ece=" +
+                        metric(calibration.ece)
+                )
+                appendLine(
+                    "selective_threshold=" +
+                        metric(calibration.selectiveThreshold)
+                )
+                appendLine(
+                    "selective_coverage=" +
+                        metric(calibration.selectiveCoverage)
+                )
+                appendLine(
+                    "selective_accuracy=" +
+                        (
+                            calibration.selectiveAccuracy
+                                ?.let(::metric)
+                                ?: "NA"
+                            )
+                )
+                appendLine(
+                    "latency_p50_ms=" +
+                        (
+                            calibration.latencyP50Ms
+                                ?.toString()
+                                ?: "NA"
+                            )
+                )
+                appendLine(
+                    "latency_p95_ms=" +
+                        (
+                            calibration.latencyP95Ms
+                                ?.toString()
+                                ?: "NA"
+                            )
+                )
+            }
+            appendLine()
+
             appendLine("[E2E_FACTS]")
             appendLine(
                 "verified_project_applications=" +
@@ -333,6 +406,16 @@ object LumenaDiagnosticFormatter {
         }
     }
 
+    private fun metric(
+        value: Double
+    ): String {
+        val bounded = value.coerceIn(0.0, 1.0)
+        val rounded =
+            kotlin.math.round(bounded * 10_000.0) /
+                10_000.0
+        return rounded.toString()
+    }
+
     internal fun clean(
         value: String,
         maxChars: Int
@@ -392,6 +475,8 @@ object LumenaDiagnosticReport {
             now = now
         )
         val genome = genomeView(app)
+        val tinyJevCalibration =
+            tinyJevCalibrationView(app)
 
         val input = LumenaDiagnosticInput(
             generatedAtMs = now,
@@ -482,13 +567,49 @@ object LumenaDiagnosticReport {
             bridgeProbe = bridgeProbe,
             ollamaProbe = ollamaProbe,
             evidence = evidence,
-            genome = genome
+            genome = genome,
+            tinyJevCalibration =
+                tinyJevCalibration
         )
 
         return LumenaDiagnosticFormatter.render(
             input
         )
     }
+
+    private fun tinyJevCalibrationView(
+        context: Context
+    ): DiagnosticTinyJevCalibrationView =
+        runCatching {
+            val state =
+                TinyJevCalibrationStore.load(context)
+            val metrics =
+                TinyJevCalibrationPolicy.metrics(state)
+            DiagnosticTinyJevCalibrationView(
+                pending = state.pending.size,
+                resolved = metrics.samples,
+                accuracy = metrics.accuracy,
+                brierScore = metrics.brierScore,
+                ece = metrics.ece,
+                selectiveThreshold =
+                    metrics.selectiveThreshold,
+                selectiveCoverage =
+                    metrics.selectiveCoverage,
+                selectiveAccuracy =
+                    metrics.selectiveAccuracy,
+                latencyP50Ms =
+                    metrics.latencyP50Ms,
+                latencyP95Ms =
+                    metrics.latencyP95Ms
+            )
+        }.getOrElse { failure ->
+            DiagnosticTinyJevCalibrationView(
+                error =
+                    failure.message
+                        ?: failure::class.simpleName
+                        ?: "calibration unavailable"
+            )
+        }
 
     private suspend fun probe(
         context: Context,

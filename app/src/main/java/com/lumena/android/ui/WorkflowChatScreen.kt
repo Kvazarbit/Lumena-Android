@@ -105,6 +105,7 @@ import com.lumena.android.settings.ExperienceLandscapeStore
 import com.lumena.android.settings.CoordinatorExperienceStore
 import com.lumena.android.settings.ReflexExperienceRanker
 import com.lumena.android.settings.TinyJevAssetLoader
+import com.lumena.android.settings.TinyJevCalibrationStore
 import com.lumena.android.settings.GenomeCapsule
 import com.lumena.android.settings.GenomeUnpackedUnit
 import com.lumena.android.settings.LumenaPreferences
@@ -538,6 +539,7 @@ fun WorkflowChatScreen(
                         examples = examples
                     )
                     recommendation.choice?.let { choice ->
+                        val tinyStartedNs = System.nanoTime()
                         val tinyDecision = runCatching {
                             TinyJevReflexAdapter.rank(
                                 model = tinyJevModel,
@@ -548,9 +550,40 @@ fun WorkflowChatScreen(
                                     .toSet()
                             )
                         }.getOrNull()
+                        val tinyLatencyMs =
+                            (
+                                (System.nanoTime() - tinyStartedNs) /
+                                    1_000_000L
+                                ).coerceAtLeast(0L)
                         val option =
                             TinyJevReflexAdapter.bestOption(tinyDecision)
                                 ?: choice.best()
+
+                        val calibrationEstimate =
+                            if (
+                                tinyDecision != null &&
+                                !event.actionFamily.isNullOrBlank()
+                            ) {
+                                runCatching {
+                                    TinyJevCalibrationStore.recordPrediction(
+                                        context = context,
+                                        taskId = task.id,
+                                        family = event.actionFamily,
+                                        attempt = event.attempt,
+                                        decision = tinyDecision,
+                                        selectedOption = option,
+                                        decisionLatencyMs = tinyLatencyMs
+                                    )
+                                    TinyJevCalibrationStore.estimate(
+                                        context = context,
+                                        family = event.actionFamily,
+                                        rawConfidence = tinyDecision.confidence
+                                    )
+                                }.getOrNull()
+                            } else {
+                                null
+                            }
+
                         ReflexRuntimeAdvice(
                             option = option,
                             confidence = minOf(
@@ -558,7 +591,14 @@ fun WorkflowChatScreen(
                                 tinyDecision?.confidence ?: choice.confidence
                             ),
                             evidenceCount = choice.evidenceCount,
-                            calibrated = false
+                            calibrated =
+                                calibrationEstimate?.calibrated == true,
+                            calibratedConfidence =
+                                calibrationEstimate
+                                    ?.takeIf { it.calibrated }
+                                    ?.confidence,
+                            calibrationSamples =
+                                calibrationEstimate?.sampleCount ?: 0
                         )
                     }
                 } catch (_: Exception) {
@@ -665,7 +705,7 @@ fun WorkflowChatScreen(
                 }
                 val coordinatorFailure = coordinatorResult.exceptionOrNull()
 
-                val constitutionFailure =
+                val verifiedProjectionFailure =
                     if (coordinatorResult.isSuccess) {
                         runCatching {
                             val examples =
@@ -680,6 +720,11 @@ fun WorkflowChatScreen(
                                 task = task,
                                 examples = examples,
                                 contributorModelId = constitutionContributorModelId
+                            )
+                            TinyJevCalibrationStore.resolveFromVerifiedExamples(
+                                context = context,
+                                taskId = task.id,
+                                examples = examples
                             )
                         }.exceptionOrNull()
                     } else {
@@ -698,7 +743,7 @@ fun WorkflowChatScreen(
                 )
 
                 coordinatorFailure?.let { throw it }
-                constitutionFailure?.let { throw it }
+                verifiedProjectionFailure?.let { throw it }
             })
     }
 
