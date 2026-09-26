@@ -30,4 +30,11 @@ class HtmlProtocolRegressionTest {
         assertTrue(result is ControllerInstruction.AskModelAgain)
         assertEquals(0, state.task.kernel.observed)
     }
+
+    @org.junit.Test fun leadingCreationTypoStillRoutesExplicitHtmlWork() {
+        org.junit.Assert.assertEquals(TaskIntent.CODE_WORK,
+            TaskIntentRouter.route("стаори 3d акваріум ,з рибками, html").intent)
+        org.junit.Assert.assertEquals(TaskIntent.GENERAL, TaskIntentRouter.route("що таке html").intent)
+        org.junit.Assert.assertEquals(TaskIntent.GENERAL, TaskIntentRouter.route("стаори акваріум").intent)
+    }
 }

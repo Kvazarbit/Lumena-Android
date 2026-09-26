@@ -357,7 +357,7 @@ class WorkflowRunner(
                 if (error is CancellationException) throw error
                 val failureMessage = error?.message ?: error?.javaClass?.simpleName.orEmpty()
                 val recovery = if (error is ModelOutputIncompleteException)
-                    controller.onIncompleteModelOutput(state, failureMessage)
+                    controller.onIncompleteModelOutput(state, failureMessage, error.outputRecoveryExhausted)
                 else controller.onModelFailure(state, failureMessage)
                 when (recovery) {
                     is ControllerInstruction.AskModelAgain -> {

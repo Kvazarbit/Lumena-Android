@@ -669,7 +669,8 @@ fun WorkflowChatScreen(
         } else {
             OllamaClient(
                 ollamaUrl,
-                runtimeProfile = LlamaHardwareProfile.detect(context)
+                runtimeProfile = LlamaHardwareProfile.detect(context),
+                modelHint = selectedModel
             )
         }
 

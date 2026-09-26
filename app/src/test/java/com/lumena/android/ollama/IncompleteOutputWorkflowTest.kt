@@ -55,4 +55,20 @@ class IncompleteOutputWorkflowTest {
         assertEquals(0, outcome.control.task.kernel.observed)
         assertEquals(TaskStatus.FAILED, outcome.control.task.status)
     }
+
+    @Test fun exhaustedTransportRecoveryStopsWorkflowWithoutIdenticalRetry() = runBlocking {
+        var calls = 0
+        val model = object : ChatModelClient {
+            override suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String> {
+                calls++
+                return Result.failure(ModelOutputIncompleteException("length", 8192, true))
+            }
+        }
+        val outcome = WorkflowRunner(model, null, "fixture").run(
+            history = emptyList(), task = TaskState("exhausted", null, "hello")
+        ) as WorkflowOutcome.Failed
+        assertEquals(1, calls)
+        assertEquals(0, outcome.control.task.kernel.observed)
+        assertTrue(outcome.control.task.errors.any { it.contains("output_recovery=exhausted") })
+    }
 }

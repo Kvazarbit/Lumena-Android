@@ -14,20 +14,27 @@ data class OllamaRequestBudget(
 object OllamaContextPolicy {
     fun budget(
         profile: LlamaRuntimeProfile?,
-        retry: Boolean
+        retry: Boolean,
+        model: String? = null,
+        outputRecovery: Boolean = false
     ): OllamaRequestBudget {
-        val baseContext = profile?.contextSize ?: 4096
-        val basePredict = profile?.maxTokens ?: 768
+        // A cloud proxy does not allocate the model's KV cache on this phone.
+        // These are bounded application budgets, not model capability claims.
+        val cloud = model?.let(::isCloudBackedOllamaModel) == true
+        val baseContext = if (cloud) 16384 else profile?.contextSize ?: 4096
+        val basePredict = if (cloud) {
+            if (outputRecovery) 8192 else 4096
+        } else profile?.maxTokens ?: 768
 
-        val context = if (retry) min(baseContext, 3072) else baseContext
-        val predict = if (retry) min(basePredict, 512) else basePredict
+        val context = if (retry && !cloud) min(baseContext, 3072) else baseContext
+        val predict = if (retry && !cloud) min(basePredict, 512) else basePredict
         val temperature = if (retry) 0.10 else 0.15
 
         // Reserve output tokens and an additional safety margin before deriving
         // an approximate character budget. Two chars/token is intentionally
         // conservative for Cyrillic + JSON/tool traces.
         val reserveTokens = maxOf(128, context / 16)
-        val rawInputTokens = (context - predict - reserveTokens).coerceAtLeast(512)
+        val rawInputTokens = (context - predict - reserveTokens).coerceIn(512, 6000)
         // Context pressure must produce a genuinely smaller second request even
         // on profiles that already run at a 2K/3K context.
         val inputTokens = if (retry) {

@@ -161,13 +161,23 @@ class AgentController(
         }
     }
 
-    fun onIncompleteModelOutput(state: AgentControlState, detail: String): ControllerInstruction =
-        protocolRetry(state.copy(task = state.task.copy(
+    fun onIncompleteModelOutput(
+        state: AgentControlState,
+        detail: String,
+        outputRecoveryExhausted: Boolean = false
+    ): ControllerInstruction {
+        if (outputRecoveryExhausted) {
+            val message = "$detail. No action from the incomplete response was executed. " +
+                "The increased output budget was also exhausted; stopping without identical retries."
+            return ControllerInstruction.Stop(message, fail(state, message))
+        }
+        return protocolRetry(state.copy(task = state.task.copy(
             errors = (state.task.errors + detail.take(600)).takeLast(8)
         )), "$detail. No action from the incomplete response was executed. " +
             "Regenerate exactly ONE short complete JSON object; do not continue the broken string. " +
             "For code use small separate files or file.patch on a known unique marker, " +
             "at most 1000 source characters per call. Verify each result before continuing.")
+    }
 
     fun interpret(raw: String, state: AgentControlState): ControllerInstruction {
         return when (val normalized = normalizer.normalize(raw)) {

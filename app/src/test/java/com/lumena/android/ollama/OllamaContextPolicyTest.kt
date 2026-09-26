@@ -253,4 +253,23 @@ class OllamaContextPolicyTest {
         }
     }
 
+
+    @Test fun cloudBudgetsIgnorePhoneMemoryAndReserveEnoughContext() {
+        for (recovery in listOf(false, true)) {
+            val normal = OllamaContextPolicy.budget(profile(available = 1.0, lowMemory = true),
+                retry = false, model = "gemma4:31b-cloud", outputRecovery = recovery)
+            val retry = OllamaContextPolicy.budget(null, retry = true,
+                model = "gemma4:31b-cloud", outputRecovery = recovery)
+            assertEquals(if (recovery) 8192 else 4096, normal.options.num_predict)
+            assertEquals(normal.options.num_predict, retry.options.num_predict)
+            assertTrue(retry.maxChars < normal.maxChars)
+            assertTrue(normal.maxInputTokens + normal.options.num_predict + 1024 <= normal.options.num_ctx)
+        }
+    }
+
+    @Test fun outputRecoveryNeverExpandsLocalHardwareBudget() {
+        val phone = profile(total = 8.0, available = 4.0)
+        val local = OllamaContextPolicy.budget(phone, false, "gemma4:local", true)
+        assertEquals(640, local.options.num_predict)
+    }
 }
