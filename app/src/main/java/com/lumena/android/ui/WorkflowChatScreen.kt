@@ -1,5 +1,7 @@
 package com.lumena.android.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -62,12 +64,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.core.AgentControlState
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.TermuxBridgeClient
+import com.lumena.android.agent.local.TermuxBridgeAutoStarter
 import com.lumena.android.agent.local.LayaSystem1Client
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
@@ -196,6 +200,8 @@ fun WorkflowChatScreen(
     var ggufPickerStatus by rememberSaveable { mutableStateOf("") }
     var models by remember { mutableStateOf<List<String>>(emptyList()) }
     var status by remember { mutableStateOf("Checking Ollama…") }
+    var bridgeControlStatus by rememberSaveable { mutableStateOf("Bridge not checked") }
+    var layaControlStatus by rememberSaveable { mutableStateOf("Laya not checked") }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var progressExpanded by rememberSaveable { mutableStateOf(false) }
     var currentTask by remember { mutableStateOf(restored.task) }
@@ -429,6 +435,131 @@ fun WorkflowChatScreen(
 
         val effectiveUrl = bridgeUrl.ifBlank { saved.bridgeUrl }
         return TermuxBridgeClient(effectiveUrl, effectiveToken, context)
+    }
+
+    fun copyToClipboard(label: String, value: String) {
+        val clipboard = context.getSystemService(ClipboardManager::class.java)
+        clipboard?.setPrimaryClip(ClipData.newPlainText(label, value))
+    }
+
+    fun bridgeInstallCommand(): String = """
+        set -euo pipefail
+        COMMIT="8dd084e9c663be212a0996bfa6d9cb0298139331"
+        BASE="https://raw.githubusercontent.com/Kvazarbit/Lumena-Android/$COMMIT/termux"
+        TMP="$HOME/.lumena-update"
+        mkdir -p "$TMP"
+        curl -fL "$BASE/bridge.py" -o "$TMP/bridge.py"
+        curl -fL "$BASE/install_bridge.sh" -o "$TMP/install_bridge.sh"
+        curl -fL "$BASE/configure_read_roots.sh" -o "$TMP/configure_read_roots.sh"
+        curl -fL "$BASE/install_laya_system1.sh" -o "$TMP/install_laya_system1.sh"
+        chmod 700 "$TMP/"*.sh
+        bash "$TMP/install_bridge.sh"
+        ~/.lumena/configure_read_roots.sh add shared "$HOME/storage/shared" 2>/dev/null || true
+        pkill -f "$HOME/.lumena/bridge.py" 2>/dev/null || true
+        nohup python "$HOME/.lumena/bridge.py" > "$HOME/.lumena/bridge.log" 2>&1 &
+        sleep 2
+        echo "===== BRIDGE ROOT ====="
+        curl -s http://127.0.0.1:8765/
+        echo
+        echo "===== BRIDGE TOKEN ====="
+        TOKEN="$(cat "$HOME/.lumena/bridge_token")"
+        echo "$TOKEN"
+        echo "===== BRIDGE HEALTH ====="
+        curl -s -X POST http://127.0.0.1:8765/tool \
+          -H "Authorization: Bearer $TOKEN" \
+          -H "Content-Type: application/json" \
+          -d '{"tool":"health","args":{}}'
+        echo
+    """.trimIndent()
+
+    fun runBridgeSelfTest() {
+        val client = bridgeOrNull()
+        if (client == null) {
+            bridgeControlStatus = "Bridge token is empty"
+            return
+        }
+        uiScope.launch {
+            bridgeControlStatus = "Checking bridge…"
+            val result = runCatching {
+                client.execute(ToolRequest(tool = "health"))
+            }.getOrElse {
+                bridgeControlStatus = "Bridge error: ${it.message}"
+                return@launch
+            }
+            bridgeControlStatus =
+                if (result.ok) {
+                    result.stdout.lineSequence()
+                        .filter { it.isNotBlank() }
+                        .take(6)
+                        .joinToString(" · ")
+                        .ifBlank { "Bridge OK" }
+                } else {
+                    "Bridge failed: ${result.error ?: result.errorCode ?: "unknown"}"
+                }
+        }
+    }
+
+    fun startBridge() {
+        val url = bridgeUrl.trim().trimEnd('/').toHttpUrlOrNull()
+        if (url == null) {
+            bridgeControlStatus = "Bridge URL is invalid"
+            return
+        }
+        uiScope.launch {
+            bridgeControlStatus = "Starting bridge…"
+            val result = TermuxBridgeAutoStarter.ensureRunning(context, url)
+            bridgeControlStatus =
+                if (result.isSuccess) "Bridge running · tap Self-test"
+                else "Bridge start failed: ${result.exceptionOrNull()?.message ?: "unknown"}"
+        }
+    }
+
+    fun layaStatus() {
+        val client = bridgeOrNull()
+        if (client == null) {
+            layaControlStatus = "Bridge token is required first"
+            return
+        }
+        uiScope.launch {
+            layaControlStatus = "Checking Laya…"
+            val result = runCatching { LayaSystem1Client(client).status() }
+                .getOrElse {
+                    layaControlStatus = "Laya error: ${it.message}"
+                    return@launch
+                }
+            layaControlStatus =
+                if (result.ok) result.stdout.take(900).ifBlank { "Laya OK" }
+                else "Laya unavailable: ${result.error ?: result.errorCode ?: "unknown"}"
+        }
+    }
+
+    fun layaStart() {
+        val client = bridgeOrNull()
+        if (client == null) {
+            layaControlStatus = "Bridge token is required first"
+            return
+        }
+        uiScope.launch {
+            layaControlStatus = "Starting Laya…"
+            val result = runCatching { LayaSystem1Client(client).start() }
+                .getOrElse {
+                    layaControlStatus = "Laya start error: ${it.message}"
+                    return@launch
+                }
+            layaControlStatus =
+                if (result.ok) "Laya running · " + result.stdout.take(700)
+                else "Laya start failed: ${result.error ?: result.errorCode ?: "unknown"}"
+        }
+    }
+
+    fun openTermux() {
+        val launchIntent =
+            context.packageManager.getLaunchIntentForPackage(TermuxBridgeAutoStarter.TERMUX_PACKAGE)
+        if (launchIntent != null) {
+            context.startActivity(launchIntent)
+        } else {
+            bridgeControlStatus = "Termux is not installed"
+        }
     }
 
     fun modelClient(): ChatModelClient =
@@ -1167,6 +1298,25 @@ fun WorkflowChatScreen(
                     bridgeToken = clean
                     LumenaPreferences.saveBridgeToken(context, clean)
                 },
+                bridgeControlStatus = bridgeControlStatus,
+                layaControlStatus = layaControlStatus,
+                onBridgeStart = { startBridge() },
+                onBridgeSelfTest = { runBridgeSelfTest() },
+                onCopyBridgeToken = {
+                    val token = LumenaPreferences.normalizeBridgeToken(bridgeToken)
+                    if (token.isBlank()) bridgeControlStatus = "Bridge token is empty"
+                    else {
+                        copyToClipboard("Lumena bridge token", token)
+                        bridgeControlStatus = "Bridge token copied"
+                    }
+                },
+                onCopyBridgeInstallCommand = {
+                    copyToClipboard("Lumena Bridge install/update", bridgeInstallCommand())
+                    bridgeControlStatus = "Install/update command copied"
+                },
+                onOpenTermux = { openTermux() },
+                onLayaStatus = { layaStatus() },
+                onLayaStart = { layaStart() },
                 experiencePositive = experienceStats.positive,
                 experienceNegative = experienceStats.negative,
                 experienceUnresolved = experienceStats.unresolvedNegative,
@@ -1694,6 +1844,15 @@ private fun ModelAndConnectionSheet(
     onBridgeUrl: (String) -> Unit,
     bridgeToken: String,
     onBridgeToken: (String) -> Unit,
+    bridgeControlStatus: String,
+    layaControlStatus: String,
+    onBridgeStart: () -> Unit,
+    onBridgeSelfTest: () -> Unit,
+    onCopyBridgeToken: () -> Unit,
+    onCopyBridgeInstallCommand: () -> Unit,
+    onOpenTermux: () -> Unit,
+    onLayaStatus: () -> Unit,
+    onLayaStart: () -> Unit,
     experiencePositive: Int,
     experienceNegative: Int,
     experienceUnresolved: Int,
@@ -1704,6 +1863,7 @@ private fun ModelAndConnectionSheet(
     onClearExperience: () -> Unit
 ) {
     var unpackedGenome by remember(genomeCapsules) { mutableStateOf<String?>(null) }
+    var revealBridgeToken by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
@@ -1780,7 +1940,12 @@ private fun ModelAndConnectionSheet(
         }
 
         HorizontalDivider()
-        Text("Local tools", style = MaterialTheme.typography.titleMedium)
+        Text("Bridge & Laya", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Local control center · loopback only · Bridge can auto-start through Termux RUN_COMMAND.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         OutlinedTextField(
             value = bridgeUrl,
             onValueChange = onBridgeUrl,
@@ -1792,8 +1957,47 @@ private fun ModelAndConnectionSheet(
             onValueChange = onBridgeToken,
             label = { Text("Bridge token") },
             singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
+            visualTransformation =
+                if (revealBridgeToken) VisualTransformation.None
+                else PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth()
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { revealBridgeToken = !revealBridgeToken }) {
+                Text(if (revealBridgeToken) "Hide token" else "Show token")
+            }
+            OutlinedButton(onClick = onCopyBridgeToken) { Text("Copy token") }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onBridgeStart) { Text("Start Bridge") }
+            OutlinedButton(onClick = onBridgeSelfTest) { Text("Self-test") }
+        }
+        Text(
+            bridgeControlStatus,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onCopyBridgeInstallCommand) {
+                Text("Copy install/update")
+            }
+            TextButton(onClick = onOpenTermux) { Text("Open Termux") }
+        }
+        Text(
+            "The copied install/update command prints the current Bridge token and health after start.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Text("Laya System-1", style = MaterialTheme.typography.titleSmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onLayaStatus) { Text("Laya status") }
+            Button(onClick = onLayaStart) { Text("Start Laya") }
+        }
+        Text(
+            layaControlStatus,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         HorizontalDivider()
