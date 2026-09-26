@@ -95,6 +95,7 @@ import com.lumena.android.agent.core.PreviousTaskOutcomeContext
 import com.lumena.android.agent.core.ResearchThreadResolver
 import com.lumena.android.agent.core.ResearchThreadState
 import com.lumena.android.agent.core.ReflexRuntimeAdvice
+import com.lumena.android.agent.core.TinyJevReflexAdapter
 import com.lumena.android.settings.ContextGenomeStats
 import com.lumena.android.settings.ContextGenomeStore
 import com.lumena.android.settings.ConstitutionGenomeStore
@@ -103,6 +104,7 @@ import com.lumena.android.settings.EvidenceGraphStore
 import com.lumena.android.settings.ExperienceLandscapeStore
 import com.lumena.android.settings.CoordinatorExperienceStore
 import com.lumena.android.settings.ReflexExperienceRanker
+import com.lumena.android.settings.TinyJevAssetLoader
 import com.lumena.android.settings.GenomeCapsule
 import com.lumena.android.settings.GenomeUnpackedUnit
 import com.lumena.android.settings.LumenaPreferences
@@ -152,6 +154,7 @@ fun WorkflowChatScreen(
     val coordinator = runCoordinator ?: fallbackCoordinator
     val listState = rememberLazyListState()
     val context = LocalContext.current
+    val tinyJevModel = remember(context) { TinyJevAssetLoader.load(context) }
     val initial = remember { LumenaPreferences.load(context) }
     val restored = remember { LocalSessionStore.load(context) }
     val systemMessage = remember { OllamaMessage("system", LocalWorkflowAgent.systemPrompt) }
@@ -535,11 +538,27 @@ fun WorkflowChatScreen(
                         examples = examples
                     )
                     recommendation.choice?.let { choice ->
+                        val tinyDecision = runCatching {
+                            TinyJevReflexAdapter.rank(
+                                model = tinyJevModel,
+                                goal = task.goal,
+                                event = event,
+                                supportedOptions = choice.scores
+                                    .map { it.option }
+                                    .toSet()
+                            )
+                        }.getOrNull()
+                        val option =
+                            TinyJevReflexAdapter.bestOption(tinyDecision)
+                                ?: choice.best()
                         ReflexRuntimeAdvice(
-                            option = choice.best(),
-                            confidence = choice.confidence,
+                            option = option,
+                            confidence = minOf(
+                                choice.confidence,
+                                tinyDecision?.confidence ?: choice.confidence
+                            ),
                             evidenceCount = choice.evidenceCount,
-                            calibrated = recommendation.calibrated
+                            calibrated = false
                         )
                     }
                 } catch (_: Exception) {
