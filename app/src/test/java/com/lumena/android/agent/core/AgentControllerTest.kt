@@ -972,6 +972,124 @@ class AgentControllerTest {
     }
 
     @Test
+    fun publicWebPlainReplyFinishesAfterSuccessfulSourceRead() {
+        val webTask = TaskState(
+            id = "web-plain-finish",
+            projectId = null,
+            goal = "Яка важлива новина за останню годину?",
+            status = TaskStatus.WAITING_MODEL,
+            maxSteps = 5
+        )
+        var state = controller.initial(webTask)
+
+        val search = AgentDecision.ToolCall(
+            tool = "web.search",
+            args = mapOf(
+                "query" to "головні новини за останню годину"
+            )
+        )
+        state = controller.afterTool(
+            state = state,
+            call = search,
+            ok = true,
+            stdout = """{"results":[{"url":"https://example.org/news"}]}""",
+            stderr = "",
+            error = null
+        ).state
+
+        val read = AgentDecision.ToolCall(
+            tool = "web.read",
+            args = mapOf(
+                "url" to "https://example.org/news"
+            )
+        )
+        state = controller.afterTool(
+            state = state,
+            call = read,
+            ok = true,
+            stdout = """{"url":"https://example.org/news","text":"verified source text"}""",
+            stderr = "",
+            error = null
+        ).state
+
+        val reply = controller.interpret(
+            "Одна з важливих новин за останню годину — перевірена за прочитаним джерелом.",
+            state
+        )
+
+        assertTrue(reply is ControllerInstruction.Finish)
+        reply as ControllerInstruction.Finish
+        assertTrue(reply.state.task.status == TaskStatus.DONE)
+        assertEquals(0, reply.state.protocolRetries)
+        assertTrue(reply.text.contains("важливих новин"))
+    }
+
+    @Test
+    fun webSearchSnippetAloneDoesNotAuthorizePlainReplyFinish() {
+        val webTask = TaskState(
+            id = "web-snippet-only",
+            projectId = null,
+            goal = "Яка важлива новина за останню годину?",
+            status = TaskStatus.WAITING_MODEL,
+            maxSteps = 5
+        )
+        var state = controller.initial(webTask)
+
+        val search = AgentDecision.ToolCall(
+            tool = "web.search",
+            args = mapOf(
+                "query" to "головні новини за останню годину"
+            )
+        )
+        state = controller.afterTool(
+            state = state,
+            call = search,
+            ok = true,
+            stdout = """{"results":[{"url":"https://example.org/news","snippet":"not enough"}]}""",
+            stderr = "",
+            error = null
+        ).state
+
+        val reply = controller.interpret(
+            "Ось відповідь тільки зі snippet.",
+            state
+        )
+
+        assertTrue(reply is ControllerInstruction.AskModelAgain)
+        reply as ControllerInstruction.AskModelAgain
+        assertTrue(reply.feedback.contains("web.read"))
+        assertTrue(reply.state.task.status == TaskStatus.WAITING_MODEL)
+    }
+
+    @Test
+    fun codeWorkPlainReplyStillCannotBypassVerification() {
+        var state = controller.initial(
+            TaskState(
+                id = "code-no-plain-finish",
+                projectId = "demo",
+                goal = "Створи Python файл і перевір його.",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        state = state.copy(
+            toolUsed = true,
+            verificationRequired = true,
+            pendingPythonPaths = setOf("demo.py"),
+            task = state.task.copy(
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        val reply = controller.interpret(
+            "Все готово.",
+            state
+        )
+
+        assertTrue(reply is ControllerInstruction.AskModelAgain)
+        assertTrue(reply.state.task.status != TaskStatus.DONE)
+    }
+
+    @Test
     fun exhaustedContextErrorStopsInsteadOfStartingControllerRetryLoop() {
         val instruction = controller.onModelFailure(
             controller.initial(task()),

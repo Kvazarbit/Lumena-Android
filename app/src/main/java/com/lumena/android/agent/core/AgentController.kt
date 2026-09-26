@@ -785,6 +785,22 @@ class AgentController(
             return interpretDone(AgentDecision.Done(trimmed), state)
         }
 
+        if (canFinishPublicWebPlainReply(state)) {
+            val finished = state.copy(
+                protocolRetries = 0,
+                schemaRepairs = 0,
+                modelFailures = 0,
+                task = state.task.copy(
+                    status = TaskStatus.DONE,
+                    lastResult = trimmed.take(4_000)
+                )
+            )
+            return ControllerInstruction.Finish(
+                trimmed,
+                finished
+            )
+        }
+
         // A plain reply is acceptable for ordinary conversation before any tool work.
         if (!state.toolUsed && state.plan.isEmpty()) {
             val finished = state.copy(
@@ -842,11 +858,63 @@ class AgentController(
         )
     }
 
+    private fun canFinishPublicWebPlainReply(
+        state: AgentControlState
+    ): Boolean {
+        if (!state.toolUsed) return false
+        if (state.verificationRequired) return false
+        if (state.intent in setOf(
+                TaskIntent.CODE_WORK,
+                TaskIntent.OLLAMA_OPERATION
+            )
+        ) {
+            return false
+        }
+        if (state.requiredTools - state.completedRequiredTools != emptySet<String>()) {
+            return false
+        }
+        if (ContextKernel.completionBlocker(state.task.kernel) != null) {
+            return false
+        }
+
+        val evidence = state.task.kernel.evidence
+        if (evidence.any {
+                it.phase == CognitivePhase.ACT ||
+                    it.phase == CognitivePhase.VERIFY
+            }
+        ) {
+            return false
+        }
+
+        val sourceTools = setOf(
+            "web.read",
+            "http.get",
+            "http.json"
+        )
+        return evidence.any { event ->
+            event.ok &&
+                event.phase == CognitivePhase.OBSERVE &&
+                event.tool in sourceTools
+        }
+    }
+
     private fun recoverPlainReply(state: AgentControlState, text: String, problem: String): ControllerInstruction {
         if (state.protocolRetries == 0) {
-            val researchHint = if (state.intent == TaskIntent.PUBLIC_WEB)
-                " Search snippets alone are not verification: read relevant source URLs with web.read and cite them."
-            else ""
+            val hasSuccessfulWebSearch =
+                state.task.kernel.evidence.any {
+                    it.ok &&
+                        it.phase == CognitivePhase.OBSERVE &&
+                        it.tool == "web.search"
+                }
+            val researchHint =
+                if (
+                    state.intent == TaskIntent.PUBLIC_WEB ||
+                    hasSuccessfulWebSearch
+                ) {
+                    " Search snippets alone are not verification: read relevant source URLs with web.read and cite them."
+                } else {
+                    ""
+                }
             return protocolRetry(state, "$problem$researchHint " +
                 "Choose ONE next tool call, or {\"done\":true,\"summary\":\"verified result\"} only after completing checks, " +
                 "or {\"partial\":true,\"summary\":\"what is known and what remains unverified\"}. JSON only.")
