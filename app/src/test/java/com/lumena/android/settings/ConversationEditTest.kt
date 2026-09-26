@@ -18,7 +18,8 @@ class ConversationEditTest {
         task = TaskState("old-task", "project", "old goal"),
         pending = PersistedPendingTool("file.write"),
         researchGoal = "future research",
-        researchThread = ResearchThreadState(rootGoal = "future research")
+        researchThread = ResearchThreadState(rootGoal = "future research"),
+        codeGoal = "future code goal"
     )
 
     @Test fun repeatedQuestionBranchesByIdentityAndPreservesParent() {
@@ -36,6 +37,7 @@ class ConversationEditTest {
         assertNull(fork.pending)
         assertNull(fork.researchGoal)
         assertNull(fork.researchThread)
+        assertNull(fork.codeGoal)
         assertFalse(fork.history.any { it.content.contains("FUTURE_TOOL_RECEIPT") || it.content == "future answer" })
         assertTrue(fork.history.first().content.contains("NOT been undone"))
     }

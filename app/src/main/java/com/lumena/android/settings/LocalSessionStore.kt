@@ -45,7 +45,8 @@ data class LocalSessionSnapshot(
     // Compatibility field for Step 7E snapshots. New code persists the full
     // bounded researchThread and mirrors rootGoal here for safe migration.
     val researchGoal: String? = null,
-    val researchThread: ResearchThreadState? = null
+    val researchThread: ResearchThreadState? = null,
+    val codeGoal: String? = null
 )
 
 /**
@@ -116,6 +117,7 @@ object LocalSessionStore {
                 }
             ),
             inputDraft = snapshot.inputDraft.take(MAX_DRAFT_CHARS),
+            codeGoal = snapshot.codeGoal?.take(MAX_DRAFT_CHARS),
             researchGoal = snapshot.researchThread
                 ?.rootGoal
                 ?.take(MAX_DRAFT_CHARS)

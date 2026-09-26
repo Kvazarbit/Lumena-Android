@@ -373,6 +373,7 @@ object TaskIntentRouter {
     private fun isCodeWork(lower: String): Boolean {
         val codeTerms = listOf(
             "python", ".py", "kotlin", ".kt", "java", ".java", "gradle",
+            "html", ".html", "css", ".css", "javascript", "typescript", "js", "webgl",
             "скрипт", "script", "код", "code", "compile", "компіля",
             "test", "тест", "bug", "баг", "debug", "fix(", "repo", "repository",
             "github", "git "

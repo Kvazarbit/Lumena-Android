@@ -161,6 +161,12 @@ class AgentController(
         }
     }
 
+    fun onIncompleteModelOutput(state: AgentControlState, detail: String): ControllerInstruction =
+        protocolRetry(state, "$detail. No action from the incomplete response was executed. " +
+            "Regenerate exactly ONE short complete JSON object; do not continue the broken string. " +
+            "For code use small separate files or file.patch on a known unique marker, " +
+            "at most 1000 source characters per call. Verify each result before continuing.")
+
     fun interpret(raw: String, state: AgentControlState): ControllerInstruction {
         return when (val normalized = normalizer.normalize(raw)) {
             is NormalizationResult.Canonical -> {

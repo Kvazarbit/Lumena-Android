@@ -263,4 +263,52 @@ class OllamaClientHttpTest {
             assertEquals(2, calls.get())
         }
     }
+
+    @Test fun lengthLimitedStreamIsNotAUsableToolResponseAndIsNotRetriedInTransport() {
+        withFixture(listOf("""{"message":{"role":"assistant","content":"{\"tool\":\"file.write\""},"done":false}
+{"done":true,"done_reason":"length","eval_count":768}
+""")) { port, calls ->
+            val result = runBlocking { OllamaClient("http://127.0.0.1:$port").chat("fixture", emptyList()) }
+            assertTrue(result.exceptionOrNull() is ModelOutputIncompleteException)
+            assertTrue(result.exceptionOrNull()!!.message!!.contains("length"))
+            assertEquals(1, calls.get())
+        }
+    }
+
+    @Test fun streamWithoutFinalDoneIsRejectedEvenIfTextLooksComplete() {
+        withFixture(listOf("""{"message":{"role":"assistant","content":"{\"done\":true,\"summary\":\"ok\"}"},"done":false}
+""")) { port, calls ->
+            val result = runBlocking { OllamaClient("http://127.0.0.1:$port").chat("fixture", emptyList()) }
+            assertTrue(result.exceptionOrNull() is ModelOutputIncompleteException)
+            assertTrue(result.exceptionOrNull()!!.message!!.contains("missing_done"))
+            assertEquals(1, calls.get())
+        }
+    }
+
+    @Test fun emptyLengthLimitedStreamDoesNotTriggerEmptyResponseFallback() {
+        withFixture(listOf("""{"done":true,"done_reason":"length","eval_count":768}
+""")) { port, calls ->
+            val result = runBlocking { OllamaClient("http://127.0.0.1:$port").chat("gemma4:31b-cloud", emptyList()) }
+            assertTrue(result.exceptionOrNull() is ModelOutputIncompleteException)
+            assertEquals(1, calls.get())
+        }
+    }
+
+    @Test fun fallbackChatAlsoRejectsOutputLengthLimit() {
+        withFixture(listOf("""{"done":true}
+""", """{"message":{"role":"assistant","content":"unfinished"},"done":true,"done_reason":"length"}""")) { port, calls ->
+            val result = runBlocking { OllamaClient("http://127.0.0.1:$port").chat("gemma4:31b-cloud", emptyList()) }
+            assertTrue(result.exceptionOrNull() is ModelOutputIncompleteException)
+            assertEquals(2, calls.get())
+        }
+    }
+
+    @Test fun generateFallbackAlsoRejectsOutputLengthLimit() {
+        withFixture(listOf("""{"done":true}
+""", """{"done":true}""", """{"response":"unfinished","done":true,"done_reason":"length"}""")) { port, calls ->
+            val result = runBlocking { OllamaClient("http://127.0.0.1:$port").chat("gemma4:31b-cloud", emptyList()) }
+            assertTrue(result.exceptionOrNull() is ModelOutputIncompleteException)
+            assertEquals(3, calls.get())
+        }
+    }
 }
