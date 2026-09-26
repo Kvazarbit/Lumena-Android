@@ -785,6 +785,22 @@ class AgentController(
             return interpretDone(AgentDecision.Done(trimmed), state)
         }
 
+        if (canFinishPublicWebPlainReply(state)) {
+            val finished = state.copy(
+                protocolRetries = 0,
+                schemaRepairs = 0,
+                modelFailures = 0,
+                task = state.task.copy(
+                    status = TaskStatus.DONE,
+                    lastResult = trimmed.take(4_000)
+                )
+            )
+            return ControllerInstruction.Finish(
+                trimmed,
+                finished
+            )
+        }
+
         // A plain reply is acceptable for ordinary conversation before any tool work.
         if (!state.toolUsed && state.plan.isEmpty()) {
             val finished = state.copy(
@@ -840,6 +856,31 @@ class AgentController(
                 )
             )
         )
+    }
+
+    private fun canFinishPublicWebPlainReply(
+        state: AgentControlState
+    ): Boolean {
+        if (state.intent != TaskIntent.PUBLIC_WEB) return false
+        if (!state.toolUsed) return false
+        if (state.verificationRequired) return false
+        if (state.requiredTools - state.completedRequiredTools != emptySet<String>()) {
+            return false
+        }
+        if (ContextKernel.completionBlocker(state.task.kernel) != null) {
+            return false
+        }
+
+        val evidenceTools = setOf(
+            "web.read",
+            "http.get",
+            "http.json"
+        )
+        return state.task.kernel.evidence.any { event ->
+            event.ok &&
+                event.phase == CognitivePhase.OBSERVE &&
+                event.tool in evidenceTools
+        }
     }
 
     private fun recoverPlainReply(state: AgentControlState, text: String, problem: String): ControllerInstruction {
