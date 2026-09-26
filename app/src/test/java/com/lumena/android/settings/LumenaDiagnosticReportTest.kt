@@ -183,6 +183,48 @@ class LumenaDiagnosticReportTest {
     }
 
     @Test
+    fun reportIncludesTinyJevCalibrationTelemetry() {
+        val report =
+            LumenaDiagnosticFormatter.render(
+                input().copy(
+                    tinyJevCalibration =
+                        DiagnosticTinyJevCalibrationView(
+                            pending = 2,
+                            resolved = 12,
+                            accuracy = 0.8333,
+                            brierScore = 0.0912,
+                            ece = 0.0745,
+                            selectiveThreshold = 0.75,
+                            selectiveCoverage = 0.50,
+                            selectiveAccuracy = 1.0,
+                            latencyP50Ms = 3L,
+                            latencyP95Ms = 7L
+                        )
+                )
+            )
+
+        assertTrue(
+            report.contains(
+                "[TINYJEV_CALIBRATION]"
+            )
+        )
+        assertTrue(report.contains("pending=2"))
+        assertTrue(report.contains("resolved=12"))
+        assertTrue(report.contains("brier=0.0912"))
+        assertTrue(report.contains("ece=0.0745"))
+        assertTrue(
+            report.contains(
+                "selective_coverage=0.5"
+            )
+        )
+        assertTrue(
+            report.contains(
+                "latency_p95_ms=7"
+            )
+        )
+    }
+
+    @Test
     fun formatterRedactsBearerSecrets() {
         val dirty = input().copy(
             bridgeProbe = DiagnosticProbe(
