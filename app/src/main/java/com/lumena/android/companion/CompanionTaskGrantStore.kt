@@ -22,7 +22,7 @@ object CompanionTaskGrantStore {
             sessionId = prefs.getString("session_id", "").orEmpty(),
             taskId = prefs.getString("task_id", "").orEmpty(),
             modelId = prefs.getString("model_id", "").orEmpty(),
-            connectionKey = prefs.getString("connection_key", "").orEmpty(),
+            bridgeFingerprint = prefs.getString("connection_key", "").orEmpty(),
             kindName = prefs.getString("kind", "").orEmpty(),
             patterns = prefs.getString("patterns", "").orEmpty()
                 .lines().map(String::trim).filter(String::isNotEmpty),
@@ -47,7 +47,7 @@ object CompanionTaskGrantStore {
             .putString("session_id", grant.sessionId)
             .putString("task_id", grant.taskId)
             .putString("model_id", grant.modelId)
-            .putString("connection_key", grant.connectionKey)
+            .putString("connection_key", grant.bridgeFingerprint)
             .putString("kind", grant.kind.name)
             .putString("patterns", grant.patterns.joinToString("\n"))
             .putLong("expires_at", grant.expiresAt)
