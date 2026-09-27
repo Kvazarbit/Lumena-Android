@@ -125,7 +125,9 @@ object CompanionProtocol {
         if (extractJsonObject(text, marker + TOOL_MARKER.length) == null)
             return "Команду видно, але JSON неповний (${text.length} символів захоплення). Потрібна коротша команда або повний текст."
         val captured = extractJsonObject(text, marker + TOOL_MARKER.length)!!
-        try { decodeTransport(captured) } catch (_: Exception) {
+        val envelope = runCatching { mapAdapter.fromJson(captured) }.getOrNull()
+            ?: return "JSON захоплено, але формат команди некоректний."
+        try { if (envelope.containsKey("encoding")) decodeTransport(captured) } catch (_: Exception) {
             return "Команду пошкоджено: не пройшла перевірка Base64/SHA-256 або розміру. Надішли повний блок повторно; нічого не виконано."
         }
         if (parseVisibleText(text) == null) return "JSON захоплено, але формат команди некоректний."
