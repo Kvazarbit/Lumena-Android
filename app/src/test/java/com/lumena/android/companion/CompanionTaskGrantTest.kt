@@ -62,13 +62,13 @@ class CompanionTaskGrantTest {
     }
 
     @Test fun restoreKeepsScopeButNeverStoresRawBridgeToken() {
-        val key = CompanionTaskGrant.connectionKey("url", "token")
+        val key = CompanionTaskGrant.connectionFingerprint("url", "token")
         assertFalse(key.contains("token"))
         val restored = CompanionTaskGrant.restore(
             sessionId = "session",
             taskId = "task",
             modelId = "model",
-            connectionKey = key,
+            bridgeFingerprint = key,
             kindName = CompanionTaskGrantKind.PYTHON_RUN.name,
             patterns = listOf("ignored.py"),
             expiresAt = 50_000L,
