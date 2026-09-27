@@ -15,14 +15,14 @@ data class CompanionTaskGrant private constructor(
     val sessionId: String,
     val taskId: String,
     internal val modelId: String,
-    internal val connectionKey: String,
+    internal val bridgeFingerprint: String,
     val kind: CompanionTaskGrantKind,
     val patterns: List<String>,
     val expiresAt: Long,
     val remaining: Int = MAX_USES
 ) {
     fun isLiveForConnection(url: String, token: String, now: Long): Boolean =
-        now < expiresAt && remaining > 0 && connectionKey == connectionKey(url, token)
+        now < expiresAt && remaining > 0 && bridgeFingerprint == connectionFingerprint(url, token)
 
     fun allows(command: CompanionCommand, url: String, token: String, now: Long): Boolean {
         if (!isLiveForConnection(url, token, now)) return false
@@ -61,7 +61,7 @@ data class CompanionTaskGrant private constructor(
             path.none { it == '\\' || it == ':' || it == '*' || it.isISOControl() } &&
             path.split('/').none { it.isEmpty() || it == "." || it == ".." }
 
-        internal fun connectionKey(url: String, token: String): String {
+        internal fun connectionFingerprint(url: String, token: String): String {
             val bytes = MessageDigest.getInstance("SHA-256")
                 .digest((url + "\u0000" + token).toByteArray(Charsets.UTF_8))
             return bytes.joinToString("") { "%02x".format(it) }
@@ -88,7 +88,7 @@ data class CompanionTaskGrant private constructor(
                 sessionId = command.sessionId!!,
                 taskId = command.taskId!!,
                 modelId = command.modelId.orEmpty(),
-                connectionKey = connectionKey(url, token),
+                bridgeFingerprint = connectionFingerprint(url, token),
                 kind = kind,
                 patterns = patterns,
                 expiresAt = now + DURATION_MS
@@ -99,13 +99,13 @@ data class CompanionTaskGrant private constructor(
             sessionId: String,
             taskId: String,
             modelId: String,
-            connectionKey: String,
+            bridgeFingerprint: String,
             kindName: String,
             patterns: List<String>,
             expiresAt: Long,
             remaining: Int
         ): CompanionTaskGrant? {
-            if (sessionId.isBlank() || taskId.isBlank() || connectionKey.isBlank()) return null
+            if (sessionId.isBlank() || taskId.isBlank() || bridgeFingerprint.isBlank()) return null
             if (remaining !in 1..MAX_USES || expiresAt <= 0L) return null
             val kind = runCatching { CompanionTaskGrantKind.valueOf(kindName) }.getOrNull() ?: return null
             val safePatterns = when (kind) {
@@ -115,7 +115,7 @@ data class CompanionTaskGrant private constructor(
                 }
             }
             return CompanionTaskGrant(
-                sessionId, taskId, modelId, connectionKey, kind, safePatterns, expiresAt, remaining
+                sessionId, taskId, modelId, bridgeFingerprint, kind, safePatterns, expiresAt, remaining
             )
         }
     }
