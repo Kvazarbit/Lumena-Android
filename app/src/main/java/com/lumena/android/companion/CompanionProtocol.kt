@@ -102,6 +102,20 @@ object CompanionProtocol {
         return parseVisibleText(text)
     }
 
+    fun captureDiagnostic(snapshot: ScreenSnapshot?): String {
+        if (snapshot == null) return "Немає захоплення ChatGPT. Відкрий офіційний застосунок ChatGPT."
+        return captureDiagnosticText(snapshot.nodes.joinToString("\n") { it.text ?: it.contentDescription.orEmpty() })
+    }
+
+    internal fun captureDiagnosticText(text: String): String {
+        val marker = text.lastIndexOf(TOOL_MARKER)
+        if (marker < 0) return "Захоплено ${text.length} символів; маркера команди немає. Відкрий останню відповідь ChatGPT і натисни Scan ChatGPT."
+        if (extractJsonObject(text, marker + TOOL_MARKER.length) == null)
+            return "Команду видно, але JSON неповний (${text.length} символів захоплення). Потрібна коротша команда або повний текст."
+        if (parseVisibleText(text) == null) return "JSON захоплено, але формат команди некоректний."
+        return "Команду захоплено повністю."
+    }
+
     fun parseVisibleText(text: String): CompanionCommand? {
         val markerIndex = text.lastIndexOf(TOOL_MARKER)
         if (markerIndex < 0) return null
