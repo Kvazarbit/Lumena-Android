@@ -51,7 +51,7 @@ object StateVault {
             if (pendingSave?.isActive == true) return
             pendingSave = scope.launch {
                 delay(5000)
-                runCatching { save(app) }.onFailure { error(app, it) }
+                if (enabled(app) && !restoring) runCatching { save(app) }.onFailure { error(app, it) }
             }
         }
     }
@@ -116,7 +116,7 @@ object StateVault {
         validateContents(c, StateArchive.decode(bytes, version(c)))
         val digest = StateArchive.hash(bytes)
         // No in-place overwrite: a failed provider write cannot destroy the last good copy.
-        val name = "lumena-state-${System.currentTimeMillis()}-${UUID.randomUUID().toString().take(8)}.lumena"
+        val name = "lumena-state-${System.currentTimeMillis()}-${UUID.randomUUID().toString().take(8)}.lumena.zip"
         val doc = requireNotNull(DocumentsContract.createDocument(c.contentResolver, root(uri), "application/zip", name))
         try {
             requireNotNull(c.contentResolver.openOutputStream(doc, "w")).use { it.write(bytes) }
@@ -140,7 +140,7 @@ object StateVault {
             buildList {
                 while (rows.moveToNext()) {
                     val name = rows.getString(1)
-                    if (name.matches(Regex("lumena-state-[0-9]+-[a-f0-9]{8}\\.lumena")))
+                    if (name.matches(Regex("lumena-state-[0-9]+-[a-f0-9]{8}\\.lumena(?:\\.zip)?")))
                         add(Copy(name, DocumentsContract.buildDocumentUriUsingTree(tree, rows.getString(0))))
                 }
             }.sortedByDescending { it.name }
