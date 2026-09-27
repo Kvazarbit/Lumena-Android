@@ -1,6 +1,9 @@
 package com.lumena.android.companion
 
 import android.content.Intent
+import android.os.SystemClock
+import com.lumena.android.settings.StateVault
+import androidx.compose.runtime.SideEffect
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -54,7 +57,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-fun CompanionScreen() {
+fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val initial = remember { LumenaPreferences.load(context) }
@@ -69,6 +72,21 @@ fun CompanionScreen() {
     var lastResult by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("Waiting for ChatGPT…") }
     var busy by remember { mutableStateOf(false) }
+    var taskGrant by remember { mutableStateOf<CompanionTaskGrant?>(null) }
+    var grantEditor by remember { mutableStateOf<String?>(null) }
+    var grantPaths by remember { mutableStateOf("") }
+    var resultExpanded by remember { mutableStateOf(false) }
+    SideEffect { StateVault.companionBusy = busy }
+    var handoffDraft by remember { mutableStateOf(CompanionHandoffStore.load(context)) }
+
+    LaunchedEffect(visible, handoffVersion) {
+        if (visible) {
+            handoffDraft = CompanionHandoffStore.load(context)
+            val saved = LumenaPreferences.load(context)
+            bridgeUrl = saved.bridgeUrl
+            token = saved.bridgeToken
+        }
+    }
 
     fun persistConnection() {
         LumenaPreferences.saveBridgeUrl(context, bridgeUrl)
@@ -112,7 +130,14 @@ fun CompanionScreen() {
         return ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
     }
 
+    fun grantAllows(command: CompanionCommand): Boolean {
+        val connection = LumenaPreferences.load(context)
+        return taskGrant?.allows(command, connection.bridgeUrl, connection.bridgeToken,
+            SystemClock.elapsedRealtime()) == true
+    }
+
     fun executeCommand(command: CompanionCommand, automatic: Boolean) {
+        if (StateVault.restoring || StateVault.startupError != null) return
         if (!CompanionRequestLifecycle.shouldAccept(
                 fingerprint = command.fingerprint,
                 handledFingerprint = handledFingerprint,
@@ -120,6 +145,10 @@ fun CompanionScreen() {
                 busy = busy
             )
         ) return
+        // Local can update the shared connection while this UI is hidden.
+        val savedConnection = LumenaPreferences.load(context)
+        bridgeUrl = savedConnection.bridgeUrl
+        token = savedConnection.bridgeToken
         if (token.isBlank()) {
             status = "Paste the Termux bridge token first."
             return
@@ -132,17 +161,18 @@ fun CompanionScreen() {
         }
 
         val readOnly = ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
-        if (automatic && (!safeAuto || !readOnly)) {
+        if (automatic && !(safeAuto && readOnly) && !grantAllows(command)) {
             status = "Approval required for ${plan.request.tool}."
             return
         }
 
+        if (automatic && !readOnly) taskGrant = taskGrant?.consume()
         persistConnection()
         busy = true
         activeFingerprint = command.fingerprint
         if (detected?.fingerprint == command.fingerprint) detected = null
         status = if (automatic) {
-            "Safe Auto · running ${plan.request.tool}…"
+            "${if (readOnly) "Safe Auto" else "Task permission"} · running ${plan.request.tool}…"
         } else {
             "Running ${plan.request.tool}…"
         }
@@ -190,7 +220,8 @@ fun CompanionScreen() {
                         request = plan.request,
                         result = result,
                         experienceId = experienceRef,
-                        modelId = contributorModelId
+                        modelId = contributorModelId,
+                        scopeId = command.sessionId ?: "global"
                     )
                 }
             }.getOrNull()
@@ -233,7 +264,9 @@ fun CompanionScreen() {
                         CoordinatorExperienceStore.relevant(
                             context = context,
                             query = memoryQuery,
-                            limit = 2
+                            limit = 2,
+                            scopeId = command.sessionId ?: "global",
+                            modelId = contributorModelId
                         ) +
                             ExperienceMemoryStore.relevant(
                                 context = context,
@@ -256,6 +289,9 @@ fun CompanionScreen() {
                 contributorModelId = contributorModelId,
                 episodeEventId = episodeEvent?.id
             )
+            if (!result.ok || result.outcomeUnknown) taskGrant = null
+            resultExpanded = false
+            StateVault.requestSave(context)
             lastResult = formatted
             handledFingerprint = command.fingerprint
             if (activeFingerprint == command.fingerprint) activeFingerprint = null
@@ -310,8 +346,8 @@ fun CompanionScreen() {
         val plan = planFor(command)
         when {
             !plan.allowed -> status = "Blocked tool request: ${plan.reason}"
-            safeAuto && isSafeReadOnly(command) && !busy -> {
-                status = "Safe read-only tool detected."
+            !busy && ((safeAuto && isSafeReadOnly(command)) || grantAllows(command)) -> {
+                status = "Approved automatic tool detected."
                 executeCommand(command, automatic = true)
             }
             else -> status = "Tool request detected. Review it before running."
@@ -322,11 +358,7 @@ fun CompanionScreen() {
         val snapshot = LumenaAccessibilityService.lastChatGptSnapshot
         val command = CompanionProtocol.parse(snapshot)
         if (command == null) {
-            status = if (snapshot == null) {
-                "No ChatGPT snapshot yet. Open the official ChatGPT app once."
-            } else {
-                "ChatGPT captured, but no LUMENA_TOOL block is visible yet."
-            }
+            status = CompanionProtocol.captureDiagnostic(snapshot)
             return
         }
         if (force && command.fingerprint == handledFingerprint) handledFingerprint = null
@@ -348,8 +380,11 @@ fun CompanionScreen() {
         executeCommand(command, automatic = false)
     }
 
-    LaunchedEffect(safeAuto, token, bridgeUrl) {
+    LaunchedEffect(safeAuto, token, bridgeUrl, taskGrant) {
         while (true) {
+            taskGrant?.let { grant ->
+                if (SystemClock.elapsedRealtime() >= grant.expiresAt || grant.remaining == 0) taskGrant = null
+            }
             val command = CompanionProtocol.parse(LumenaAccessibilityService.lastChatGptSnapshot)
             if (
                 command != null &&
@@ -366,6 +401,9 @@ fun CompanionScreen() {
         }
     }
 
+    // Processing above belongs to the app composition, not the selected tab.
+    if (!visible) return
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -374,6 +412,44 @@ fun CompanionScreen() {
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("Lumena Companion", style = MaterialTheme.typography.headlineMedium)
+        Text(status, style = MaterialTheme.typography.bodyMedium)
+        taskGrant?.let { grant ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Text("Автозапис для завдання: ${grant.taskId}")
+                    Text("file.write / file.patch · ${grant.patterns.joinToString()}\nЗалишилось команд: ${grant.remaining}. Дозвіл діє до 30 хвилин.",
+                        style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { taskGrant = null; status = "Дозвіл скасовано; запущену команду це не зупиняє." }) {
+                        Text("Скасувати дозвіл")
+                    }
+                }
+            }
+        }
+        if (handoffDraft.isNotBlank()) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Повідомлення з Local", style = MaterialTheme.typography.titleMedium)
+                    Text("Переглянь текст перед передаванням у ChatGPT.",
+                        style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(
+                        value = handoffDraft,
+                        onValueChange = {
+                            handoffDraft = it
+                            CompanionHandoffStore.save(context, it)
+                        },
+                        label = { Text("Текст для Companion") },
+                        minLines = 3, maxLines = 7, modifier = Modifier.fillMaxWidth()
+                    )
+                    Button(onClick = { openChatGptWith(handoffDraft, send = false) }) {
+                        Text("Вставити в ChatGPT")
+                    }
+                    TextButton(onClick = {
+                        handoffDraft = ""
+                        CompanionHandoffStore.save(context, "")
+                    }) { Text("Очистити чернетку") }
+                }
+            }
+        }
         Text(
             "Official ChatGPT stays the main conversation. Lumena only bridges approved local tools to Termux/Python/Git.",
             style = MaterialTheme.typography.bodyMedium
@@ -524,7 +600,7 @@ fun CompanionScreen() {
             val plan = planFor(command)
             val readOnly = plan.allowed &&
                 ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
-            val autoEligible = safeAuto && readOnly
+            val autoEligible = (safeAuto && readOnly) || grantAllows(command)
 
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -534,7 +610,7 @@ fun CompanionScreen() {
                     Text(
                         when {
                             !plan.allowed -> "BLOCKED by tool registry"
-                            autoEligible -> "READ-ONLY · Safe Auto eligible"
+                            autoEligible -> "Дозволено автоматичне виконання"
                             else -> "Approval required · this tool can change state or execute code"
                         },
                         style = MaterialTheme.typography.bodySmall
@@ -549,6 +625,33 @@ fun CompanionScreen() {
                     } else if (busy) {
                         Text("Running automatically…", style = MaterialTheme.typography.bodySmall)
                     }
+                    if (plan.allowed && CompanionTaskGrant.canOffer(command)) {
+                        TextButton(enabled = !busy, onClick = {
+                            grantEditor = command.fingerprint
+                            grantPaths = plan.request.args["path"].orEmpty()
+                        }) { Text("Дозволити запис для цього завдання…") }
+                        if (grantEditor == command.fingerprint) {
+                            Text("Сесія: ${command.sessionId}\nЗавдання: ${command.taskId}\nМодель: ${command.modelId.orEmpty()}", style = MaterialTheme.typography.bodySmall)
+                            Text("На 30 хвилин, до 40 команд file.write / file.patch. Лише ця сесія, завдання, модель і bridge. Python потребує Run once: шлях скрипта не обмежує його дії.", style = MaterialTheme.typography.bodySmall)
+                            OutlinedTextField(value = grantPaths, onValueChange = { grantPaths = it },
+                                label = { Text("Файли: по одному в рядку; * наприкінці — префікс імені") },
+                                modifier = Modifier.fillMaxWidth(), minLines = 2)
+                            Text("Приклад: aquarium-v2.part* дозволяє запис частин у цьому каталозі. Існуючі файли також можуть змінюватися.", style = MaterialTheme.typography.bodySmall)
+                            Button(enabled = !busy, onClick = {
+                                val connection = LumenaPreferences.load(context)
+                                val grant = CompanionTaskGrant.create(command, grantPaths,
+                                    connection.bridgeUrl, connection.bridgeToken, SystemClock.elapsedRealtime())
+                                if (grant == null) status = "Некоректні шляхи або немає session_id / task_id."
+                                else {
+                                    taskGrant = grant
+                                    grantEditor = null
+                                    status = "Дозвіл надано для перелічених файлів."
+                                    acceptDetected(command)
+                                }
+                            }) { Text("Дозволити й продовжити") }
+                            TextButton(onClick = { grantEditor = null }) { Text("Назад") }
+                        }
+                    }
                 }
             }
         }
@@ -560,8 +663,12 @@ fun CompanionScreen() {
 
         if (lastResult.isNotBlank()) {
             HorizontalDivider()
-            Text("4 · Real local result", style = MaterialTheme.typography.titleLarge)
-            Card(modifier = Modifier.fillMaxWidth()) {
+            Text("4 · Попередній результат", style = MaterialTheme.typography.titleLarge)
+            Text("Це результат виконаної команди. Нові команди та Run once — у секції 3 вище.", style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { resultExpanded = !resultExpanded }) {
+                Text(if (resultExpanded) "Згорнути результат" else "Показати результат")
+            }
+            if (resultExpanded) Card(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     lastResult,
                     modifier = Modifier.padding(12.dp),
@@ -580,14 +687,7 @@ fun CompanionScreen() {
 
         Spacer(Modifier.height(12.dp))
         Text(
-            when {
-                safeAuto && autoReturn ->
-                    "Security: only READ_ONLY tools may auto-run. Mutating and executable tools still require Run once. Results return automatically. No unrestricted shell tool is exposed."
-                safeAuto ->
-                    "Security: only READ_ONLY tools may auto-run. Mutating and executable tools still require Run once. Results stay in Lumena until you send them."
-                else ->
-                    "Security: Safe Auto is off. Every external LUMENA_TOOL requires Run once. No unrestricted shell tool is exposed."
-            },
+            "Safe Auto виконує читання. Запис — через Run once або окремий дозвіл на файли цього завдання. Python завжди потребує Run once. Дозвіл скидається після помилки, перезапуску процесу, 30 хвилин або 40 команд.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

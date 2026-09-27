@@ -81,7 +81,8 @@ class ProtocolNormalizer {
             ?: return if (looksProtocolLike(text)) {
                 NormalizationResult.Failure(
                     ProtocolFailureKind.SYNTAX,
-                    "Protocol-looking output is not one valid JSON envelope"
+                    "Protocol-looking output is not one valid JSON envelope (chars=${text.length}, " +
+                        "prefix=${if (text.startsWith("{")) "object" else "wrapper"}, ends_with_brace=${text.endsWith("}")})"
                 )
             } else {
                 NormalizationResult.PlainText(text)
@@ -487,6 +488,6 @@ class ProtocolNormalizer {
     private fun looksProtocolLike(text: String): Boolean =
         text.startsWith("{") ||
             text.startsWith("```json", ignoreCase = true) ||
-            text.startsWith("```") ||
+            (text.startsWith("```") && !Regex("^```[a-zA-Z][a-zA-Z0-9_+.-]*\\s*\\n").containsMatchIn(text)) ||
             text.startsWith("<tool_call>", ignoreCase = true)
 }

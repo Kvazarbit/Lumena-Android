@@ -249,7 +249,7 @@ object AdaptiveWebResearchStore {
         "lumena_adaptive_web_research.json"
     private const val MAX_OBSERVATIONS = 2_048
 
-    private val lock = Any()
+    private val lock = StateVaultLock.monitor
     private val adapter = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()

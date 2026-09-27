@@ -6,3 +6,9 @@ local.properties
 /third_party/llama.cpp/
 *.iml
 .DS_Store
+
+*.jks
+*.keystore
+*.p12
+LUMENA_SIGNING_BUNDLE.json
+__pycache__/

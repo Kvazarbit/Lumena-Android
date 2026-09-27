@@ -190,7 +190,7 @@ object LayaShadowPolicy {
 object LayaShadowStore {
     private const val FILE_NAME =
         "lumena_laya_shadow_v1.json"
-    private val lock = Any()
+    private val lock = StateVaultLock.monitor
     private val adapter = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()

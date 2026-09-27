@@ -13,14 +13,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OllamaClientHttpTest {
-    private fun consumeRequest(socket: Socket) {
+    private fun consumeRequest(socket: Socket): String {
         val input = socket.getInputStream()
         val header = ByteArrayOutputStream()
         val end = byteArrayOf(13, 10, 13, 10)
         var matched = 0
         while (true) {
             val value = input.read()
-            if (value < 0) return
+            if (value < 0) return ""
             header.write(value)
             matched = if (value.toByte() == end[matched]) matched + 1
                 else if (value.toByte() == end[0]) 1 else 0
@@ -34,17 +34,21 @@ class OllamaClientHttpTest {
             ?.get(1)
             ?.toInt()
             ?: 0
+        val body = ByteArrayOutputStream()
         var remaining = length
         val buffer = ByteArray(4096)
         while (remaining > 0) {
             val read = input.read(buffer, 0, minOf(buffer.size, remaining))
             if (read < 0) break
+            body.write(buffer, 0, read)
             remaining -= read
         }
+        return body.toString(Charsets.UTF_8.name())
     }
 
     private fun withFixture(
         responseBodies: List<String>,
+        requests: MutableList<String> = mutableListOf(),
         block: (port: Int, calls: AtomicInteger) -> Unit
     ) {
         val server = ServerSocket(0, 10, InetAddress.getByName("127.0.0.1"))
@@ -55,7 +59,7 @@ class OllamaClientHttpTest {
                 for (body in responseBodies) {
                     server.accept().use { socket ->
                         socket.soTimeout = 3000
-                        consumeRequest(socket)
+                        requests += consumeRequest(socket)
                         calls.incrementAndGet()
                         val bytes = body.toByteArray(Charsets.UTF_8)
                         val response = buildString {
@@ -261,6 +265,105 @@ class OllamaClientHttpTest {
 
             assertEquals("ok", result.getOrThrow())
             assertEquals(2, calls.get())
+        }
+    }
+
+    @Test fun lengthLimitedStreamIsNotAUsableToolResponseAndIsNotRetriedInTransport() {
+        withFixture(listOf("""{"message":{"role":"assistant","content":"{\"tool\":\"file.write\""},"done":false}
+{"done":true,"done_reason":"length","eval_count":768}
+""")) { port, calls ->
+            val result = runBlocking { OllamaClient("http://127.0.0.1:$port").chat("fixture", emptyList()) }
+            assertTrue(result.exceptionOrNull() is ModelOutputIncompleteException)
+            assertTrue(result.exceptionOrNull()!!.message!!.contains("length"))
+            assertEquals(1, calls.get())
+        }
+    }
+
+    @Test fun streamWithoutFinalDoneIsRejectedEvenIfTextLooksComplete() {
+        withFixture(listOf("""{"message":{"role":"assistant","content":"{\"done\":true,\"summary\":\"ok\"}"},"done":false}
+""")) { port, calls ->
+            val result = runBlocking { OllamaClient("http://127.0.0.1:$port").chat("fixture", emptyList()) }
+            assertTrue(result.exceptionOrNull() is ModelOutputIncompleteException)
+            assertTrue(result.exceptionOrNull()!!.message!!.contains("missing_done"))
+            assertEquals(1, calls.get())
+        }
+    }
+
+    @Test fun emptyLengthLimitedStreamDoesNotTriggerEmptyResponseFallback() {
+        withFixture(List(2) { """{"done":true,"done_reason":"length","eval_count":768}
+""" }) { port, calls ->
+            val result = runBlocking { OllamaClient("http://127.0.0.1:$port").chat("gemma4:31b-cloud", emptyList()) }
+            assertTrue(result.exceptionOrNull() is ModelOutputIncompleteException)
+            assertEquals(2, calls.get())
+        }
+    }
+
+    @Test fun fallbackChatAlsoRejectsOutputLengthLimit() {
+        withFixture(listOf("""{"done":true}
+""", """{"message":{"role":"assistant","content":"unfinished"},"done":true,"done_reason":"length"}""", """{"done":true,"done_reason":"length"}""")) { port, calls ->
+            val result = runBlocking { OllamaClient("http://127.0.0.1:$port").chat("gemma4:31b-cloud", emptyList()) }
+            assertTrue(result.exceptionOrNull() is ModelOutputIncompleteException)
+            assertEquals(3, calls.get())
+        }
+    }
+
+    @Test fun generateFallbackAlsoRejectsOutputLengthLimit() {
+        withFixture(listOf("""{"done":true}
+""", """{"done":true}""", """{"response":"unfinished","done":true,"done_reason":"length"}""", """{"done":true,"done_reason":"length"}""")) { port, calls ->
+            val result = runBlocking { OllamaClient("http://127.0.0.1:$port").chat("gemma4:31b-cloud", emptyList()) }
+            assertTrue(result.exceptionOrNull() is ModelOutputIncompleteException)
+            assertEquals(4, calls.get())
+        }
+    }
+
+    @Test fun cloudLengthRecoveryExpandsBudgetAndDiscardsBrokenText() {
+        val requests = mutableListOf<String>()
+        withFixture(listOf(
+            """{"message":{"role":"assistant","content":"BROKEN_FRAGMENT"},"done":true,"done_reason":"length","eval_count":4096}""",
+            """{"message":{"role":"assistant","content":"complete"},"done":true,"done_reason":"stop"}""",
+            """{"message":{"role":"assistant","content":"next"},"done":true}"""
+        ), requests) { port, calls ->
+            val profile = com.lumena.android.llama.LlamaHardwarePolicy.resolve(
+                com.lumena.android.llama.LlamaHardwareInputs(8.0, 4.0, 8, "Adreno", false, false, false))
+            assertEquals(640, profile.maxTokens)
+            val client = OllamaClient("http://127.0.0.1:$port", profile, "gemma4:31b-cloud")
+            assertEquals(4096, client.estimateContextUsage(emptyList()).reservedOutputTokens)
+            val partials = mutableListOf<String>()
+            val result = runBlocking { client.chatStreaming("gemma4:31b-cloud",
+                listOf(OllamaMessage("user", "Create HTML"))) { partials += it } }
+            assertEquals("complete", result.getOrThrow())
+            assertEquals(2, calls.get())
+            assertTrue(requests[0].contains("\"num_predict\":4096"))
+            assertTrue(requests[1].contains("\"num_predict\":8192"))
+            assertTrue(requests.all { it.contains("\"num_ctx\":16384") })
+            assertTrue(!requests[1].contains("BROKEN_FRAGMENT"))
+            assertTrue(requests[1].contains("ONE short complete JSON"))
+            assertTrue(partials.contains(""))
+            assertEquals(8192, client.lastContextUsage()!!.reservedOutputTokens)
+            assertEquals("next", runBlocking { client.chat("gemma4:31b-cloud", emptyList()) }.getOrThrow())
+            assertTrue(requests[2].contains("\"num_predict\":8192"))
+        }
+    }
+
+    @Test fun exhaustedCloudExpansionDoesNotMakeThirdRequest() {
+        val requests = mutableListOf<String>()
+        withFixture(List(2) { """{"done":true,"done_reason":"length","eval_count":8192}""" }, requests) { port, calls ->
+            val result = runBlocking { OllamaClient("http://127.0.0.1:$port").chat("model:cloud", emptyList()) }
+            val failure = result.exceptionOrNull() as ModelOutputIncompleteException
+            assertTrue(failure.outputRecoveryExhausted)
+            assertEquals(2, calls.get())
+            assertTrue(requests[0].contains("\"num_predict\":4096"))
+            assertTrue(requests[1].contains("\"num_predict\":8192"))
+        }
+    }
+
+    @Test fun cloudMissingDoneDoesNotIncreaseOutputBudget() {
+        withFixture(listOf("""{"message":{"role":"assistant","content":"unfinished"},"done":false}""")) { port, calls ->
+            val result = runBlocking { OllamaClient("http://127.0.0.1:$port").chat("model:cloud", emptyList()) }
+            val failure = result.exceptionOrNull() as ModelOutputIncompleteException
+            assertEquals("missing_done", failure.reason)
+            assertTrue(!failure.outputRecoveryExhausted)
+            assertEquals(1, calls.get())
         }
     }
 }

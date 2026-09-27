@@ -46,6 +46,7 @@ data class OllamaChatRequest(
 data class OllamaChatResponse(
     val message: OllamaMessage? = null,
     val done: Boolean? = null,
+    val done_reason: String? = null,
     val error: String? = null,
     val prompt_eval_count: Int? = null,
     val eval_count: Int? = null
@@ -62,10 +63,29 @@ data class OllamaGenerateRequest(
 data class OllamaGenerateResponse(
     val response: String? = null,
     val done: Boolean? = null,
+    val done_reason: String? = null,
     val error: String? = null,
     val prompt_eval_count: Int? = null,
     val eval_count: Int? = null
 )
+
+class ModelOutputIncompleteException(
+    val reason: String,
+    val tokens: Int? = null,
+    val outputRecoveryExhausted: Boolean = false
+) : IllegalStateException(
+    "MODEL_OUTPUT_INCOMPLETE done_reason=$reason generated_tokens=${tokens ?: "unknown"}" +
+        if (outputRecoveryExhausted) " output_recovery=exhausted requested_output_tokens=8192" else ""
+) {
+    val lengthLimited: Boolean
+        get() = reason.lowercase() in setOf("length", "max_tokens", "max_length")
+}
+
+internal fun requireCompleteOllamaOutput(done: Boolean?, reason: String?, tokens: Int?) {
+    if (reason?.lowercase() in setOf("length", "max_tokens", "max_length"))
+        throw ModelOutputIncompleteException(reason.orEmpty(), tokens)
+    if (done != true) throw ModelOutputIncompleteException("missing_done", tokens)
+}
 
 private class EmptyOllamaStreamException :
     IllegalStateException("Ollama stream completed without assistant message content")
@@ -128,8 +148,15 @@ interface ChatModelClient {
 
 class OllamaClient(
     baseUrl: String,
-    private val runtimeProfile: LlamaRuntimeProfile? = null
+    private val runtimeProfile: LlamaRuntimeProfile? = null,
+    modelHint: String? = null
 ) : ChatModelClient, ModelContextTelemetrySource {
+    private var activeModel: String? = modelHint
+    private var outputExpansionUsed = false
+
+    private fun requestBudget(retry: Boolean) = OllamaContextPolicy.budget(
+        runtimeProfile, retry, activeModel, outputExpansionUsed
+    )
     private val base = normalizeLoopbackBaseUrl(baseUrl)
         ?: throw IllegalArgumentException("Ollama URL must use localhost/127.0.0.1 over http")
 
@@ -154,7 +181,7 @@ class OllamaClient(
     private var lastContextUsageSnapshot: ModelContextUsage? = null
 
     override fun estimateContextUsage(messages: List<OllamaMessage>): ModelContextUsage {
-        val budget = OllamaContextPolicy.budget(runtimeProfile, retry = false)
+        val budget = requestBudget(retry = false)
         val compacted = OllamaContextPolicy.compact(messages, budget)
         return OllamaContextPolicy.usage(
             originalMessages = messages,
@@ -195,26 +222,39 @@ class OllamaClient(
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             require(model.isNotBlank()) { "Choose an Ollama model first" }
-            val normalBudget = OllamaContextPolicy.budget(runtimeProfile, retry = false)
-            val text = try {
-                executeWithBudget(
-                    model = model,
-                    originalMessages = messages,
-                    budget = normalBudget,
-                    onPartial = onPartial
-                )
-            } catch (first: Throwable) {
-                if (first is CancellationException) throw first
-                if (!shouldRetryOllamaWithSmallerContext(first)) throw first
-
-                onPartial("")
-                val retryBudget = OllamaContextPolicy.budget(runtimeProfile, retry = true)
-                executeWithBudget(
-                    model = model,
-                    originalMessages = messages,
-                    budget = retryBudget,
-                    onPartial = onPartial
-                )
+            if (activeModel != model) {
+                activeModel = model
+                outputExpansionUsed = false
+            }
+            var requestMessages = messages
+            var smallerContext = false
+            var text: String
+            while (true) {
+                try {
+                    text = executeWithBudget(model, requestMessages,
+                        requestBudget(smallerContext), onPartial)
+                    break
+                } catch (failure: Throwable) {
+                    if (failure is CancellationException) throw failure
+                    if (failure is ModelOutputIncompleteException && failure.lengthLimited &&
+                        isCloudBackedOllamaModel(model)) {
+                        // Never expose/execute a truncated tool envelope. Regenerate from
+                        // the original history once; do not append the broken assistant text.
+                        onPartial("")
+                        if (outputExpansionUsed) throw ModelOutputIncompleteException(
+                            failure.reason, failure.tokens, outputRecoveryExhausted = true
+                        )
+                        outputExpansionUsed = true
+                        requestMessages = messages + OllamaMessage("user",
+                            "The previous response hit the output limit and was not executed. " +
+                            "Regenerate exactly ONE short complete JSON object. " +
+                            "For code use small separate files or file.patch on a known unique marker, " +
+                            "at most 1000 source characters per call. Verify each result before continuing.")
+                    } else if (!smallerContext && shouldRetryOllamaWithSmallerContext(failure)) {
+                        smallerContext = true
+                        onPartial("")
+                    } else throw failure
+                }
             }
             Result.success(text)
         } catch (cancelled: CancellationException) {
@@ -352,6 +392,7 @@ class OllamaClient(
                 }
                 val source = response.body?.source() ?: error("Ollama returned no response body")
                 val accumulated = StringBuilder()
+                var completed = false
                 while (true) {
                     context.ensureActive()
                     val line = source.readUtf8Line() ?: break
@@ -367,8 +408,13 @@ class OllamaClient(
                             onPartial(accumulated.toString())
                         }
                     }
-                    if (chunk.done == true) break
+                    if (chunk.done == true) {
+                        requireCompleteOllamaOutput(chunk.done, chunk.done_reason, chunk.eval_count)
+                        completed = true
+                        break
+                    }
                 }
+                requireCompleteOllamaOutput(completed, null, null)
                 val text = accumulated.toString()
                 if (text.isBlank()) throw EmptyOllamaStreamException()
                 return text
@@ -413,6 +459,7 @@ class OllamaClient(
                         ollamaChunkError(parsed)?.let { message ->
                             error("Ollama response error: $message")
                         }
+                        requireCompleteOllamaOutput(parsed.done, parsed.done_reason, parsed.eval_count)
                         val text = parsed.message?.content
                             ?.takeIf { value -> value.isNotBlank() }
                             ?: throw EmptyOllamaChatException()
@@ -478,6 +525,7 @@ class OllamaClient(
                             error("Ollama generate response error: $message")
                         }
                         recordActualUsage(parsed)
+                        requireCompleteOllamaOutput(parsed.done, parsed.done_reason, parsed.eval_count)
                         val text = parsed.response
                             ?.takeIf { value -> value.isNotBlank() }
                             ?: error("Ollama cloud generate fallback returned no response")

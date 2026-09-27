@@ -358,7 +358,7 @@ object EvidenceGraphStore {
     private const val MAX_CANDIDATES = 256
     private const val MAX_APPLICATIONS = 256
 
-    private val lock = Any()
+    private val lock = StateVaultLock.monitor
 
     fun load(context: Context): EvidenceGraphState =
         synchronized(lock) {

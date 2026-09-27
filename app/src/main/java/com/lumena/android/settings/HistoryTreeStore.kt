@@ -34,7 +34,7 @@ object HistoryTreeStore {
     private const val MAX_BRANCHES = 48
     private const val MAX_TITLE = 72
 
-    private val lock = Any()
+    private val lock = StateVaultLock.monitor
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()
@@ -123,6 +123,31 @@ object HistoryTreeStore {
         }
         LocalSessionStore.save(app, created.session)
         return created
+    }
+
+    /** Fork before one user message. Never restore future receipts or approvals. */
+    fun forkAtMessage(context: Context, snapshot: LocalSessionSnapshot,
+                      messageId: String, draft: String): HistoryBranch {
+        val cleanFork = ConversationEdit.fork(snapshot, messageId, draft)
+        val app = context.applicationContext
+        val child = synchronized(lock) {
+            val state = loadOrCreate(app)
+            val parent = state.branches.first { it.id == state.activeBranchId }
+            val now = System.currentTimeMillis()
+            val child = HistoryBranch(
+                id = UUID.randomUUID().toString(), topic = parent.topic,
+                taskTitle = parent.taskTitle, title = sanitizeTitle("Edit · $draft"),
+                parentBranchId = parent.id, createdAt = now, updatedAt = now,
+                session = archive(cleanFork)
+            )
+            val branches = state.branches.map {
+                if (it.id == parent.id) it.copy(updatedAt = now, session = archive(snapshot)) else it
+            } + child
+            saveInternal(app, HistoryTreeState(child.id, retainBranches(branches, child.id)))
+            child
+        }
+        LocalSessionStore.save(app, child.session)
+        return child
     }
 
     /** Starts a blank task under the current topic without inheriting chat history. */

@@ -40,6 +40,20 @@ class LayaBridgeTest(unittest.TestCase):
         self.addCleanup(self.env.stop)
         self.addCleanup(self.temp.cleanup)
 
+    def test_runtime_threads_persist_and_reject_invalid_values(self):
+        self.b.LAYA_STATE_DIR = Path(self.temp.name) / "state"
+        self.b.LAYA_STATE_DIR.mkdir()
+        with patch.dict(os.environ, {"OMP_NUM_THREADS": "8"}):
+            os.environ.pop("LUMENA_LAYA_THREADS", None)
+            self.assertEqual("2", self.b._laya_runtime_env()["OMP_NUM_THREADS"])
+            (self.b.LAYA_STATE_DIR / "threads").write_text("4")
+            self.assertEqual("4", self.b._laya_runtime_env()["OMP_NUM_THREADS"])
+            self.assertEqual("PASSIVE", self.b._laya_runtime_env()["OMP_WAIT_POLICY"])
+            (self.b.LAYA_STATE_DIR / "threads").write_text("0")
+            with self.assertRaises(ValueError): self.b._laya_runtime_env()
+        with patch.dict(os.environ, {"LUMENA_LAYA_THREADS": "2"}):
+            self.assertEqual("2", self.b._laya_runtime_env()["OMP_NUM_THREADS"])
+
     def request(self):
         return json.dumps(
             {

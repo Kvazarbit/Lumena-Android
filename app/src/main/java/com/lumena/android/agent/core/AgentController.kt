@@ -12,6 +12,7 @@ data class AgentControlState(
     val toolUsed: Boolean = false,
     val protocolRetries: Int = 0,
     val schemaRepairs: Int = 0,
+    val summaryRepairs: Int = 0,
     val protocolNormalizations: Int = 0,
     val lastNormalizationRule: String? = null,
     val modelFailures: Int = 0,
@@ -160,6 +161,24 @@ class AgentController(
         }
     }
 
+    fun onIncompleteModelOutput(
+        state: AgentControlState,
+        detail: String,
+        outputRecoveryExhausted: Boolean = false
+    ): ControllerInstruction {
+        if (outputRecoveryExhausted) {
+            val message = "$detail. No action from the incomplete response was executed. " +
+                "The increased output budget was also exhausted; stopping without identical retries."
+            return ControllerInstruction.Stop(message, fail(state, message))
+        }
+        return protocolRetry(state.copy(task = state.task.copy(
+            errors = (state.task.errors + detail.take(600)).takeLast(8)
+        )), "$detail. No action from the incomplete response was executed. " +
+            "Regenerate exactly ONE short complete JSON object; do not continue the broken string. " +
+            "For code use small separate files or file.patch on a known unique marker, " +
+            "at most 1000 source characters per call. Verify each result before continuing.")
+    }
+
     fun interpret(raw: String, state: AgentControlState): ControllerInstruction {
         return when (val normalized = normalizer.normalize(raw)) {
             is NormalizationResult.Canonical -> {
@@ -232,7 +251,7 @@ class AgentController(
     ): ControllerInstruction = when (decision) {
         is AgentDecision.ToolCall -> interpretTool(decision, state)
         is AgentDecision.Done -> interpretDone(decision, state)
-        is AgentDecision.Partial -> ControllerInstruction.Finish(
+        is AgentDecision.Partial -> summaryConsistency(decision.summary, state) ?: ControllerInstruction.Finish(
             "Частково виконано.\n${decision.summary}",
             state.copy(
                 task = state.task.copy(
@@ -671,6 +690,25 @@ class AgentController(
         )
     }
 
+    private fun summaryConsistency(text: String, state: AgentControlState): ControllerInstruction? {
+        val contradicted = TaskExecutionRecap.contradictions(text, state)
+        if (contradicted.isEmpty()) return null
+        val receipt = TaskExecutionRecap.render(state)
+        if (state.summaryRepairs >= 1) {
+            val report = "Частково: інструменти виконувалися, але модель повторно сформувала звіт, який суперечить журналу. " +
+                "Фінальний опис потребує перевірки.\n\n" + receipt
+            return ControllerInstruction.Finish(report, state.copy(task = state.task.copy(
+                status = TaskStatus.PARTIAL, lastResult = report.take(4_000)
+            )))
+        }
+        return ControllerInstruction.AskModelAgain(
+            "SUMMARY_EVIDENCE_REPAIR: your report denies recorded execution of " + contradicted.joinToString() +
+                ". Correct only the report using these receipts. Do not rerun completed tools.\n" + receipt,
+            state.copy(summaryRepairs = state.summaryRepairs + 1,
+                task = state.task.copy(status = TaskStatus.WAITING_MODEL))
+        )
+    }
+
     private fun interpretDone(
         decision: AgentDecision.Done,
         state: AgentControlState
@@ -706,6 +744,8 @@ class AgentController(
                 "Task cannot be marked done yet. ${state.verificationReason ?: "Verification is required."}"
             )
         }
+
+        summaryConsistency(decision.summary, state)?.let { return it }
 
         val finished = state.copy(
             protocolRetries = 0,
@@ -780,6 +820,8 @@ class AgentController(
         val blocker = ContextKernel.completionBlocker(state.task.kernel)
             ?: if (state.verificationRequired) state.verificationReason ?: "Verification is required." else null
         if (blocker != null) return recoverPlainReply(state, trimmed, blocker)
+
+        summaryConsistency(trimmed, state)?.let { return it }
 
         if (requiresVisualEvidence(state.task.goal) && state.visualEvidenceReady) {
             return interpretDone(AgentDecision.Done(trimmed), state)
@@ -1373,7 +1415,8 @@ class AgentController(
             .orEmpty()
 
         appendLine("PROTOCOL_REPAIR_MODE retry=$retry")
-        appendLine("The previous model output was not executable and NOTHING from it was run.")
+        appendLine("The previous model output was not executable and NOTHING from it was run. Earlier recorded tool calls remain executed.")
+        appendLine(TaskExecutionRecap.render(state))
         appendLine("The active task is application-owned and is restored below. Do NOT ask the user to restate it.")
         appendLine("ACTIVE_TASK")
         appendLine("project=${state.task.projectId.orEmpty().take(180)}")

@@ -1,0 +1,15 @@
+app/src/main/java/com/lumena/android/agent/core/AgentController.kt:952:13: warning: variable 'canonicalTool' is never used
+        val canonicalTool = ToolRegistry.canonicalize(call.tool)
+            ^
+app/src/main/java/com/lumena/android/agent/core/ProtocolNormalizer.kt:369:13: warning: expression under 'when' is never equal to null
+            null -> emptyMap<String, Any?>()
+            ^
+app/src/main/java/com/lumena/android/agent/core/RecoveryAdvisor.kt:5:9: warning: parameter 'task' is never used
+        task: TaskState,
+        ^
+JUnit version 4.13.2
+.............................................................
+Time: 1.271
+
+OK (61 tests)
+

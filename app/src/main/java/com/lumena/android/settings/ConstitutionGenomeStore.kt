@@ -172,7 +172,7 @@ object ConstitutionGenomeStore {
     private const val FILE_NAME =
         "lumena_constitution_genome.json"
 
-    private val lock = Any()
+    private val lock = StateVaultLock.monitor
 
     fun load(context: Context): ConstitutionGenomeState =
         synchronized(lock) {

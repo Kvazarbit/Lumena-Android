@@ -463,7 +463,7 @@ object TinyJevCalibrationPolicy {
  */
 object TinyJevCalibrationStore {
     private const val FILE_NAME = "lumena_tinyjev_calibration.json"
-    private val lock = Any()
+    private val lock = StateVaultLock.monitor
     private val adapter = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()

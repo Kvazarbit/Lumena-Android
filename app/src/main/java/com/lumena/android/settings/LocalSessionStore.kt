@@ -17,7 +17,8 @@ data class PersistedChatImage(
 data class PersistedChatMessage(
     val role: String,
     val text: String,
-    val images: List<PersistedChatImage> = emptyList()
+    val images: List<PersistedChatImage> = emptyList(),
+    val id: String = java.util.UUID.randomUUID().toString()
 )
 
 data class PersistedHistoryMessage(
@@ -44,7 +45,8 @@ data class LocalSessionSnapshot(
     // Compatibility field for Step 7E snapshots. New code persists the full
     // bounded researchThread and mirrors rootGoal here for safe migration.
     val researchGoal: String? = null,
-    val researchThread: ResearchThreadState? = null
+    val researchThread: ResearchThreadState? = null,
+    val codeGoal: String? = null
 )
 
 /**
@@ -72,7 +74,7 @@ object LocalSessionStore {
             ?: LocalSessionSnapshot()
     }
 
-    fun save(context: Context, snapshot: LocalSessionSnapshot) {
+    fun save(context: Context, snapshot: LocalSessionSnapshot) = synchronized(StateVaultLock.monitor) {
         val bounded = snapshot.copy(
             chat = snapshot.chat.takeLast(MAX_CHAT_MESSAGES).map { message ->
                 message.copy(
@@ -115,6 +117,7 @@ object LocalSessionStore {
                 }
             ),
             inputDraft = snapshot.inputDraft.take(MAX_DRAFT_CHARS),
+            codeGoal = snapshot.codeGoal?.take(MAX_DRAFT_CHARS),
             researchGoal = snapshot.researchThread
                 ?.rootGoal
                 ?.take(MAX_DRAFT_CHARS)
@@ -134,6 +137,7 @@ object LocalSessionStore {
         prefs(context).edit().putString(KEY_SNAPSHOT, adapter.toJson(bounded)).apply()
         // History mirrors only bounded, app-private context. Workspace files are never copied/rolled back.
         HistoryTreeStore.mirrorActiveSession(context, bounded)
+        StateVault.requestSave(context)
     }
 
     fun clear(context: Context) {

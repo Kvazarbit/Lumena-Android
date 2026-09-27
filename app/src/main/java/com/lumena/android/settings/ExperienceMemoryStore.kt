@@ -220,7 +220,7 @@ object ExperienceMemoryFileCodec {
 
 object ExperienceMemoryStore {
     private const val FILE_NAME = "lumena_experience_memory.json"
-    private val lock = Any()
+    private val lock = StateVaultLock.monitor
 
     fun load(context: Context): ExperienceMemoryState = synchronized(lock) {
         val app = context.applicationContext

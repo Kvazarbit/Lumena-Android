@@ -9,6 +9,7 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
@@ -89,11 +90,13 @@ import com.lumena.android.ollama.WorkflowOutcome
 import com.lumena.android.ollama.WorkflowImage
 import com.lumena.android.ollama.WorkflowRunner
 import com.lumena.android.settings.LocalSessionSnapshot
+import com.lumena.android.settings.HistoryTreeStore
 import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.settings.ContextCheckpointStore
 import com.lumena.android.settings.AdaptiveWebResearchStore
 import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.EvidenceApplicationStatus
+import com.lumena.android.agent.core.CodeTaskAnchor
 import com.lumena.android.agent.core.FollowUpGoal
 import com.lumena.android.agent.core.ProjectContextResolver
 import com.lumena.android.agent.core.PreviousTaskOutcomeContext
@@ -137,7 +140,8 @@ import org.json.JSONObject
 private data class ChatBubble(
     val role: String,
     val text: String,
-    val images: List<WorkflowImage> = emptyList()
+    val images: List<WorkflowImage> = emptyList(),
+    val id: String = UUID.randomUUID().toString()
 )
 
 private val remoteImageClient = OkHttpClient.Builder()
@@ -154,13 +158,16 @@ fun WorkflowChatScreen(
     agentWorkScope: CoroutineScope? = null,
     runCoordinator: AgentRunCoordinator? = null,
     onOpenHistory: (() -> Unit)? = null,
-    onOpenAgent: (() -> Unit)? = null
+    onOpenAgent: (() -> Unit)? = null,
+    onSendToCompanion: ((messageId: String, role: String, text: String) -> Unit)? = null
 ) {
     val uiScope = rememberCoroutineScope()
     val workScope = agentWorkScope ?: uiScope
     val fallbackCoordinator = remember { AgentRunCoordinator() }
     val coordinator = runCoordinator ?: fallbackCoordinator
     val listState = rememberLazyListState()
+    var scrollRequest by remember { mutableStateOf(0) }
+    var handledScrollRequest by remember { mutableStateOf(-1) }
     val context = LocalContext.current
     val tinyJevModel = remember(context) { TinyJevAssetLoader.load(context) }
     val initial = remember { LumenaPreferences.load(context) }
@@ -173,6 +180,7 @@ fun WorkflowChatScreen(
         mutableStateListOf<ChatBubble>().apply {
             val restoredChat = restored.chat.map { message ->
                 ChatBubble(
+                    id = message.id,
                     role = message.role,
                     text = message.text,
                     images = message.images.map { image ->
@@ -190,6 +198,9 @@ fun WorkflowChatScreen(
         }
     }
 
+    var editingMessageId by rememberSaveable { mutableStateOf<String?>(null) }
+    var editDraft by rememberSaveable { mutableStateOf("") }
+    var editError by remember { mutableStateOf<String?>(null) }
     var input by rememberSaveable { mutableStateOf(restored.inputDraft) }
     var ollamaUrl by rememberSaveable { mutableStateOf(initial.ollamaUrl) }
     var bridgeUrl by rememberSaveable { mutableStateOf(initial.bridgeUrl) }
@@ -210,6 +221,9 @@ fun WorkflowChatScreen(
         mutableStateOf(listOf(systemMessage) + restored.history.map { OllamaMessage(it.role, it.content) })
     }
     var contextUsage by remember { mutableStateOf<ModelContextUsage?>(null) }
+    var codeGoal by remember {
+        mutableStateOf(restored.codeGoal ?: CodeTaskAnchor.restore(restored.chat.map { it.role to it.text }))
+    }
     var researchThread by remember {
         mutableStateOf(
             restored.researchThread
@@ -295,51 +309,52 @@ fun WorkflowChatScreen(
 
     var pending by remember { mutableStateOf(restoredPendingFrom(restored.pending)) }
 
-    fun persistSession() {
-        LocalSessionStore.save(
-            context,
-            LocalSessionSnapshot(
-                chat = bubbles.map { bubble ->
-                    PersistedChatMessage(
-                        role = bubble.role,
-                        text = bubble.text,
-                        images = bubble.images.map { image ->
-                            PersistedChatImage(
-                                title = image.title,
-                                thumbnailUrl = image.thumbnailUrl,
-                                sourcePage = image.sourcePage,
-                                source = image.source
-                            )
-                        }
+    fun sessionSnapshot(): LocalSessionSnapshot = LocalSessionSnapshot(
+        chat = bubbles.map { bubble ->
+            PersistedChatMessage(
+                id = bubble.id,
+                role = bubble.role,
+                text = bubble.text,
+                images = bubble.images.map { image ->
+                    PersistedChatImage(
+                        title = image.title,
+                        thumbnailUrl = image.thumbnailUrl,
+                        sourcePage = image.sourcePage,
+                        source = image.source
                     )
-                },
-                history = history.filterNot { it.role == "system" }
-                    .map { PersistedHistoryMessage(it.role, it.content) },
-                task = currentTask,
-                pending = pending?.let { active ->
-                    PersistedPendingTool(
-                        tool = active.plan.request.tool,
-                        args = active.plan.request.args,
-                        requestId = active.plan.request.requestId,
-                        reason = active.plan.reason,
-                        control = active.control,
-                        history = active.history.filterNot { it.role == "system" }
-                            .map { PersistedHistoryMessage(it.role, it.content) },
-                        images = active.images.map { image ->
-                            PersistedChatImage(
-                                title = image.title,
-                                thumbnailUrl = image.thumbnailUrl,
-                                sourcePage = image.sourcePage,
-                                source = image.source
-                            )
-                        }
-                    )
-                },
-                inputDraft = input,
-                researchGoal = researchThread?.rootGoal,
-                researchThread = researchThread
+                }
             )
-        )
+        },
+        history = history.filterNot { it.role == "system" }
+            .map { PersistedHistoryMessage(it.role, it.content) },
+        task = currentTask,
+        pending = pending?.let { active ->
+            PersistedPendingTool(
+                tool = active.plan.request.tool,
+                args = active.plan.request.args,
+                requestId = active.plan.request.requestId,
+                reason = active.plan.reason,
+                control = active.control,
+                history = active.history.filterNot { it.role == "system" }
+                    .map { PersistedHistoryMessage(it.role, it.content) },
+                images = active.images.map { image ->
+                    PersistedChatImage(
+                        title = image.title,
+                        thumbnailUrl = image.thumbnailUrl,
+                        sourcePage = image.sourcePage,
+                        source = image.source
+                    )
+                }
+            )
+        },
+        inputDraft = input,
+        researchGoal = researchThread?.rootGoal,
+        researchThread = researchThread,
+        codeGoal = codeGoal
+    )
+
+    fun persistSession() {
+        LocalSessionStore.save(context, sessionSnapshot())
     }
 
     fun isCurrentTask(taskId: String): Boolean = LocalSessionStore.load(context).task?.id == taskId
@@ -365,6 +380,7 @@ fun WorkflowChatScreen(
 
         val storedChat = stored.chat.map { message ->
             ChatBubble(
+                id = message.id,
                 role = message.role,
                 text = message.text,
                 images = message.images.map { image ->
@@ -392,6 +408,7 @@ fun WorkflowChatScreen(
                 ResearchThreadState(rootGoal = legacy)
             }
         if (storedThread != researchThread) researchThread = storedThread
+        codeGoal = stored.codeGoal
 
         busy = stored.task?.status in setOf(
             TaskStatus.PLANNING, TaskStatus.WAITING_MODEL, TaskStatus.EXECUTING, TaskStatus.VERIFYING
@@ -420,6 +437,7 @@ fun WorkflowChatScreen(
         history = listOf(systemMessage)
         contextUsage = null
         researchThread = null
+        codeGoal = null
         bubbles.clear()
         bubbles += ChatBubble("assistant", "Новий чат. Що хочеш зробити?")
         busy = false
@@ -447,7 +465,7 @@ fun WorkflowChatScreen(
         val dollar = '$'
         return """
             set -euo pipefail
-            COMMIT="8dd084e9c663be212a0996bfa6d9cb0298139331"
+            COMMIT="5fe0068ed2f81fa28b87ee5112b5de11b8791760"
             BASE="https://raw.githubusercontent.com/Kvazarbit/Lumena-Android/${dollar}COMMIT/termux"
             TMP="${dollar}HOME/.lumena-update"
             mkdir -p "${dollar}TMP"
@@ -652,7 +670,8 @@ fun WorkflowChatScreen(
         } else {
             OllamaClient(
                 ollamaUrl,
-                runtimeProfile = LlamaHardwareProfile.detect(context)
+                runtimeProfile = LlamaHardwareProfile.detect(context),
+                modelHint = selectedModel
             )
         }
 
@@ -689,7 +708,9 @@ fun WorkflowChatScreen(
                     CoordinatorExperienceStore.relevant(
                         context = context,
                         query = task.goal,
-                        limit = 4
+                        limit = 4,
+                        scopeId = task.projectId ?: "global",
+                        modelId = constitutionContributorModelId
                     )
                 } catch (_: Exception) {
                     listOf(
@@ -748,7 +769,9 @@ fun WorkflowChatScreen(
                     val examples = CoordinatorExperienceStore.examples(
                         context = context,
                         query = query,
-                        limit = 64
+                        limit = 64,
+                        scopeId = task.projectId ?: "global",
+                        modelId = constitutionContributorModelId
                     )
                     val recommendation = ReflexExperienceRanker.rank(
                         event = event,
@@ -945,7 +968,8 @@ fun WorkflowChatScreen(
                         request = request,
                         result = result,
                         experienceId = eventId,
-                        modelId = constitutionContributorModelId
+                        modelId = constitutionContributorModelId,
+                        scopeId = task.projectId ?: "global"
                     )
                 }
                 val coordinatorFailure = coordinatorResult.exceptionOrNull()
@@ -1120,8 +1144,12 @@ fun WorkflowChatScreen(
 
         input = ""
         val previous = currentTask
+        val codeResolution = CodeTaskAnchor.resolve(
+            text, codeGoal, bubbles.lastOrNull { it.role == "assistant" }?.text
+        )
+        codeGoal = codeResolution.anchor
         val resolution = ResearchThreadResolver.resolve(
-            text = text,
+            text = codeResolution.text,
             previousGoal = previous?.goal,
             thread = researchThread
         )
@@ -1148,6 +1176,7 @@ fun WorkflowChatScreen(
         taskApprovals.clear()
         currentTask = task
         bubbles += ChatBubble("user", text)
+        scrollRequest++
 
         val previousContext = if (referenceUsesPreviousTask)
             listOf(OllamaMessage("user", "HISTORICAL TASK CHECKPOINT; verify current state before acting. " +
@@ -1203,6 +1232,32 @@ fun WorkflowChatScreen(
             }
             applyOutcome(task.id, runToken, outcome)
         }
+    }
+
+    fun submitEdit() {
+        val messageId = editingMessageId ?: return
+        if (busy || coordinator.active || pending != null || editDraft.isBlank()) return
+        val branch = runCatching {
+            HistoryTreeStore.forkAtMessage(context, sessionSnapshot(), messageId, editDraft.trim())
+        }.getOrElse {
+            editError = "Не вдалося створити гілку: ${it.message}"
+            return
+        }
+        coordinator.clearFinished()
+        taskApprovals.clear()
+        currentTask = null
+        pending = null
+        researchThread = null
+        codeGoal = null
+        contextUsage = null
+        history = listOf(systemMessage) + branch.session.history.map { OllamaMessage(it.role, it.content) }
+        val retainedIds = branch.session.chat.map { it.id }.toSet()
+        bubbles.removeAll { it.id !in retainedIds }
+        input = branch.session.inputDraft
+        editingMessageId = null
+        editError = null
+        persistSession()
+        send()
     }
 
     LaunchedEffect(Unit) {
@@ -1261,8 +1316,16 @@ fun WorkflowChatScreen(
         }
     }
 
-    LaunchedEffect(bubbles.size) {
-        if (bubbles.isNotEmpty()) listState.animateScrollToItem(bubbles.lastIndex)
+    LaunchedEffect(bubbles.size, scrollRequest) {
+        val layout = listState.layoutInfo
+        val lastVisible = layout.visibleItemsInfo.lastOrNull()
+        val nearBottom = lastVisible != null &&
+            lastVisible.index >= layout.totalItemsCount - 2 &&
+            lastVisible.offset + lastVisible.size <= layout.viewportEndOffset
+        val requested = handledScrollRequest != scrollRequest
+        handledScrollRequest = scrollRequest
+        val count = bubbles.count { it.role != "status" }
+        if (count > 0 && (requested || nearBottom)) listState.animateScrollToItem(count - 1)
     }
 
     Column(
@@ -1296,9 +1359,21 @@ fun WorkflowChatScreen(
         ) {
             items(
                 items = bubbles.filter { it.role != "status" },
-                key = { it.hashCode() }
+                key = { it.id }
             ) { bubble ->
-                MessageBubble(bubble)
+                MessageBubble(
+                    message = bubble,
+                    onCopy = { copyToClipboard("Lumena message", bubble.text) },
+                    onCompanion = onSendToCompanion?.let { send ->
+                        { send(bubble.id, bubble.role, bubble.text) }
+                    },
+                    editEnabled = !busy && !coordinator.active && pending == null,
+                    onEdit = {
+                        editingMessageId = bubble.id
+                        editDraft = bubble.text
+                        editError = null
+                    }
+                )
             }
         }
 
@@ -1321,6 +1396,29 @@ fun WorkflowChatScreen(
             onPlus = { showSettings = true },
             onSend = { send() },
             onStop = { stopCurrentTask() }
+        )
+    }
+
+    if (editingMessageId != null) {
+        AlertDialog(
+            onDismissRequest = { editingMessageId = null },
+            title = { Text("Редагувати запит") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Продовження створить нову гілку від цього запиту. Старий діалог залишиться в історії. Зміни у файлах не відкочуються.")
+                    OutlinedTextField(
+                        value = editDraft, onValueChange = { editDraft = it },
+                        modifier = Modifier.fillMaxWidth(), minLines = 3, maxLines = 8
+                    )
+                    editError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { submitEdit() },
+                    enabled = editDraft.isNotBlank() && !busy && !coordinator.active && pending == null
+                ) { Text("Продовжити звідси") }
+            },
+            dismissButton = { TextButton(onClick = { editingMessageId = null }) { Text("Скасувати") } }
         )
     }
 
@@ -1710,12 +1808,11 @@ private fun ModernComposer(
 }
 
 @Composable
-private fun MessageBubble(message: ChatBubble) {
+private fun MessageBubble(
+    message: ChatBubble, onCopy: () -> Unit, onCompanion: (() -> Unit)?,
+    editEnabled: Boolean, onEdit: () -> Unit
+) {
     val isUser = message.role == "user"
-    if (message.role == "error") {
-        FriendlyErrorBubble(message.text)
-        return
-    }
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (isUser) Alignment.End else Alignment.Start
@@ -1726,7 +1823,9 @@ private fun MessageBubble(message: ChatBubble) {
                 shape = RoundedCornerShape(22.dp),
                 color = MaterialTheme.colorScheme.primaryContainer
             ) {
-                Text(message.text, modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp))
+                SelectionContainer {
+                    Text(message.text, modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp))
+                }
             }
         } else {
             Column(
@@ -1734,17 +1833,24 @@ private fun MessageBubble(message: ChatBubble) {
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (message.text.isNotBlank()) {
-                    Text(
-                        message.text,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
-                        style = MaterialTheme.typography.bodyLarge
-                    )
+                    SelectionContainer {
+                        if (message.role == "error") FriendlyErrorBubble(message.text)
+                        else Text(
+                            message.text,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
                 }
                 message.images.take(4).forEach { image ->
                     RemoteImageCard(image)
                 }
             }
         }
+        if (message.text.isNotBlank()) MessageActions(
+            onCopy = onCopy, onCompanion = onCompanion,
+            onEdit = if (isUser) onEdit else null, editEnabled = editEnabled
+        )
     }
 }
 

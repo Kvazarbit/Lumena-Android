@@ -76,7 +76,7 @@ object ReflexExperienceRanker {
 
         val matched = examples
             .asSequence()
-            .filter { it.kind == CoordinatorExampleKind.RECOVERY }
+            .filter { it.kind in setOf(CoordinatorExampleKind.RECOVERY, CoordinatorExampleKind.FAILED_RECOVERY) }
             .filter { it.evidenceIds.isNotEmpty() }
             .filter { example ->
                 val first = example.tools.firstOrNull()
@@ -90,28 +90,23 @@ object ReflexExperienceRanker {
 
         if (matched.isEmpty()) return noEvidence()
 
-        var retrySupport = 0
-        var alternativeSupport = 0
-        matched.forEach { example ->
-            if (example.tools.size <= 2) {
-                retrySupport += 1
+        // One task supplies at most one vote per option. Any failed attempt
+        // in that task is retained, even if a later retry happened to work.
+        val votes = matched.groupBy { example ->
+            example.sourceSessionHash to if (example.tools.size <= 2) {
+                ReflexOption.RETRY_VARIANT
             } else {
-                alternativeSupport += 1
+                ReflexOption.TRY_ALTERNATIVE
             }
         }
-
         val support = linkedMapOf<ReflexOption, Int>()
-        if (
-            retrySupport > 0 &&
-            ReflexOption.RETRY_VARIANT in candidates.allowed
-        ) {
-            support[ReflexOption.RETRY_VARIANT] = retrySupport
-        }
-        if (
-            alternativeSupport > 0 &&
-            ReflexOption.TRY_ALTERNATIVE in candidates.allowed
-        ) {
-            support[ReflexOption.TRY_ALTERNATIVE] = alternativeSupport
+        val failures = linkedMapOf<ReflexOption, Int>()
+        votes.forEach { (key, episodes) ->
+            val option = key.second
+            if (option in candidates.allowed) {
+                val counter = if (episodes.any { it.kind == CoordinatorExampleKind.FAILED_RECOVERY }) failures else support
+                counter[option] = (counter[option] ?: 0) + 1
+            }
         }
 
         if (support.isEmpty()) {
@@ -120,7 +115,7 @@ object ReflexExperienceRanker {
                 evidence = ReflexScore(
                     value = 0.0,
                     confidence = 0.0,
-                    evidenceCount = matched.size
+                    evidenceCount = votes.size
                 ),
                 matchedExampleIds = matched
                     .map { it.id }
@@ -130,6 +125,10 @@ object ReflexExperienceRanker {
         }
 
         val usable = support.values.sum()
+        val attempted = usable + failures.values.sum()
+        val reliability = support.mapValues { (option, success) ->
+            success.toDouble() / (success + (failures[option] ?: 0)).toDouble()
+        }
         val best = support.values.maxOrNull() ?: 0
         val agreement = if (usable == 0) {
             0.0
@@ -139,7 +138,7 @@ object ReflexExperienceRanker {
         val saturation =
             (usable.toDouble() / TARGET_SUPPORT.toDouble())
                 .coerceIn(0.0, 1.0)
-        val strength = (agreement * saturation)
+        val strength = (agreement * saturation * usable.toDouble() / attempted.toDouble())
             .coerceIn(0.0, 1.0)
 
         val choice = ReflexKernel.rank(
@@ -147,7 +146,7 @@ object ReflexExperienceRanker {
             scores = support.map { (option, count) ->
                 ReflexChoiceScore(
                     option = option,
-                    score = count.toDouble() / usable.toDouble()
+                    score = (count.toDouble() / usable.toDouble()) * reliability.getValue(option)
                 )
             },
             confidence = strength,
@@ -159,7 +158,7 @@ object ReflexExperienceRanker {
             evidence = ReflexScore(
                 value = strength,
                 confidence = agreement,
-                evidenceCount = matched.size
+                evidenceCount = votes.size
             ),
             matchedExampleIds = matched
                 .map { it.id }

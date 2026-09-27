@@ -49,7 +49,7 @@ class ReflexExperienceRankerTest {
     ) = CoordinatorExecutionExample(
         id = id,
         kind = CoordinatorExampleKind.RECOVERY,
-        sourceSessionHash = "abcdef1234567890",
+        sourceSessionHash = "session-$id",
         tools = tools,
         targets = tools.map { "query=fixture" },
         evidenceIds = evidence,
@@ -254,4 +254,12 @@ class ReflexExperienceRankerTest {
 
         assertNull(recommendation.choice)
     }
+    @Test
+    fun repeatedExamplesFromOneTaskCannotPretendToBeIndependentExperience() {
+        val examples = (1..16).map { recovery("duplicate-$it", listOf("web.search", "web.search")).copy(sourceSessionHash = "one-task") }
+        val recommendation = ReflexExperienceRanker.rank(event(), state(), examples)
+        assertEquals(1, requireNotNull(recommendation.choice).evidenceCount)
+        assertTrue(requireNotNull(recommendation.choice).confidence <= 0.125)
+    }
+
 }

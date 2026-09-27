@@ -355,10 +355,11 @@ class WorkflowRunner(
             if (replyResult.isFailure) {
                 val error = replyResult.exceptionOrNull()
                 if (error is CancellationException) throw error
-                when (val recovery = controller.onModelFailure(
-                    state,
-                    error?.message ?: error?.javaClass?.simpleName.orEmpty()
-                )) {
+                val failureMessage = error?.message ?: error?.javaClass?.simpleName.orEmpty()
+                val recovery = if (error is ModelOutputIncompleteException)
+                    controller.onIncompleteModelOutput(state, failureMessage, error.outputRecoveryExhausted)
+                else controller.onModelFailure(state, failureMessage)
+                when (recovery) {
                     is ControllerInstruction.AskModelAgain -> {
                         state = recovery.state
                         publish(state, onState)
@@ -793,6 +794,12 @@ class WorkflowRunner(
             appendLine("goal=$compactGoal")
             appendLine("status=${state.task.status}")
             appendLine("step=${state.task.step}/${state.task.maxSteps}")
+            if (state.intent == com.lumena.android.agent.core.TaskIntent.CODE_WORK) {
+                appendLine("CODE DELIVERY: create real workspace files through file.write/file.patch, not a markdown code dump. " +
+                    "Use one complete JSON call at a time, at most 1000 source characters. Split larger programs into small files " +
+                    "or patch a known unique marker after reading the file. Escape quotes/newlines in JSON strings. " +
+                    "Verify changed files; if runtime verification is unavailable, report that limitation.")
+            }
             state.task.lastTool?.let { appendLine("last_tool=$it") }
             compactLastResult?.let { appendLine("last_result=$it") }
             state.verificationReason?.let {
@@ -804,6 +811,11 @@ class WorkflowRunner(
         return buildList {
             add(OllamaMessage("system", mergedSystem))
             addAll(history.filterNot { it.role == "system" })
+            // A fresh, bounded user turn survives backend history compaction.
+            // It is derived only from current task state, never past chats.
+            com.lumena.android.agent.core.TaskExecutionRecap.render(state)
+                .takeIf { it.isNotBlank() }
+                ?.let { add(OllamaMessage("user", it)) }
         }
     }
 

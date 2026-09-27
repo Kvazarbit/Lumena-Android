@@ -1,0 +1,21 @@
+app/src/main/java/com/lumena/android/agent/core/AgentController.kt:976:13: warning: variable 'canonicalTool' is never used
+        val canonicalTool = ToolRegistry.canonicalize(call.tool)
+            ^
+app/src/main/java/com/lumena/android/agent/core/ProtocolNormalizer.kt:369:13: warning: expression under 'when' is never equal to null
+            null -> emptyMap<String, Any?>()
+            ^
+app/src/main/java/com/lumena/android/agent/core/RecoveryAdvisor.kt:5:9: warning: parameter 'task' is never used
+        task: TaskState,
+        ^
+app/src/test/java/com/lumena/android/agent/core/AgentControllerTest.kt:731:13: warning: variable 'listCall' is never used
+        val listCall = AgentDecision.ToolCall(
+            ^
+app/src/test/java/com/lumena/android/agent/core/AgentControllerTest.kt:792:13: warning: variable 'call' is never used
+        val call = AgentDecision.ToolCall("workspace.list")
+            ^
+JUnit version 4.13.2
+....................................................................................
+Time: 0.582
+
+OK (84 tests)
+

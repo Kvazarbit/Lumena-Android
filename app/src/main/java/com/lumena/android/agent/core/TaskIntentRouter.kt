@@ -373,6 +373,7 @@ object TaskIntentRouter {
     private fun isCodeWork(lower: String): Boolean {
         val codeTerms = listOf(
             "python", ".py", "kotlin", ".kt", "java", ".java", "gradle",
+            "html", ".html", "css", ".css", "javascript", "typescript", "js", "webgl",
             "скрипт", "script", "код", "code", "compile", "компіля",
             "test", "тест", "bug", "баг", "debug", "fix(", "repo", "repository",
             "github", "git "
@@ -382,7 +383,14 @@ object TaskIntentRouter {
             "виправ", "fix", "редаг", "edit", "patch", "перевір", "test",
             "запуст", "run", "debug", "build", "збір", "commit"
         )
-        return codeTerms.any { containsTerm(lower, it) } && actionTerms.any { containsTerm(lower, it) }
+        if (!codeTerms.any { containsTerm(lower, it) }) return false
+        if (actionTerms.any { containsTerm(lower, it) }) return true
+        // Tolerate one mistyped letter in a leading creation imperative, only
+        // when an explicit code subject is present. This grants no tool authority.
+        val leading = Regex("^\\p{L}+").find(lower)?.value ?: return false
+        return listOf("створи", "створити", "напиши", "create", "write", "implement").any { verb ->
+            leading.length == verb.length && leading.zip(verb).count { (a, b) -> a != b } <= 1
+        }
     }
 
     private fun isFileInspection(lower: String): Boolean {

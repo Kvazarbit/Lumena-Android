@@ -1835,6 +1835,18 @@ def laya_status() -> dict[str, Any]:
     }
 
 
+def _laya_runtime_env() -> dict[str, str]:
+    configured = os.environ.get("LUMENA_LAYA_THREADS")
+    if configured is None:
+        try:
+            configured = (LAYA_STATE_DIR / "threads").read_text().strip()
+        except FileNotFoundError:
+            configured = "2"
+    if configured not in {str(n) for n in range(1, 9)}:
+        raise ValueError("LUMENA_LAYA_THREADS / persisted threads must be 1..8")
+    return dict(os.environ, OMP_NUM_THREADS=configured, OMP_WAIT_POLICY="PASSIVE")
+
+
 def laya_start() -> dict[str, Any]:
     payload = _laya_status_payload()
     if payload["running"]:
@@ -1865,8 +1877,9 @@ def laya_start() -> dict[str, Any]:
         }
 
     LAYA_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    runtime_env = _laya_runtime_env()
     log = open(LAYA_LOG, "ab", buffering=0)
-    subprocess.Popen(
+    process = subprocess.Popen(
         [str(LAYA_BIN), str(LAYA_MODEL_DIR), "--serve", str(LAYA_PORT), "--bind", LAYA_HOST],
         cwd=str(LAYA_STATE_DIR),
         stdout=log,
@@ -1874,7 +1887,10 @@ def laya_start() -> dict[str, Any]:
         stdin=subprocess.DEVNULL,
         start_new_session=True,
         close_fds=True,
+        env=runtime_env,
     )
+    log.close()
+    (LAYA_STATE_DIR / "laya.pid").write_text(str(process.pid))
     for _ in range(120):
         time.sleep(0.25)
         current = _laya_status_payload()
