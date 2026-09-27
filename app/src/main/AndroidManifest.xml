@@ -9,6 +9,7 @@
     </queries>
 
     <application
+        android:name=".LumenaApplication"
         android:allowBackup="true"
         android:label="Lumena"
         android:theme="@style/Theme.Lumena"

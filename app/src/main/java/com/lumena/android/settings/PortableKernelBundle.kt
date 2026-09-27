@@ -582,7 +582,7 @@ object PortableKernelCodec {
 
 object PortableKernelStore {
     private const val FILE_NAME = "lumena_portable_kernel.json"
-    private val lock = Any()
+    private val lock = StateVaultLock.monitor
 
     fun exportJson(
         context: Context,

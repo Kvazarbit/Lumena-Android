@@ -60,6 +60,8 @@ import com.lumena.android.llama.EmbeddedLlamaRuntime
 import com.lumena.android.settings.HistoryTreeStore
 import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.settings.LumenaPreferences
+import com.lumena.android.ui.StateVaultPanel
+import com.lumena.android.settings.StateVault
 import com.lumena.android.ui.AgentWorkDrawer
 import com.lumena.android.ui.HistoryTreeDrawer
 import com.lumena.android.ui.LumenaTheme
@@ -140,6 +142,19 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun LumenaApp(refreshToken: Int) {
+        if (StateVault.startupError != null) {
+            Text(StateVault.startupError.orEmpty(), modifier = Modifier.padding(24.dp))
+            return
+        }
+        if (StateVault.restoring) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Копію перевірено. Закрий Lumena цією кнопкою та відкрий знову для відновлення.")
+                Button(onClick = { finishAffinity(); android.os.Process.killProcess(android.os.Process.myPid()) }) {
+                    Text("Закрити для відновлення")
+                }
+            }
+            return
+        }
         var tab by remember { mutableIntStateOf(0) }
         var handoffVersion by remember { mutableIntStateOf(0) }
         val agentWorkScope = rememberCoroutineScope()
@@ -280,14 +295,14 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
-                    else -> ToolsScreen(refreshToken, Modifier.padding(inner))
+                    else -> ToolsScreen(refreshToken, Modifier.padding(inner), coordinator.active)
                 }
             }
         }
     }
 
     @Composable
-    private fun ToolsScreen(refreshToken: Int, modifier: Modifier = Modifier) {
+    private fun ToolsScreen(refreshToken: Int, modifier: Modifier = Modifier, agentBusy: Boolean = false) {
         var snapshotText by remember { mutableStateOf("No snapshot yet") }
         var exitDiagnostics by remember { mutableStateOf(recentExitDiagnostics()) }
         var enabled by remember { mutableStateOf(false) }
@@ -298,6 +313,7 @@ class MainActivity : ComponentActivity() {
         }
         Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("Tools", style = MaterialTheme.typography.headlineMedium)
+            StateVaultPanel(agentBusy)
             Text("Android control, Termux bridge and diagnostics")
             Text(if (LumenaAccessibilityService.instance != null) "Accessibility: connected" else "Accessibility: service not connected")
             Button(onClick = { openAccessibilitySettings() }) { Text("Open Accessibility settings") }

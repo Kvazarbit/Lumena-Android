@@ -19,7 +19,7 @@ data class ConstitutionVersion(val revision: Long, val at: Long, val reason: Str
 data class LandscapeSnapshot(val state: LandscapeState, val view: LandscapeView, val versions: List<ConstitutionVersion>)
 
 object ExperienceLandscapeStore {
-    private val lock = Any()
+    private val lock = StateVaultLock.monitor
     private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
     private val stateAdapter = moshi.adapter(LandscapeState::class.java)
     private val rulesAdapter = moshi.adapter<List<LandscapeRule>>(

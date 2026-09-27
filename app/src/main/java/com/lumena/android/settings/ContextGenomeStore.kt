@@ -71,7 +71,7 @@ object ContextGenomeStore {
     private const val DB_NAME = "lumena_context_genome.db"
     private const val DB_VERSION = 1
     private const val MAX_RAW_RESULT_BYTES = 128 * 1024
-    private val lock = Any()
+    private val lock = StateVaultLock.monitor
 
     fun loadProjection(context: Context): ExperienceMemoryState? = synchronized(lock) {
         val db = helper(context).readableDatabase

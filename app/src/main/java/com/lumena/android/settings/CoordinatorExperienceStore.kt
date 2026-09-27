@@ -313,7 +313,7 @@ object CoordinatorExperiencePolicy {
  */
 object CoordinatorExperienceStore {
     private const val FILE_NAME = "lumena_coordinator_experience.json"
-    private val lock = Any()
+    private val lock = StateVaultLock.monitor
     private val adapter = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()

@@ -2,6 +2,8 @@ package com.lumena.android.companion
 
 import android.content.Intent
 import android.os.SystemClock
+import com.lumena.android.settings.StateVault
+import androidx.compose.runtime.SideEffect
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -74,6 +76,7 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
     var grantEditor by remember { mutableStateOf<String?>(null) }
     var grantPaths by remember { mutableStateOf("") }
     var resultExpanded by remember { mutableStateOf(false) }
+    SideEffect { StateVault.companionBusy = busy }
     var handoffDraft by remember { mutableStateOf(CompanionHandoffStore.load(context)) }
 
     LaunchedEffect(visible, handoffVersion) {
@@ -134,6 +137,7 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
     }
 
     fun executeCommand(command: CompanionCommand, automatic: Boolean) {
+        if (StateVault.restoring || StateVault.startupError != null) return
         if (!CompanionRequestLifecycle.shouldAccept(
                 fingerprint = command.fingerprint,
                 handledFingerprint = handledFingerprint,
@@ -287,6 +291,7 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
             )
             if (!result.ok || result.outcomeUnknown) taskGrant = null
             resultExpanded = false
+            StateVault.requestSave(context)
             lastResult = formatted
             handledFingerprint = command.fingerprint
             if (activeFingerprint == command.fingerprint) activeFingerprint = null

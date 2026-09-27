@@ -34,7 +34,7 @@ object HistoryTreeStore {
     private const val MAX_BRANCHES = 48
     private const val MAX_TITLE = 72
 
-    private val lock = Any()
+    private val lock = StateVaultLock.monitor
     private val moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()

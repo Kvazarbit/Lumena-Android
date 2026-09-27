@@ -74,7 +74,7 @@ object LocalSessionStore {
             ?: LocalSessionSnapshot()
     }
 
-    fun save(context: Context, snapshot: LocalSessionSnapshot) {
+    fun save(context: Context, snapshot: LocalSessionSnapshot) = synchronized(StateVaultLock.monitor) {
         val bounded = snapshot.copy(
             chat = snapshot.chat.takeLast(MAX_CHAT_MESSAGES).map { message ->
                 message.copy(
@@ -137,6 +137,7 @@ object LocalSessionStore {
         prefs(context).edit().putString(KEY_SNAPSHOT, adapter.toJson(bounded)).apply()
         // History mirrors only bounded, app-private context. Workspace files are never copied/rolled back.
         HistoryTreeStore.mirrorActiveSession(context, bounded)
+        StateVault.requestSave(context)
     }
 
     fun clear(context: Context) {
