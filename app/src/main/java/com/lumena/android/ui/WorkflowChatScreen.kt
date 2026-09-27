@@ -465,7 +465,7 @@ fun WorkflowChatScreen(
         val dollar = '$'
         return """
             set -euo pipefail
-            COMMIT="8dd084e9c663be212a0996bfa6d9cb0298139331"
+            COMMIT="5fe0068ed2f81fa28b87ee5112b5de11b8791760"
             BASE="https://raw.githubusercontent.com/Kvazarbit/Lumena-Android/${dollar}COMMIT/termux"
             TMP="${dollar}HOME/.lumena-update"
             mkdir -p "${dollar}TMP"

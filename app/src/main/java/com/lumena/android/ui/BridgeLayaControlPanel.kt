@@ -33,7 +33,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.JSONObject
 
 private const val BRIDGE_INSTALL_COMMIT =
-    "8dd084e9c663be212a0996bfa6d9cb0298139331"
+    "5fe0068ed2f81fa28b87ee5112b5de11b8791760"
 
 @Composable
 internal fun BridgeLayaControlPanel(
