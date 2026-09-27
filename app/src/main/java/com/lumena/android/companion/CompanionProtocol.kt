@@ -11,6 +11,9 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.security.MessageDigest
+import java.util.Base64
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 
 data class CompanionCommand(
     val decision: PlannerDecision,
@@ -56,6 +59,15 @@ object CompanionProtocol {
 
         LUMENA_TOOL
         {"session_id":"project-7f3a","task_id":"inspect-repo-01","model_id":"chatgpt","tool":"workspace.list","args":{},"reason":"Discover the real workspace and read-only roots before choosing paths"}
+
+        Put the marker and JSON inside one fenced code block to preserve literal code.
+        For code, patches, nested JSON, or transport problems, prefer the integrity envelope:
+        LUMENA_TOOL
+        {"encoding":"base64-sha256-v1","payload_b64":"BASE64_OF_UTF8_TOOL_JSON","sha256":"LOWERCASE_SHA256_OF_DECODED_BYTES"}
+        Compute base64 and SHA-256 with code, never invent them. The decoded JSON has the normal
+        tool/args/session_id/task_id/model_id/reason fields shown above. Maximum decoded size: 96 KiB.
+        Integrity is only transport validation, never permission; normal tool approval still applies.
+        If capture is incomplete, send a smaller request. Never silently repair source code.
 
         Keep session_id stable for one project/workstream and task_id stable for one concrete objective.
         Reuse those IDs across all tool calls that belong to the same work so Lumena can build verified
@@ -112,6 +124,10 @@ object CompanionProtocol {
         if (marker < 0) return "Захоплено ${text.length} символів; маркера команди немає. Відкрий останню відповідь ChatGPT і натисни Scan ChatGPT."
         if (extractJsonObject(text, marker + TOOL_MARKER.length) == null)
             return "Команду видно, але JSON неповний (${text.length} символів захоплення). Потрібна коротша команда або повний текст."
+        val captured = extractJsonObject(text, marker + TOOL_MARKER.length)!!
+        try { decodeTransport(captured) } catch (_: Exception) {
+            return "Команду пошкоджено: не пройшла перевірка Base64/SHA-256 або розміру. Надішли повний блок повторно; нічого не виконано."
+        }
         if (parseVisibleText(text) == null) return "JSON захоплено, але формат команди некоректний."
         return "Команду захоплено повністю."
     }
@@ -121,7 +137,8 @@ object CompanionProtocol {
         if (markerIndex < 0) return null
         val json = extractJsonObject(text, markerIndex + TOOL_MARKER.length) ?: return null
         return runCatching {
-            val obj = mapAdapter.fromJson(json) ?: return null
+            val decoded = decodeTransport(json)
+            val obj = mapAdapter.fromJson(decoded) ?: return null
             val tool = obj["tool"]?.toString()?.trim().orEmpty()
             if (tool.isBlank()) return null
             val reason = obj["reason"]?.toString()?.trim()
@@ -153,7 +170,7 @@ object CompanionProtocol {
             )
             CompanionCommand(
                 decision = PlannerDecision(ToolRequest(tool, args), reason),
-                rawJson = json,
+                rawJson = decoded,
                 fingerprint = commandFingerprint(
                     tool = tool,
                     args = args,
@@ -165,6 +182,32 @@ object CompanionProtocol {
                 modelId = modelId
             )
         }.getOrNull()
+    }
+
+    // Reject damaged encoded requests instead of changing executable source text.
+    internal fun decodeTransport(json: String): String {
+        require(json.length <= 140_000) { "Transport too large" }
+        val envelope = requireNotNull(mapAdapter.fromJson(json))
+        if (!envelope.containsKey("encoding")) return json
+        require(envelope.keys == setOf("encoding", "payload_b64", "sha256"))
+        require(envelope["encoding"] == "base64-sha256-v1")
+        val encoded = envelope["payload_b64"] as? String ?: error("Missing payload")
+        val hash = envelope["sha256"] as? String ?: error("Missing checksum")
+        require(hash.matches(Regex("[a-f0-9]{64}")))
+        require(encoded.length <= 131_072)
+        val bytes = Base64.getDecoder().decode(encoded)
+        require(bytes.size <= 98_304)
+        require(Base64.getEncoder().encodeToString(bytes) == encoded) { "Noncanonical Base64" }
+        val actual = MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it) }
+        require(actual == hash) { "Checksum mismatch" }
+        val decoded = Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes)).toString()
+        val inner = requireNotNull(mapAdapter.fromJson(decoded))
+        require(!inner.containsKey("encoding")) { "Nested envelope" }
+        return decoded
     }
 
     fun formatResult(

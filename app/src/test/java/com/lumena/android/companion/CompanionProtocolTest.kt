@@ -245,4 +245,41 @@ class CompanionProtocolTest {
     }
 
 
+
+    private fun envelope(bytes: ByteArray): String {
+        val encoded = java.util.Base64.getEncoder().encodeToString(bytes)
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it) }
+        return """LUMENA_TOOL
+            {"encoding":"base64-sha256-v1","payload_b64":"$encoded","sha256":"$hash"}"""
+    }
+
+    @Test
+    fun encodedTransportPreservesCodeAndMatchesPlainFingerprint() {
+        val raw = """{"tool":"file.write","args":{"path":"probe.py","content":"print('\\n'.join(['__GNUC__', '\"quoted\"', 'рибка', '\u2060']))\n"},"session_id":"s","task_id":"t"}"""
+        val encoded = requireNotNull(CompanionProtocol.parseVisibleText(envelope(raw.toByteArray())))
+        val plain = requireNotNull(CompanionProtocol.parseVisibleText("LUMENA_TOOL\n$raw"))
+        assertEquals(plain.decision.request.args, encoded.decision.request.args)
+        assertEquals(plain.fingerprint, encoded.fingerprint)
+        assertEquals(raw, encoded.rawJson)
+    }
+
+    @Test
+    fun encodedTransportRejectsDamageAndDoesNotFallBackToOlderCommand() {
+        val valid = envelope("""{"tool":"system.time","args":{}}""".toByteArray())
+        val damaged = valid.replace("payload_b64\":\"", "payload_b64\":\"X")
+        org.junit.Assert.assertNull(CompanionProtocol.parseVisibleText(valid + "\n" + damaged))
+        assertTrue(CompanionProtocol.captureDiagnosticText(damaged).contains("SHA-256"))
+        org.junit.Assert.assertNull(CompanionProtocol.parseVisibleText(valid.replace("base64-sha256-v1", "other")))
+        org.junit.Assert.assertNull(CompanionProtocol.parseVisibleText(valid.replace("payload_b64\":\"", "payload_b64\":\"\u2060")))
+    }
+
+    @Test
+    fun encodedTransportRejectsHashMismatchInvalidUtf8AndNestedEnvelopes() {
+        val valid = envelope("""{"tool":"system.time"}""".toByteArray())
+        org.junit.Assert.assertNull(CompanionProtocol.parseVisibleText(valid.replace(Regex("\"sha256\":\"[a-f0-9]{64}\""), "\"sha256\":\"${"0".repeat(64)}\"")))
+        org.junit.Assert.assertNull(CompanionProtocol.parseVisibleText(envelope(byteArrayOf(0xc3.toByte(), 0x28))))
+        org.junit.Assert.assertNull(CompanionProtocol.parseVisibleText(envelope("""{"encoding":"base64-sha256-v1","tool":"system.time"}""".toByteArray())))
+        org.junit.Assert.assertNull(CompanionProtocol.parseVisibleText(envelope(ByteArray(98_305) { 32 })))
+    }
 }
