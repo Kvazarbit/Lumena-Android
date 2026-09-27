@@ -53,6 +53,8 @@ import com.lumena.android.agent.local.TermuxBridgeClient
 import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.runtime.AgentRunCoordinator
 import com.lumena.android.companion.CompanionScreen
+import com.lumena.android.companion.CompanionHandoff
+import com.lumena.android.companion.CompanionHandoffStore
 import com.lumena.android.llama.EmbeddedLlamaClient
 import com.lumena.android.llama.EmbeddedLlamaRuntime
 import com.lumena.android.settings.HistoryTreeStore
@@ -139,6 +141,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun LumenaApp(refreshToken: Int) {
         var tab by remember { mutableIntStateOf(0) }
+        var handoffVersion by remember { mutableIntStateOf(0) }
         val agentWorkScope = rememberCoroutineScope()
         val coordinator = remember { AgentRunCoordinator() }
         val leftDrawer = rememberDrawerState(DrawerValue.Closed)
@@ -223,22 +226,36 @@ class MainActivity : ComponentActivity() {
         ) {
             Scaffold(
                 bottomBar = {
-                    if (tab != 1) NavigationBar {
+                    NavigationBar {
                         NavigationBarItem(tab == 0, { tab = 0 }, { Text("●") }, label = { Text("Companion") })
                         NavigationBarItem(tab == 1, { tab = 1; reloadHistory() }, { Text("◈") }, label = { Text("Local") })
                         NavigationBarItem(tab == 2, { tab = 2 }, { Text("◆") }, label = { Text("Tools") })
                     }
                 }
             ) { inner ->
+                // Keep the Companion processor composed across Local/Tools navigation.
+                // Only its UI is hidden; this does not promise survival of process death.
+                Box(Modifier.fillMaxSize().padding(inner)) {
+                    CompanionScreen(visible = tab == 0, handoffVersion = handoffVersion)
+                }
                 when (tab) {
-                    0 -> Column(Modifier.fillMaxSize().padding(inner)) { CompanionScreen() }
+                    0 -> Unit
                     1 -> Box(Modifier.fillMaxSize().padding(inner)) {
                         key(historyState.activeBranchId) {
                             WorkflowChatScreen(
                                 agentWorkScope = agentWorkScope,
                                 runCoordinator = coordinator,
                                 onOpenHistory = ::openLeft,
-                                onOpenAgent = ::openRight
+                                onOpenAgent = ::openRight,
+                                onSendToCompanion = { messageId, role, text ->
+                                    val branch = HistoryTreeStore.activeBranch(this@MainActivity)
+                                    val sessionId = branch?.id ?: historyState.activeBranchId
+                                    val draft = CompanionHandoff(messageId, role, text, sessionId,
+                                        "handoff-$messageId", branch?.topic ?: "Lumena Local")
+                                    CompanionHandoffStore.save(this@MainActivity, draft.draftText())
+                                    handoffVersion++
+                                    tab = 0
+                                }
                             )
                         }
                         if (agentOpen) {
@@ -282,7 +299,7 @@ class MainActivity : ComponentActivity() {
         Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("Tools", style = MaterialTheme.typography.headlineMedium)
             Text("Android control, Termux bridge and diagnostics")
-            Text(if (enabled || LumenaAccessibilityService.instance != null) "Accessibility: connected" else "Accessibility: not connected")
+            Text(if (LumenaAccessibilityService.instance != null) "Accessibility: connected" else "Accessibility: service not connected")
             Button(onClick = { openAccessibilitySettings() }) { Text("Open Accessibility settings") }
             OutlinedButton(onClick = { openAppDetails() }) { Text("Open Lumena app settings") }
             Button(onClick = {

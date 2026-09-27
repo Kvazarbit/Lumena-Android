@@ -158,7 +158,8 @@ fun WorkflowChatScreen(
     agentWorkScope: CoroutineScope? = null,
     runCoordinator: AgentRunCoordinator? = null,
     onOpenHistory: (() -> Unit)? = null,
-    onOpenAgent: (() -> Unit)? = null
+    onOpenAgent: (() -> Unit)? = null,
+    onSendToCompanion: ((messageId: String, role: String, text: String) -> Unit)? = null
 ) {
     val uiScope = rememberCoroutineScope()
     val workScope = agentWorkScope ?: uiScope
@@ -1363,6 +1364,9 @@ fun WorkflowChatScreen(
                 MessageBubble(
                     message = bubble,
                     onCopy = { copyToClipboard("Lumena message", bubble.text) },
+                    onCompanion = onSendToCompanion?.let { send ->
+                        { send(bubble.id, bubble.role, bubble.text) }
+                    },
                     editEnabled = !busy && !coordinator.active && pending == null,
                     onEdit = {
                         editingMessageId = bubble.id
@@ -1805,7 +1809,8 @@ private fun ModernComposer(
 
 @Composable
 private fun MessageBubble(
-    message: ChatBubble, onCopy: () -> Unit, editEnabled: Boolean, onEdit: () -> Unit
+    message: ChatBubble, onCopy: () -> Unit, onCompanion: (() -> Unit)?,
+    editEnabled: Boolean, onEdit: () -> Unit
 ) {
     val isUser = message.role == "user"
     Column(
@@ -1842,10 +1847,10 @@ private fun MessageBubble(
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (message.text.isNotBlank()) TextButton(onClick = onCopy) { Text("Копіювати") }
-            if (isUser) TextButton(onClick = onEdit, enabled = editEnabled) { Text("Редагувати") }
-        }
+        if (message.text.isNotBlank()) MessageActions(
+            onCopy = onCopy, onCompanion = onCompanion,
+            onEdit = if (isUser) onEdit else null, editEnabled = editEnabled
+        )
     }
 }
 

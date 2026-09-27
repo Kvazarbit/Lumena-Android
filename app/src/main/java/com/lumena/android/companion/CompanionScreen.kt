@@ -54,7 +54,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-fun CompanionScreen() {
+fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val initial = remember { LumenaPreferences.load(context) }
@@ -69,6 +69,16 @@ fun CompanionScreen() {
     var lastResult by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("Waiting for ChatGPT…") }
     var busy by remember { mutableStateOf(false) }
+    var handoffDraft by remember { mutableStateOf(CompanionHandoffStore.load(context)) }
+
+    LaunchedEffect(visible, handoffVersion) {
+        if (visible) {
+            handoffDraft = CompanionHandoffStore.load(context)
+            val saved = LumenaPreferences.load(context)
+            bridgeUrl = saved.bridgeUrl
+            token = saved.bridgeToken
+        }
+    }
 
     fun persistConnection() {
         LumenaPreferences.saveBridgeUrl(context, bridgeUrl)
@@ -120,6 +130,10 @@ fun CompanionScreen() {
                 busy = busy
             )
         ) return
+        // Local can update the shared connection while this UI is hidden.
+        val savedConnection = LumenaPreferences.load(context)
+        bridgeUrl = savedConnection.bridgeUrl
+        token = savedConnection.bridgeToken
         if (token.isBlank()) {
             status = "Paste the Termux bridge token first."
             return
@@ -369,6 +383,9 @@ fun CompanionScreen() {
         }
     }
 
+    // Processing above belongs to the app composition, not the selected tab.
+    if (!visible) return
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -377,6 +394,31 @@ fun CompanionScreen() {
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text("Lumena Companion", style = MaterialTheme.typography.headlineMedium)
+        if (handoffDraft.isNotBlank()) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Повідомлення з Local", style = MaterialTheme.typography.titleMedium)
+                    Text("Переглянь текст перед передаванням у ChatGPT.",
+                        style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(
+                        value = handoffDraft,
+                        onValueChange = {
+                            handoffDraft = it
+                            CompanionHandoffStore.save(context, it)
+                        },
+                        label = { Text("Текст для Companion") },
+                        minLines = 3, maxLines = 7, modifier = Modifier.fillMaxWidth()
+                    )
+                    Button(onClick = { openChatGptWith(handoffDraft, send = false) }) {
+                        Text("Вставити в ChatGPT")
+                    }
+                    TextButton(onClick = {
+                        handoffDraft = ""
+                        CompanionHandoffStore.save(context, "")
+                    }) { Text("Очистити чернетку") }
+                }
+            }
+        }
         Text(
             "Official ChatGPT stays the main conversation. Lumena only bridges approved local tools to Termux/Python/Git.",
             style = MaterialTheme.typography.bodyMedium
