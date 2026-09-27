@@ -65,18 +65,16 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
     var token by rememberSaveable { mutableStateOf(initial.bridgeToken) }
     var autoReturn by rememberSaveable { mutableStateOf(initial.companionAutoReturn) }
     var safeAuto by rememberSaveable { mutableStateOf(initial.companionSafeAuto) }
+    val consent = remember { runCatching { CompanionTaskGrantStore.recover(context) }.getOrDefault(CompanionTaskGrantStore.State()) }
     var detected by remember { mutableStateOf<CompanionCommand?>(null) }
-    var handledFingerprint by remember { mutableStateOf<String?>(null) }
+    var handledFingerprint by remember { mutableStateOf<String?>(consent.handled) }
     var activeFingerprint by remember { mutableStateOf<String?>(null) }
     var lastResult by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("Waiting for ChatGPT…") }
     var busy by remember { mutableStateOf(false) }
-    var taskGrant by remember {
-        mutableStateOf(CompanionTaskGrantStore.load(
-            context, initial.bridgeUrl, initial.bridgeToken, System.currentTimeMillis()
-        ))
-    }
+    var taskGrant by remember { mutableStateOf(consent.grant) }
     var grantEditor by remember { mutableStateOf<String?>(null) }
+    var grantPython by remember { mutableStateOf(false) }
     var grantPaths by remember { mutableStateOf("") }
     var resultExpanded by remember { mutableStateOf(false) }
     SideEffect { StateVault.companionBusy = busy }
@@ -94,16 +92,6 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
     fun persistConnection() {
         LumenaPreferences.saveBridgeUrl(context, bridgeUrl)
         LumenaPreferences.saveBridgeToken(context, token)
-    }
-
-    fun setTaskGrant(value: CompanionTaskGrant?) {
-        taskGrant = value
-        CompanionTaskGrantStore.save(context, value)
-    }
-
-    fun revokeTaskGrant() {
-        taskGrant = null
-        CompanionTaskGrantStore.clear(context)
     }
 
     fun openChatGptWith(
@@ -143,10 +131,20 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
         return ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
     }
 
+    fun setTaskGrant(grant: CompanionTaskGrant?): Boolean {
+        return try {
+            CompanionTaskGrantStore.setGrant(context, grant)
+            taskGrant = grant
+            true
+        } catch (e: Exception) {
+            status = "Не вдалося зберегти дозвіл: ${e::class.simpleName}"
+            false
+        }
+    }
+
     fun grantAllows(command: CompanionCommand): Boolean {
         val connection = LumenaPreferences.load(context)
-        return taskGrant?.allows(command, connection.bridgeUrl, connection.bridgeToken,
-            System.currentTimeMillis()) == true
+        return taskGrant?.allows(command, connection.bridgeUrl, connection.bridgeToken) == true
     }
 
     fun executeCommand(command: CompanionCommand, automatic: Boolean) {
@@ -179,7 +177,11 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
             return
         }
 
-        if (automatic && !readOnly) setTaskGrant(taskGrant?.consume())
+        try { CompanionTaskGrantStore.begin(context, command.fingerprint) }
+        catch (e: Exception) {
+            status = "Не вдалося зберегти стан запуску; команду не виконано."
+            return
+        }
         persistConnection()
         busy = true
         activeFingerprint = command.fingerprint
@@ -302,7 +304,9 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
                 contributorModelId = contributorModelId,
                 episodeEventId = episodeEvent?.id
             )
-            if (!result.ok || result.outcomeUnknown) revokeTaskGrant()
+            if (result.outcomeUnknown) taskGrant = taskGrant?.copy(paused = true)
+            try { CompanionTaskGrantStore.finish(context, command.fingerprint, taskGrant) }
+            catch (e: Exception) { taskGrant = taskGrant?.copy(paused = true) }
             resultExpanded = false
             StateVault.requestSave(context)
             lastResult = formatted
@@ -395,13 +399,6 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
 
     LaunchedEffect(safeAuto, token, bridgeUrl, taskGrant) {
         while (true) {
-            taskGrant?.let { grant ->
-                val connection = LumenaPreferences.load(context)
-                if (!grant.isLiveForConnection(
-                        connection.bridgeUrl, connection.bridgeToken, System.currentTimeMillis()
-                    )
-                ) revokeTaskGrant()
-            }
             val command = CompanionProtocol.parse(LumenaAccessibilityService.lastChatGptSnapshot)
             if (
                 command != null &&
@@ -433,23 +430,10 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
         taskGrant?.let { grant ->
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp)) {
-                    Text(
-                        if (grant.kind == CompanionTaskGrantKind.PYTHON_RUN)
-                            "Автозапуск Python для завдання: ${grant.taskId}"
-                        else
-                            "Автозапис для завдання: ${grant.taskId}"
-                    )
-                    Text(
-                        if (grant.kind == CompanionTaskGrantKind.PYTHON_RUN)
-                            "python.run · залишилось запусків: ${grant.remaining}. Дозвіл діє до 40 хвилин."
-                        else
-                            "file.write / file.patch · ${grant.patterns.joinToString()}\nЗалишилось команд: ${grant.remaining}. Дозвіл діє до 40 хвилин.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    TextButton(onClick = {
-                        revokeTaskGrant()
-                        status = "Дозвіл скасовано; запущену команду це не зупиняє."
-                    }) {
+                    Text("Дозвіл для завдання: ${grant.taskId}")
+                    Text("${if (grant.paused) "Призупинено" else "Активний"} · ${grant.patterns.joinToString()}\nPython: ${if (grant.allowPython) "дозволено" else "вручну"}. Без ліміту часу й команд; зберігається після перезапуску.",
+                        style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { if (setTaskGrant(null)) status = "Дозвіл скасовано; запущену команду це не зупиняє." }) {
                         Text("Скасувати дозвіл")
                     }
                 }
@@ -641,7 +625,7 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
                         when {
                             !plan.allowed -> "BLOCKED by tool registry"
                             autoEligible -> "Дозволено автоматичне виконання"
-                            else -> "Approval required · this tool can change state or execute code"
+                            else -> taskGrant?.denial(command, bridgeUrl, token) ?: "Потрібен разовий запуск або дозвіл для задачі."
                         },
                         style = MaterialTheme.typography.bodySmall
                     )
@@ -656,53 +640,34 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
                         Text("Running automatically…", style = MaterialTheme.typography.bodySmall)
                     }
                     if (plan.allowed && CompanionTaskGrant.canOffer(command)) {
-                        val pythonGrant = plan.request.tool == "python.run"
                         TextButton(enabled = !busy, onClick = {
                             grantEditor = command.fingerprint
-                            grantPaths = if (pythonGrant) "" else plan.request.args["path"].orEmpty()
-                        }) {
-                            Text(
-                                if (pythonGrant) "Дозволити Python run для цього завдання…"
-                                else "Дозволити запис для цього завдання…"
-                            )
-                        }
+                            grantPaths = taskGrant?.takeIf { it.sessionId == command.sessionId && it.taskId == command.taskId }?.patterns?.joinToString("\n") ?: (plan.request.args["path"] ?: plan.request.args["script"]).orEmpty()
+                            grantPython = taskGrant?.allowPython == true
+                        }) { Text("Дозволити виконання плану…") }
                         if (grantEditor == command.fingerprint) {
                             Text("Сесія: ${command.sessionId}\nЗавдання: ${command.taskId}\nМодель: ${command.modelId.orEmpty()}", style = MaterialTheme.typography.bodySmall)
-                            Text(
-                                if (pythonGrant)
-                                    "На 40 хвилин, до 40 запусків python.run. Лише ця сесія, завдання, модель і bridge. Це високий рівень довіри: Python може змінювати файли, запускати процеси та звертатися до мережі."
-                                else
-                                    "На 40 хвилин, до 40 команд file.write / file.patch. Лише ця сесія, завдання, модель і bridge.",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                            if (!pythonGrant) {
-                                OutlinedTextField(value = grantPaths, onValueChange = { grantPaths = it },
-                                    label = { Text("Файли: по одному в рядку; * наприкінці — префікс імені") },
-                                    modifier = Modifier.fillMaxWidth(), minLines = 2)
-                                Text("Приклад: aquarium-v2.part* дозволяє запис частин у цьому каталозі. Існуючі файли також можуть змінюватися.", style = MaterialTheme.typography.bodySmall)
+                            Text("Дозвіл зберігається до скасування для цієї сесії, задачі, моделі та bridge. Запис — лише в перелічені файли. Звичайна помилка не скасовує дозвіл; невідомий результат призупиняє його.", style = MaterialTheme.typography.bodySmall)
+                            OutlinedTextField(value = grantPaths, onValueChange = { grantPaths = it },
+                                label = { Text("Файли: по одному в рядку; * наприкінці — префікс імені") },
+                                modifier = Modifier.fillMaxWidth(), minLines = 2)
+                            Text("Приклад: aquarium-v2.part* дозволяє запис частин у цьому каталозі. Існуючі файли також можуть змінюватися.", style = MaterialTheme.typography.bodySmall)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Switch(checked = grantPython, onCheckedChange = { grantPython = it })
+                                Text("Автоматично запускати Python-скрипти з переліку")
                             }
+                            Text("Python виконується з правами Termux і може звертатися поза цими файлами. Перелік обмежує вибір скрипта, а не його дії.", style = MaterialTheme.typography.bodySmall)
                             Button(enabled = !busy, onClick = {
                                 val connection = LumenaPreferences.load(context)
-                                val grant = CompanionTaskGrant.create(
-                                    command,
-                                    if (pythonGrant) "" else grantPaths,
-                                    connection.bridgeUrl,
-                                    connection.bridgeToken,
-                                    System.currentTimeMillis()
-                                )
-                                if (grant == null) status = "Некоректний scope або немає session_id / task_id."
-                                else {
-                                    setTaskGrant(grant)
+                                val grant = CompanionTaskGrant.create(command, grantPaths,
+                                    connection.bridgeUrl, connection.bridgeToken, allowPython = grantPython)
+                                if (grant == null) status = "Некоректні шляхи або немає session_id / task_id."
+                                else if (setTaskGrant(grant)) {
                                     grantEditor = null
-                                    status = if (grant.kind == CompanionTaskGrantKind.PYTHON_RUN)
-                                        "Дозвіл на python.run надано для цього завдання."
-                                    else
-                                        "Дозвіл надано для перелічених файлів."
+                                    status = "Дозвіл збережено для задачі та перелічених файлів/скриптів."
                                     acceptDetected(command)
                                 }
-                            }) {
-                                Text(if (pythonGrant) "Дозволити Python і продовжити" else "Дозволити й продовжити")
-                            }
+                            }) { Text("Дозволити й продовжити") }
                             TextButton(onClick = { grantEditor = null }) { Text("Назад") }
                         }
                     }
@@ -741,7 +706,7 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
 
         Spacer(Modifier.height(12.dp))
         Text(
-            "Safe Auto виконує читання. Запис і Python можуть мати окремий явний дозвіл лише для поточної session/task/model/bridge. Дозвіл живе до 40 хвилин або 40 виконань, зберігається через recreation/перезапуск процесу та скидається після помилки, невідомого результату, зміни bridge або завершення ліміту.",
+            "Safe Auto виконує читання. Дозвіл для задачі зберігається після перезапуску без ліміту часу та кількості команд. Python можна включити окремо. Інша задача, модель, bridge або шлях потребують нового дозволу. Завершивши роботу, натисни «Скасувати дозвіл».",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

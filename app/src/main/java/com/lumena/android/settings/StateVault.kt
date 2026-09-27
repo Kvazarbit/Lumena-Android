@@ -237,6 +237,7 @@ object StateVault {
             check(editor.commit())
         }
         if (sanitize) {
+            com.lumena.android.companion.CompanionTaskGrantStore.clear(c)
             c.getSharedPreferences("lumena_settings", Context.MODE_PRIVATE).edit()
                 .putBoolean("companion_safe_auto", false).putBoolean("companion_auto_return", false).commit()
             AtomicFile(File(c.filesDir, "context_checkpoint.json")).delete()
