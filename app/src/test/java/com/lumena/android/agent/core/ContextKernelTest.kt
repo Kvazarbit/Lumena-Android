@@ -9,6 +9,8 @@ class ContextKernelTest {
     private val controller = AgentController()
     private fun task() = TaskState("kernel", null, "Inspect and verify the workspace")
     private fun read(path: String) = AgentDecision.ToolCall("file.read", mapOf("path" to path))
+    private fun write(path: String, content: String) =
+        AgentDecision.ToolCall("file.write", mapOf("path" to path, "content" to content))
 
     @Test fun interruptedActionSurvivesSerializationAndBlocksReplayAndDone() {
         val flight = ContextKernel.before(ContextKernelState(), AgentDecision.ToolCall("file.write", mapOf("path" to "a.py", "content" to "x=1")))
@@ -45,6 +47,25 @@ class ContextKernelTest {
         assertTrue(ContextKernel.repeatedObservation(state, read("a")))
         state = ContextKernel.record(state, AgentDecision.ToolCall("file.patch", mapOf("path" to "a")), false, "partial error")
         assertFalse(ContextKernel.repeatedObservation(state, read("a")))
+    }
+
+    @Test fun restoringEarlierContentAfterAnotherWriteIsNotAReplayedDuplicate() {
+        val first = write("config.txt", "A")
+        val second = write("config.txt", "B")
+        var state = ContextKernel.record(ContextKernelState(), first, true, "wrote A")
+        assertTrue(ContextKernel.redundantSuccessfulMutation(state, first))
+        state = ContextKernel.record(state, second, true, "wrote B")
+
+        assertFalse("A/B/A must restore A after B changed the same target",
+            ContextKernel.redundantSuccessfulMutation(state, first))
+    }
+
+    @Test fun unrelatedWriteDoesNotRequireReplayingAnUnchangedTarget() {
+        val first = write("config.txt", "A")
+        var state = ContextKernel.record(ContextKernelState(), first, true, "wrote A")
+        state = ContextKernel.record(state, write("other.txt", "B"), true, "wrote B")
+
+        assertTrue(ContextKernel.redundantSuccessfulMutation(state, first))
     }
 
     @Test fun failureCannotBeReportedAsDoneButPartialAlwaysRetainsEvidence() {
