@@ -58,6 +58,11 @@ class ContextKernelTest {
 
         assertFalse("A/B/A must restore A after B changed the same target",
             ContextKernel.redundantSuccessfulMutation(state, first))
+        val instruction = controller.interpret(
+            """{"tool":"file.write","args":{"path":"config.txt","content":"A"}}""",
+            controller.initial(task().copy(kernel = state))
+        )
+        assertTrue("Controller must allow the restorative write", instruction is ControllerInstruction.Execute)
     }
 
     @Test fun unrelatedWriteDoesNotRequireReplayingAnUnchangedTarget() {
@@ -66,6 +71,16 @@ class ContextKernelTest {
         state = ContextKernel.record(state, write("other.txt", "B"), true, "wrote B")
 
         assertTrue(ContextKernel.redundantSuccessfulMutation(state, first))
+    }
+
+    @Test fun executableWithUnknownSideEffectsInvalidatesDuplicateAssumption() {
+        val first = write("config.txt", "A")
+        var state = ContextKernel.record(ContextKernelState(), first, true, "wrote A")
+        state = ContextKernel.record(state,
+            AgentDecision.ToolCall("python.run", mapOf("script" to "change_config.py")),
+            true, "script ran")
+
+        assertFalse(ContextKernel.redundantSuccessfulMutation(state, first))
     }
 
     @Test fun failureCannotBeReportedAsDoneButPartialAlwaysRetainsEvidence() {

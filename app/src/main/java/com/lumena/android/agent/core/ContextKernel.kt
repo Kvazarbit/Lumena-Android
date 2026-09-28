@@ -69,8 +69,9 @@ object ContextKernel {
     }
 
     /**
-     * Prevents an already-successful identical mutation from consuming another
-     * task slot when no later failure on the same target justifies a replay.
+     * Prevents a duplicate mutation only while its target has not changed.
+     * A later write of different content to the same target makes A/B/A a
+     * legitimate restoration, even when all three writes succeed.
      */
     fun redundantSuccessfulMutation(
         state: ContextKernelState,
@@ -100,7 +101,19 @@ object ContextKernel {
                     )
             }
 
-        return !laterFailure
+        val laterTargetMutation = state.evidence
+            .drop(lastSuccess + 1)
+            .any {
+                it.phase == CognitivePhase.ACT &&
+                    (
+                        ToolRegistry.get(it.tool)?.risk == ToolRisk.EXECUTABLE ||
+                        wantedTarget.isBlank() ||
+                        it.target.isBlank() ||
+                        it.target == wantedTarget
+                    )
+            }
+
+        return !laterFailure && !laterTargetMutation
     }
 
     /**

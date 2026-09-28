@@ -433,7 +433,7 @@ class AgentController(
         ) {
             return ControllerInstruction.AskModelAgain(
                 feedback =
-                    "This exact mutation already succeeded and no later failure justifies replaying it. " +
+                    "This exact mutation already succeeded with no later recorded action that may change its target. " +
                         "Use the recorded TOOL_RESULT and continue with unfinished verification/evidence steps. " +
                         "The duplicate mutation was not executed.",
                 state = state.copy(
