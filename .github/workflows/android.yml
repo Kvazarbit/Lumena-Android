@@ -281,6 +281,8 @@ jobs:
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
       - name: Run agent core unit tests
         run: gradle --max-workers=2 testDebugUnitTest
+      - name: Probe recovery guard mutations
+        run: python scripts/mutation_recovery_probe.py
       - name: Build unsigned release APK
         run: gradle --max-workers=2 assembleRelease
       - name: Verify embedded native library
