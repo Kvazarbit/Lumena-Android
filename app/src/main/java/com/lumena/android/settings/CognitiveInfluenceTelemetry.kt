@@ -1,5 +1,4 @@
 package com.lumena.android.settings
-
 import android.content.Context
 import android.util.AtomicFile
 import com.lumena.android.agent.core.ReflexAdviceSource
@@ -12,14 +11,12 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
-
 enum class CognitiveInfluenceLayer {
     CONSTITUTION,
     REFLEX,
     TINYJEV,
     LAYA
 }
-
 data class CognitiveInfluenceCounters(
     val eligible: Long = 0,
     val generated: Long = 0,
@@ -31,7 +28,6 @@ data class CognitiveInfluenceCounters(
     val nextFail: Long = 0,
     val nextUnknown: Long = 0
 )
-
 data class PendingReflexInfluence(
     val taskHash: String,
     val family: String,
@@ -39,7 +35,6 @@ data class PendingReflexInfluence(
     val source: String,
     val exposedAt: Long
 )
-
 data class CognitiveInfluenceState(
     val version: Int = 1,
     val epoch: String = "",
@@ -51,14 +46,12 @@ data class CognitiveInfluenceState(
     val laya: CognitiveInfluenceCounters = CognitiveInfluenceCounters(),
     val pendingReflex: List<PendingReflexInfluence> = emptyList()
 )
-
 /**
  * Pure observational reducer. Nothing here can authorize, rank, gate or execute.
  * Counts represent reached stages, not causal effect.
  */
 object CognitiveInfluencePolicy {
     const val MAX_PENDING = 32
-
     fun recordLayer(
         state: CognitiveInfluenceState,
         layer: CognitiveInfluenceLayer,
@@ -90,7 +83,6 @@ object CognitiveInfluencePolicy {
             CognitiveInfluenceLayer.LAYA -> state.copy(laya = bump(state.laya))
         }
     }
-
     fun recordReflexExposure(
         state: CognitiveInfluenceState,
         taskId: String,
@@ -111,7 +103,6 @@ object CognitiveInfluencePolicy {
                 exposed = true
             )
         }
-
         val canonicalFamily = family
             ?.takeIf { it.isNotBlank() }
             ?.let(ToolRegistry::canonicalize)
@@ -129,7 +120,6 @@ object CognitiveInfluencePolicy {
                 ).takeLast(MAX_PENDING)
         )
     }
-
     fun resolveNextTool(
         state: CognitiveInfluenceState,
         taskId: String,
@@ -150,7 +140,6 @@ object CognitiveInfluencePolicy {
         val unknown = result.outcomeUnknown
         val ok = !unknown && result.ok
         val failed = !unknown && !result.ok
-
         var next = recordLayer(
             state,
             CognitiveInfluenceLayer.REFLEX,
@@ -173,7 +162,6 @@ object CognitiveInfluencePolicy {
             pendingReflex = next.pendingReflex.filterNot { it.taskHash == hash }
         )
     }
-
     fun resolvePartial(
         state: CognitiveInfluenceState,
         taskId: String
@@ -198,14 +186,12 @@ object CognitiveInfluencePolicy {
             pendingReflex = next.pendingReflex.filterNot { it.taskHash == hash }
         )
     }
-
     fun taskHash(taskId: String): String =
         MessageDigest.getInstance("SHA-256")
             .digest(taskId.trim().toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
             .take(24)
 }
-
 /**
  * App-private bounded observational telemetry. No prompts, tool stdout/stderr,
  * arguments, paths or secrets are persisted.
@@ -217,7 +203,6 @@ object CognitiveInfluenceStore {
         .add(KotlinJsonAdapterFactory())
         .build()
         .adapter(CognitiveInfluenceState::class.java)
-
     fun load(context: Context): CognitiveInfluenceState = synchronized(lock) {
         val file = atomicFile(context)
         val versionCode = currentVersionCode(context)
@@ -247,7 +232,6 @@ object CognitiveInfluenceStore {
             state
         }
     }
-
     fun recordLayer(
         context: Context,
         layer: CognitiveInfluenceLayer,
@@ -267,7 +251,6 @@ object CognitiveInfluenceStore {
             wouldExpose = wouldExpose
         )
     }
-
     fun recordConstitutionProjection(
         context: Context,
         generated: Boolean,
@@ -283,7 +266,6 @@ object CognitiveInfluenceStore {
         exposed = exposed,
         wouldExpose = wouldExpose
     )
-
     fun recordReflexAdmitted(
         context: Context,
         source: ReflexAdviceSource
@@ -302,7 +284,6 @@ object CognitiveInfluenceStore {
         }
         next
     }
-
     fun recordReflexExposed(
         context: Context,
         taskId: String,
@@ -315,7 +296,6 @@ object CognitiveInfluenceStore {
             state, taskId, family, option, source, now
         )
     }
-
     fun resolveNextTool(
         context: Context,
         taskId: String,
@@ -326,14 +306,12 @@ object CognitiveInfluenceStore {
             state, taskId, request, result
         )
     }
-
     fun resolvePartial(
         context: Context,
         taskId: String
     ) = mutate(context) { state ->
         CognitiveInfluencePolicy.resolvePartial(state, taskId)
     }
-
     private fun mutate(
         context: Context,
         transform: (CognitiveInfluenceState) -> CognitiveInfluenceState
@@ -342,7 +320,6 @@ object CognitiveInfluenceStore {
         save(context, next)
         next
     }
-
     private fun fresh(versionCode: Long): CognitiveInfluenceState {
         val now = System.currentTimeMillis().coerceAtLeast(1L)
         val epoch = CognitiveInfluencePolicy.taskHash(
@@ -354,12 +331,10 @@ object CognitiveInfluenceStore {
             versionCode = versionCode
         )
     }
-
     private fun currentVersionCode(context: Context): Long =
         context.applicationContext.packageManager
             .getPackageInfo(context.applicationContext.packageName, 0)
             .longVersionCode
-
     private fun save(
         context: Context,
         state: CognitiveInfluenceState
@@ -374,7 +349,6 @@ object CognitiveInfluenceStore {
             throw failure
         }
     }
-
     private fun atomicFile(context: Context) = AtomicFile(
         File(context.applicationContext.filesDir, FILE_NAME)
     )
