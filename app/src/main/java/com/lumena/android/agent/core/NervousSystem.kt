@@ -101,6 +101,18 @@ data class NervousIncidentAssessment(
 object NervousSystemPolicy {
     const val MAX_EVENTS = 1024
 
+    fun uiMutationAllowed(
+        action: SelfActionKind,
+        before: NervousFrame
+    ): Boolean {
+        require(action in setOf(
+            SelfActionKind.CHATGPT_INSERT,
+            SelfActionKind.CHATGPT_SEND,
+            SelfActionKind.CHATGPT_ACTIVITY_OPEN
+        ))
+        return before.chatGptGenerating != true
+    }
+
     fun record(
         state: NervousSystemState,
         event: NervousEvent
