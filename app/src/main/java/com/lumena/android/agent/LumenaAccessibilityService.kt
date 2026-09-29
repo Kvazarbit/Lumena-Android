@@ -52,15 +52,51 @@ class LumenaAccessibilityService : AccessibilityService() {
     fun isChatGptActive(): Boolean =
         rootInActiveWindow?.packageName?.toString() == CHATGPT_PACKAGE
 
+    fun isChatGptGenerating(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        if (root.packageName?.toString() != CHATGPT_PACKAGE) return false
+        return isChatGptGenerating(root)
+    }
+
+    private fun isChatGptGenerating(root: AccessibilityNodeInfo): Boolean =
+        walk(root).any { node ->
+            if (!node.isVisibleToUser || !node.isEnabled) return@any false
+            val label = listOfNotNull(node.text, node.contentDescription)
+                .joinToString(" ")
+            if (!ChatGptUiPolicy.isGeneratingLabel(label)) return@any false
+
+            var candidate: AccessibilityNodeInfo? = node
+            var hops = 0
+            while (candidate != null && hops < 4) {
+                if (candidate.isClickable) return@any true
+                candidate = candidate.parent
+                hops++
+            }
+            false
+        }
+
     fun scheduleChatGptInsert(
         text: String,
         send: Boolean = false,
         attempts: Int = 14,
         onFinished: ((Boolean) -> Unit)? = null
     ) {
-        fun trySend(remaining: Int) {
+        val streamWaitAttempts = 600
+
+        fun trySend(remaining: Int, streamWaitRemaining: Int) {
             if (!send) {
                 onFinished?.invoke(true)
+                return
+            }
+            if (isChatGptGenerating()) {
+                if (streamWaitRemaining > 0) {
+                    mainHandler.postDelayed(
+                        { trySend(remaining, streamWaitRemaining - 1) },
+                        350
+                    )
+                } else {
+                    onFinished?.invoke(false)
+                }
                 return
             }
             if (clickChatGptSend()) {
@@ -68,30 +104,51 @@ class LumenaAccessibilityService : AccessibilityService() {
                 return
             }
             if (remaining > 0) {
-                mainHandler.postDelayed({ trySend(remaining - 1) }, 350)
+                mainHandler.postDelayed(
+                    { trySend(remaining - 1, streamWaitRemaining) },
+                    350
+                )
             } else {
                 onFinished?.invoke(false)
             }
         }
 
-        fun tryInsert(remaining: Int) {
+        fun tryInsert(remaining: Int, streamWaitRemaining: Int) {
+            if (isChatGptGenerating()) {
+                if (streamWaitRemaining > 0) {
+                    mainHandler.postDelayed(
+                        { tryInsert(remaining, streamWaitRemaining - 1) },
+                        350
+                    )
+                } else {
+                    onFinished?.invoke(false)
+                }
+                return
+            }
             if (fillChatGptComposer(text)) {
-                mainHandler.postDelayed({ trySend(attempts) }, 350)
+                mainHandler.postDelayed(
+                    { trySend(attempts, streamWaitAttempts) },
+                    350
+                )
                 return
             }
             if (remaining > 0) {
-                mainHandler.postDelayed({ tryInsert(remaining - 1) }, 350)
+                mainHandler.postDelayed(
+                    { tryInsert(remaining - 1, streamWaitRemaining) },
+                    350
+                )
             } else {
                 onFinished?.invoke(false)
             }
         }
 
-        mainHandler.post { tryInsert(attempts) }
+        mainHandler.post { tryInsert(attempts, streamWaitAttempts) }
     }
 
     fun fillChatGptComposer(text: String): Boolean {
         val root = rootInActiveWindow ?: return false
         if (root.packageName?.toString() != CHATGPT_PACKAGE) return false
+        if (isChatGptGenerating(root)) return false
 
         val editable = walk(root)
             .filter { it.isVisibleToUser && it.isEditable && it.isEnabled }
@@ -109,21 +166,14 @@ class LumenaAccessibilityService : AccessibilityService() {
     fun clickChatGptSend(): Boolean {
         val root = rootInActiveWindow ?: return false
         if (root.packageName?.toString() != CHATGPT_PACKAGE) return false
-
-        val tokens = listOf(
-            "send", "send message",
-            "wyślij", "wyslij",
-            "надісл", "відправ",
-            "отправ", "submit"
-        )
+        if (isChatGptGenerating(root)) return false
 
         val labeled = walk(root)
             .filter { it.isVisibleToUser && it.isEnabled }
             .firstOrNull { node ->
                 val label = listOfNotNull(node.text, node.contentDescription)
                     .joinToString(" ")
-                    .lowercase()
-                tokens.any { label.contains(it) }
+                ChatGptUiPolicy.isSendLabel(label)
             } ?: return false
 
         var candidate: AccessibilityNodeInfo? = labeled
