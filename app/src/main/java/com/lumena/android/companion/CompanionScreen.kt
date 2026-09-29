@@ -112,14 +112,29 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
             onFinished?.invoke(false)
             return
         }
+        val chatGptAlreadyActive = service.isChatGptActive()
+        val generationActive = service.isChatGptGenerating()
         service.scheduleChatGptInsert(
             text = text,
             send = send,
             onFinished = onFinished
         )
-        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(launch)
-        status = if (send) "Opening ChatGPT and sending…" else "Opening ChatGPT and inserting text…"
+        if (!chatGptAlreadyActive) {
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(launch)
+        }
+        status = when {
+            generationActive && send ->
+                "ChatGPT is still generating. Result queued until the turn finishes…"
+            generationActive ->
+                "ChatGPT is still generating. Insert queued until the turn finishes…"
+            send && chatGptAlreadyActive ->
+                "Sending result to the active ChatGPT conversation…"
+            !send && chatGptAlreadyActive ->
+                "Inserting into the active ChatGPT conversation…"
+            send -> "Opening ChatGPT and sending…"
+            else -> "Opening ChatGPT and inserting text…"
+        }
     }
 
     fun planFor(command: CompanionCommand) =
@@ -399,17 +414,26 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
 
     LaunchedEffect(safeAuto, token, bridgeUrl, taskGrant) {
         while (true) {
-            val command = CompanionProtocol.parse(LumenaAccessibilityService.lastChatGptSnapshot)
-            if (
-                command != null &&
-                CompanionRequestLifecycle.shouldAccept(
-                    fingerprint = command.fingerprint,
-                    handledFingerprint = handledFingerprint,
-                    activeFingerprint = activeFingerprint,
-                    busy = busy
-                )
-            ) {
-                acceptDetected(command)
+            val service = LumenaAccessibilityService.instance
+            val now = System.currentTimeMillis()
+            val mayScan = CompanionRequestLifecycle.shouldAutoScan(
+                isGenerating = service?.isChatGptGenerating() == true,
+                lastUpdatedAtMs = LumenaAccessibilityService.lastChatGptUpdatedAt,
+                nowMs = now
+            )
+            if (mayScan) {
+                val command = CompanionProtocol.parse(LumenaAccessibilityService.lastChatGptSnapshot)
+                if (
+                    command != null &&
+                    CompanionRequestLifecycle.shouldAccept(
+                        fingerprint = command.fingerprint,
+                        handledFingerprint = handledFingerprint,
+                        activeFingerprint = activeFingerprint,
+                        busy = busy
+                    )
+                ) {
+                    acceptDetected(command)
+                }
             }
             delay(700)
         }
