@@ -18,4 +18,15 @@ internal object CompanionRequestLifecycle {
     ): Boolean =
         fingerprint != handledFingerprint &&
             fingerprint != activeFingerprint
+
+    fun shouldAutoScan(
+        isGenerating: Boolean,
+        lastUpdatedAtMs: Long,
+        nowMs: Long,
+        quietMs: Long = 900L
+    ): Boolean {
+        if (isGenerating) return false
+        if (lastUpdatedAtMs <= 0L || nowMs < lastUpdatedAtMs) return false
+        return nowMs - lastUpdatedAtMs >= quietMs
+    }
 }

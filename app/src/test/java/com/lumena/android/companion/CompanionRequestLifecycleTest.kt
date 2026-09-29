@@ -73,4 +73,29 @@ class CompanionRequestLifecycleTest {
             )
         )
     }
+
+    @Test
+    fun autoScanWaitsForGenerationToFinishAndUiToSettle() {
+        assertFalse(
+            CompanionRequestLifecycle.shouldAutoScan(
+                isGenerating = true,
+                lastUpdatedAtMs = 1_000,
+                nowMs = 5_000
+            )
+        )
+        assertFalse(
+            CompanionRequestLifecycle.shouldAutoScan(
+                isGenerating = false,
+                lastUpdatedAtMs = 4_500,
+                nowMs = 5_000
+            )
+        )
+        assertTrue(
+            CompanionRequestLifecycle.shouldAutoScan(
+                isGenerating = false,
+                lastUpdatedAtMs = 4_000,
+                nowMs = 5_000
+            )
+        )
+    }
 }
