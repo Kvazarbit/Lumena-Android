@@ -10,6 +10,7 @@ class StateArchiveTest {
     private val payload = mapOf("preferences.json" to "{\"groups\":{}}".toByteArray(),
         "files/lumena_constitution_genome.json" to "{\"text\":\"Досвід: успіх і помилка\"}".toByteArray(),
         "files/lumena_history_tree.json" to "{\"chat\":\"Акваріум\"}".toByteArray(),
+        "files/lumena_nervous_system_v1.json" to "{\"version\":1,\"events\":[]}".toByteArray(),
         "databases/lumena_context_genome.db" to ByteArray(512) { it.toByte() })
     @Test fun roundTripPreservesEveryByteIncludingUnicodeAndDatabase() {
         val actual = StateArchive.decode(StateArchive.encode(payload, 33, 123), 33)
