@@ -17,6 +17,53 @@ class NervousSystemPolicyTest {
     )
 
     @Test
+    fun streamingReflexBlocksUiMutationButLeavesIdleActionsAvailable() {
+        for (action in listOf(
+            SelfActionKind.CHATGPT_INSERT,
+            SelfActionKind.CHATGPT_SEND,
+            SelfActionKind.CHATGPT_ACTIVITY_OPEN
+        )) {
+            assertFalse(
+                NervousSystemPolicy.uiMutationAllowed(action, generating)
+            )
+            assertTrue(
+                NervousSystemPolicy.uiMutationAllowed(
+                    action,
+                    generating.copy(chatGptGenerating = false)
+                )
+            )
+        }
+    }
+
+    @Test
+    fun syntheticAbGuardPreventsViolationsWithoutBlockingIdleTurns() {
+        val frames = listOf(
+            generating,
+            generating.copy(chatGptGenerating = false),
+            generating,
+            generating.copy(chatGptGenerating = false),
+            generating
+        )
+        val action = SelfActionKind.CHATGPT_SEND
+
+        val guardOffViolations = frames.count {
+            it.chatGptGenerating == true
+        }
+        val guardOnViolations = frames.count {
+            NervousSystemPolicy.uiMutationAllowed(action, it) &&
+                it.chatGptGenerating == true
+        }
+        val idleAllowed = frames.count {
+            NervousSystemPolicy.uiMutationAllowed(action, it) &&
+                it.chatGptGenerating == false
+        }
+
+        assertEquals(3, guardOffViolations)
+        assertEquals(0, guardOnViolations)
+        assertEquals(2, idleAllowed)
+    }
+
+    @Test
     fun generatingUiMutationIsBlockedAsNarrowReflex() {
         val assessment = NervousSystemPolicy.classifyChatGptUiAction(
             action = SelfActionKind.CHATGPT_SEND,
