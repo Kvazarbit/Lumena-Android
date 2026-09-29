@@ -150,7 +150,11 @@ class LumenaAccessibilityService : AccessibilityService() {
                 return
             }
             val before = nervousFrame()
-            if (before.chatGptGenerating == true) {
+            if (!NervousSystemPolicy.uiMutationAllowed(
+                    SelfActionKind.CHATGPT_SEND,
+                    before
+                )
+            ) {
                 if (!sendReflexRecorded) {
                     recordSelfAction(
                         SelfActionKind.CHATGPT_SEND,
@@ -192,7 +196,11 @@ class LumenaAccessibilityService : AccessibilityService() {
 
         fun tryInsert(remaining: Int, streamWaitRemaining: Int) {
             val before = nervousFrame()
-            if (before.chatGptGenerating == true) {
+            if (!NervousSystemPolicy.uiMutationAllowed(
+                    SelfActionKind.CHATGPT_INSERT,
+                    before
+                )
+            ) {
                 if (!insertReflexRecorded) {
                     recordSelfAction(
                         SelfActionKind.CHATGPT_INSERT,
