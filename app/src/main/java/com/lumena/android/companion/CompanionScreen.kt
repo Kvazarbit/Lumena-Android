@@ -37,6 +37,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.LumenaAccessibilityService
+import com.lumena.android.agent.core.NervousEventKind
+import com.lumena.android.agent.core.NervousEvidenceSource
+import com.lumena.android.agent.core.NervousFrame
+import com.lumena.android.agent.core.NervousSubsystem
+import com.lumena.android.agent.core.NervousSystemPolicy
+import com.lumena.android.agent.core.SelfActionKind
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.core.ToolRegistry
@@ -46,6 +52,7 @@ import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.local.ToolResult
 import com.lumena.android.settings.LumenaPreferences
+import com.lumena.android.settings.NervousSystemStore
 import com.lumena.android.settings.ExperienceMemoryStore
 import com.lumena.android.settings.CoordinatorExperienceStore
 import com.lumena.android.settings.ConstitutionGenomeStore
@@ -94,6 +101,42 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
         LumenaPreferences.saveBridgeToken(context, token)
     }
 
+    fun nervousFrame(service: LumenaAccessibilityService?): NervousFrame =
+        NervousFrame(
+            chatGptActive = service?.isChatGptActive(),
+            chatGptGenerating = service?.isChatGptGenerating(),
+            companionBusy = busy,
+            uiUpdatedAt = LumenaAccessibilityService.lastChatGptUpdatedAt,
+            outcomeKnown = true
+        )
+
+    fun recordCompanionAction(
+        action: SelfActionKind,
+        before: NervousFrame,
+        after: NervousFrame = before,
+        code: String? = null,
+        contextKey: String = "companion"
+    ) {
+        val event = NervousSystemPolicy.event(
+            now = System.currentTimeMillis(),
+            subsystem = NervousSubsystem.COMPANION,
+            kind = NervousEventKind.SELF_ACTION,
+            action = action,
+            before = before,
+            after = after,
+            code = code,
+            source = NervousEvidenceSource.LOCAL_OBSERVATION,
+            locallyVerified = true,
+            contextKey = contextKey
+        )
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                NervousSystemStore.record(context.applicationContext, event)
+                StateVault.requestSave(context.applicationContext)
+            }
+        }
+    }
+
     fun openChatGptWith(
         text: String,
         send: Boolean,
@@ -112,6 +155,7 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
             onFinished?.invoke(false)
             return
         }
+        val before = nervousFrame(service)
         val chatGptAlreadyActive = service.isChatGptActive()
         val generationActive = service.isChatGptGenerating()
         service.scheduleChatGptInsert(
@@ -122,6 +166,12 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
         if (!chatGptAlreadyActive) {
             launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(launch)
+            recordCompanionAction(
+                action = SelfActionKind.CHATGPT_ACTIVITY_OPEN,
+                before = before,
+                after = nervousFrame(service),
+                contextKey = "chatgpt-activity"
+            )
         }
         status = when {
             generationActive && send ->
@@ -330,6 +380,12 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
             busy = false
 
             if (autoReturn) {
+                recordCompanionAction(
+                    action = SelfActionKind.AUTO_RETURN_QUEUE,
+                    before = nervousFrame(LumenaAccessibilityService.instance),
+                    code = if (result.ok) "TOOL_RESULT_OK" else "TOOL_RESULT_ERROR",
+                    contextKey = "auto-return"
+                )
                 status = if (result.ok) {
                     "${plan.request.tool} completed. Returning the real result to ChatGPT…"
                 } else {
