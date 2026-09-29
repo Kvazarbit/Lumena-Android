@@ -97,7 +97,16 @@ object DeliberationKernel {
         var explored = 0
         var budgetExhausted = false
         var frontier = listOf(Node<S, A>(initial, emptyList(), emptyList()))
-        var best: PredictedTrajectory<S, A>? = null
+        var bestComplete: PredictedTrajectory<S, A>? = null
+        var bestPartial: PredictedTrajectory<S, A>? = null
+
+        fun better(
+            candidate: PredictedTrajectory<S, A>,
+            current: PredictedTrajectory<S, A>?
+        ): Boolean =
+            current == null ||
+                candidate.score > current.score ||
+                (candidate.score == current.score && candidate.actions.size > current.actions.size)
 
         for (depth in 1..horizon) {
             val nextFrontier = mutableListOf<Node<S, A>>()
@@ -118,12 +127,10 @@ object DeliberationKernel {
                         score = environment.goalScore(next),
                         complete = depth == horizon
                     )
-                    val current = best
-                    if (current == null ||
-                        candidate.score > current.score ||
-                        (candidate.score == current.score && candidate.actions.size > current.actions.size)
-                    ) {
-                        best = candidate
+                    if (candidate.complete) {
+                        if (better(candidate, bestComplete)) bestComplete = candidate
+                    } else {
+                        if (better(candidate, bestPartial)) bestPartial = candidate
                     }
                     if (depth < horizon) {
                         nextFrontier += Node(next, actions, states)
@@ -136,7 +143,7 @@ object DeliberationKernel {
         }
 
         return DeliberationResult(
-            best = best,
+            best = bestComplete ?: bestPartial,
             exploredNodes = explored,
             horizon = horizon,
             budgetExhausted = budgetExhausted
