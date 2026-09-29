@@ -87,6 +87,30 @@ data class DiagnosticTinyJevCalibrationView(
     val latencyP50Ms: Long? = null,
     val latencyP95Ms: Long? = null
 )
+data class DiagnosticInfluenceLayerView(
+    val eligible: Long = 0,
+    val generated: Long = 0,
+    val admitted: Long = 0,
+    val exposed: Long = 0,
+    val wouldExpose: Long = 0,
+    val agreed: Long = 0,
+    val nextOk: Long = 0,
+    val nextFail: Long = 0,
+    val nextUnknown: Long = 0
+)
+
+data class DiagnosticCognitiveInfluenceView(
+    val error: String = "",
+    val epoch: String = "",
+    val since: Long = 0,
+    val versionCode: Long = 0,
+    val constitution: DiagnosticInfluenceLayerView = DiagnosticInfluenceLayerView(),
+    val reflex: DiagnosticInfluenceLayerView = DiagnosticInfluenceLayerView(),
+    val tinyJev: DiagnosticInfluenceLayerView = DiagnosticInfluenceLayerView(),
+    val laya: DiagnosticInfluenceLayerView = DiagnosticInfluenceLayerView(),
+    val pendingReflex: Int = 0
+)
+
 data class DiagnosticLayaShadowView(
     val error: String = "",
     val samples: Int = 0,
@@ -138,6 +162,8 @@ data class LumenaDiagnosticInput(
         ),
     val layaShadow: DiagnosticLayaShadowView =
         DiagnosticLayaShadowView(),
+    val cognitiveInfluence: DiagnosticCognitiveInfluenceView =
+        DiagnosticCognitiveInfluenceView(),
     val cognitiveRegression: CognitiveRegressionReport? = null
 )
 
@@ -431,6 +457,39 @@ object LumenaDiagnosticFormatter {
             }
             appendLine()
 
+            appendLine("[COGNITIVE_INFLUENCE]")
+            val influence = input.cognitiveInfluence
+            if (influence.error.isNotBlank()) {
+                appendLine("error=" + clean(influence.error, 1200))
+            } else {
+                appendLine("epoch=" + clean(influence.epoch, 120))
+                appendLine("since=" + influence.since)
+                appendLine("version_code=" + influence.versionCode)
+                appendLine("pending_reflex=" + influence.pendingReflex)
+                fun appendInfluence(
+                    name: String,
+                    layer: DiagnosticInfluenceLayerView
+                ) {
+                    appendLine(
+                        name +
+                            " eligible=" + layer.eligible +
+                            " generated=" + layer.generated +
+                            " admitted=" + layer.admitted +
+                            " exposed=" + layer.exposed +
+                            " would_expose=" + layer.wouldExpose +
+                            " agreed=" + layer.agreed +
+                            " next_ok=" + layer.nextOk +
+                            " next_fail=" + layer.nextFail +
+                            " next_unknown=" + layer.nextUnknown
+                    )
+                }
+                appendInfluence("constitution", influence.constitution)
+                appendInfluence("reflex", influence.reflex)
+                appendInfluence("tinyjev", influence.tinyJev)
+                appendInfluence("laya", influence.laya)
+            }
+            appendLine()
+
             appendLine("[COGNITIVE_EXPERIENCE]")
             val regression = input.cognitiveRegression
             appendLine("memory_regression_available=${regression != null}")
@@ -582,6 +641,8 @@ object LumenaDiagnosticReport {
             tinyJevCalibrationView(app)
         val layaShadow =
             layaShadowView(app)
+        val cognitiveInfluence =
+            cognitiveInfluenceView(app)
 
         val input = LumenaDiagnosticInput(
             generatedAtMs = now,
@@ -677,6 +738,7 @@ object LumenaDiagnosticReport {
                 tinyJevCalibration,
             layaProbe = layaProbe,
             layaShadow = layaShadow,
+            cognitiveInfluence = cognitiveInfluence,
             cognitiveRegression = runCatching {
                 val state = CoordinatorExperienceStore.load(app)
                 CognitiveRegressionSuite.replay(CognitiveRegressionSuite.corpus(state.learnedExamples))
@@ -717,6 +779,42 @@ object LumenaDiagnosticReport {
                     failure.message
                         ?: failure::class.simpleName
                         ?: "Laya shadow metrics unavailable"
+            )
+        }
+
+    private fun cognitiveInfluenceView(
+        context: Context
+    ): DiagnosticCognitiveInfluenceView =
+        runCatching {
+            val state = CognitiveInfluenceStore.load(context)
+            fun view(c: CognitiveInfluenceCounters) =
+                DiagnosticInfluenceLayerView(
+                    eligible = c.eligible,
+                    generated = c.generated,
+                    admitted = c.admitted,
+                    exposed = c.exposed,
+                    wouldExpose = c.wouldExpose,
+                    agreed = c.agreed,
+                    nextOk = c.nextOk,
+                    nextFail = c.nextFail,
+                    nextUnknown = c.nextUnknown
+                )
+            DiagnosticCognitiveInfluenceView(
+                epoch = state.epoch,
+                since = state.since,
+                versionCode = state.versionCode,
+                constitution = view(state.constitution),
+                reflex = view(state.reflex),
+                tinyJev = view(state.tinyJev),
+                laya = view(state.laya),
+                pendingReflex = state.pendingReflex.size
+            )
+        }.getOrElse { failure ->
+            DiagnosticCognitiveInfluenceView(
+                error =
+                    failure.message
+                        ?: failure::class.simpleName
+                        ?: "cognitive influence telemetry unavailable"
             )
         }
 

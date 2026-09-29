@@ -103,10 +103,14 @@ import com.lumena.android.agent.core.PreviousTaskOutcomeContext
 import com.lumena.android.agent.core.ResearchThreadResolver
 import com.lumena.android.agent.core.ResearchThreadState
 import com.lumena.android.agent.core.ReflexRuntimeAdvice
+import com.lumena.android.agent.core.ReflexAdviceSource
 import com.lumena.android.agent.core.TinyJevReflexAdapter
 import com.lumena.android.settings.ContextGenomeStats
 import com.lumena.android.settings.ContextGenomeStore
 import com.lumena.android.settings.ConstitutionGenomeStore
+import com.lumena.android.settings.ConstitutionGenomeRuntime
+import com.lumena.android.settings.CognitiveInfluenceLayer
+import com.lumena.android.settings.CognitiveInfluenceStore
 import com.lumena.android.settings.ExperienceMemoryStore
 import com.lumena.android.settings.EvidenceGraphStore
 import com.lumena.android.settings.ExperienceLandscapeStore
@@ -751,13 +755,41 @@ fun WorkflowChatScreen(
                 )
             },
             constitutionProvider = { task ->
-                ConstitutionGenomeStore.relevant(
+                val exposed = ConstitutionGenomeStore.relevant(
                     context = context,
                     task = task,
                     limit = 6
                 )
+                val fullProjection = runCatching {
+                    ConstitutionGenomeRuntime.promptLines(
+                        state = ConstitutionGenomeStore.load(context),
+                        task = task,
+                        limit = 6,
+                        includeGlobalLearned = true
+                    )
+                }.getOrDefault(exposed)
+                val generatedLearned =
+                    fullProjection.any {
+                        it.startsWith("LEARNED CONSTITUTION")
+                    }
+                val exposedLearned =
+                    exposed.any {
+                        it.startsWith("LEARNED CONSTITUTION")
+                    }
+                runCatching {
+                    CognitiveInfluenceStore.recordConstitutionProjection(
+                        context = context,
+                        generated = generatedLearned,
+                        admitted = generatedLearned,
+                        exposed = exposedLearned,
+                        wouldExpose =
+                            generatedLearned && !exposedLearned
+                    )
+                }
+                exposed
             },
             reflexAdviceProvider = { event, candidates, task ->
+                var reflexRecorded = false
                 try {
                     val query = buildString {
                         append(task.goal)
@@ -778,6 +810,15 @@ fun WorkflowChatScreen(
                         candidates = candidates,
                         examples = examples
                     )
+                    runCatching {
+                        CognitiveInfluenceStore.recordLayer(
+                            context = context,
+                            layer = CognitiveInfluenceLayer.REFLEX,
+                            eligible = true,
+                            generated = recommendation.choice != null
+                        )
+                    }
+                    reflexRecorded = true
                     recommendation.choice?.let { choice ->
                         val tinyStartedNs = System.nanoTime()
                         val tinyDecision = runCatching {
@@ -795,12 +836,21 @@ fun WorkflowChatScreen(
                                 (System.nanoTime() - tinyStartedNs) /
                                     1_000_000L
                                 ).coerceAtLeast(0L)
+                        runCatching {
+                            CognitiveInfluenceStore.recordLayer(
+                                context = context,
+                                layer = CognitiveInfluenceLayer.TINYJEV,
+                                eligible = true,
+                                generated = tinyDecision != null
+                            )
+                        }
                         val option =
                             TinyJevReflexAdapter.bestOption(tinyDecision)
                                 ?: choice.best()
 
+                        val layaBridge = bridgeOrNull()
                         val layaResult =
-                            bridgeOrNull()?.let { bridge ->
+                            layaBridge?.let { bridge ->
                                 runCatching {
                                     LayaSystem1Client(bridge)
                                         .predictReflex(
@@ -809,6 +859,20 @@ fun WorkflowChatScreen(
                                         )
                                 }.getOrNull()
                             }
+                        if (layaBridge != null) {
+                            runCatching {
+                                CognitiveInfluenceStore.recordLayer(
+                                    context = context,
+                                    layer = CognitiveInfluenceLayer.LAYA,
+                                    eligible = true,
+                                    generated =
+                                        layaResult?.decision != null,
+                                    admitted =
+                                        layaResult?.decision?.option in
+                                            candidates.allowed
+                                )
+                            }
+                        }
 
                         if (layaResult != null) {
                             runCatching {
@@ -866,17 +930,67 @@ fun WorkflowChatScreen(
                                     ?.takeIf { it.calibrated }
                                     ?.confidence,
                             calibrationSamples =
-                                calibrationEstimate?.sampleCount ?: 0
+                                calibrationEstimate?.sampleCount ?: 0,
+                            source =
+                                if (tinyDecision != null) {
+                                    ReflexAdviceSource.TINYJEV
+                                } else {
+                                    ReflexAdviceSource.REFLEX_EXPERIENCE
+                                }
                         )
                     }
                 } catch (_: Exception) {
+                    if (!reflexRecorded) {
+                        runCatching {
+                            CognitiveInfluenceStore.recordLayer(
+                                context = context,
+                                layer = CognitiveInfluenceLayer.REFLEX,
+                                eligible = true
+                            )
+                        }
+                    }
                     null
+                }
+            },
+            onReflexAdmitted = { _, _, advice ->
+                runCatching {
+                    CognitiveInfluenceStore.recordReflexAdmitted(
+                        context = context,
+                        source = advice.source
+                    )
+                }
+            },
+            onReflexExposed = { task, event, advice ->
+                runCatching {
+                    CognitiveInfluenceStore.recordReflexExposed(
+                        context = context,
+                        taskId = task.id,
+                        family = event.actionFamily,
+                        option = advice.option,
+                        source = advice.source
+                    )
+                }
+            },
+            onReflexPartial = { task ->
+                runCatching {
+                    CognitiveInfluenceStore.resolvePartial(
+                        context = context,
+                        taskId = task.id
+                    )
                 }
             },
             checkpoint = { control ->
                 withContext(Dispatchers.IO) { ContextCheckpointStore.save(context, control) }
             },
             onToolExperience = { task, request, result, elapsedMs ->
+                runCatching {
+                    CognitiveInfluenceStore.resolveNextTool(
+                        context = context,
+                        taskId = task.id,
+                        request = request,
+                        result = result
+                    )
+                }
                 val eventId = ExperienceMemoryStore.record(context, request, result)
 
                 // Advisory projections only. Failure here must never erase or
