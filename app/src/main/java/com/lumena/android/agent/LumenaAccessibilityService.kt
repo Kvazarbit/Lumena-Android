@@ -269,12 +269,23 @@ class LumenaAccessibilityService : AccessibilityService() {
         if (root.packageName?.toString() != CHATGPT_PACKAGE) return false
         if (isChatGptGenerating(root)) return false
 
+        // Keep the verified ci1418 Send matcher. The streaming guard above is
+        // the safety boundary; do not narrow this matcher without a separate
+        // regression proof because ChatGPT's Send control labels vary by UI.
+        val tokens = listOf(
+            "send", "send message",
+            "wyślij", "wyslij",
+            "надісл", "відправ",
+            "отправ", "submit"
+        )
+
         val labeled = walk(root)
             .filter { it.isVisibleToUser && it.isEnabled }
             .firstOrNull { node ->
                 val label = listOfNotNull(node.text, node.contentDescription)
                     .joinToString(" ")
-                ChatGptUiPolicy.isSendLabel(label)
+                    .lowercase()
+                tokens.any { label.contains(it) }
             } ?: return false
 
         var candidate: AccessibilityNodeInfo? = labeled
