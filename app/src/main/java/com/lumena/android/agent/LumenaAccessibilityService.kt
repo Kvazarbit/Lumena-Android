@@ -6,8 +6,16 @@ import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.lumena.android.agent.core.NervousEventKind
+import com.lumena.android.agent.core.NervousEvidenceSource
+import com.lumena.android.agent.core.NervousFrame
+import com.lumena.android.agent.core.NervousSubsystem
+import com.lumena.android.agent.core.NervousSystemPolicy
+import com.lumena.android.agent.core.SelfActionKind
 import com.lumena.android.model.AgentAction
 import com.lumena.android.model.ScreenSnapshot
+import com.lumena.android.settings.NervousSystemStore
+import com.lumena.android.settings.StateVault
 import java.util.ArrayDeque
 
 class LumenaAccessibilityService : AccessibilityService() {
@@ -25,6 +33,57 @@ class LumenaAccessibilityService : AccessibilityService() {
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    private fun nervousFrame(): NervousFrame {
+        val active = isChatGptActive()
+        return NervousFrame(
+            chatGptActive = active,
+            chatGptGenerating = if (active) isChatGptGenerating() else false,
+            companionBusy = StateVault.companionBusy,
+            uiUpdatedAt = lastChatGptUpdatedAt,
+            outcomeKnown = true
+        )
+    }
+
+    private fun recordNervous(event: com.lumena.android.agent.core.NervousEvent) {
+        runCatching {
+            NervousSystemStore.record(applicationContext, event)
+            StateVault.requestSave(applicationContext)
+        }
+    }
+
+    private fun recordSelfAction(
+        action: SelfActionKind,
+        before: NervousFrame,
+        after: NervousFrame,
+        performed: Boolean
+    ) {
+        if (performed) {
+            recordNervous(
+                NervousSystemPolicy.event(
+                    now = System.currentTimeMillis(),
+                    subsystem = NervousSubsystem.COMPANION,
+                    kind = NervousEventKind.SELF_ACTION,
+                    action = action,
+                    before = before,
+                    after = after,
+                    source = NervousEvidenceSource.LOCAL_OBSERVATION,
+                    locallyVerified = true,
+                    contextKey = "chatgpt-ui"
+                )
+            )
+        }
+
+        NervousSystemPolicy.classifyChatGptUiAction(
+            action = action,
+            before = before,
+            after = after,
+            performed = performed,
+            source = NervousEvidenceSource.LOCAL_OBSERVATION,
+            now = System.currentTimeMillis(),
+            contextKey = "chatgpt-streaming"
+        )?.let { recordNervous(it.event) }
+    }
 
     override fun onServiceConnected() {
         instance = this
@@ -82,13 +141,25 @@ class LumenaAccessibilityService : AccessibilityService() {
         onFinished: ((Boolean) -> Unit)? = null
     ) {
         val streamWaitAttempts = 600
+        var insertReflexRecorded = false
+        var sendReflexRecorded = false
 
         fun trySend(remaining: Int, streamWaitRemaining: Int) {
             if (!send) {
                 onFinished?.invoke(true)
                 return
             }
-            if (isChatGptGenerating()) {
+            val before = nervousFrame()
+            if (before.chatGptGenerating == true) {
+                if (!sendReflexRecorded) {
+                    recordSelfAction(
+                        SelfActionKind.CHATGPT_SEND,
+                        before,
+                        before,
+                        performed = false
+                    )
+                    sendReflexRecorded = true
+                }
                 if (streamWaitRemaining > 0) {
                     mainHandler.postDelayed(
                         { trySend(remaining, streamWaitRemaining - 1) },
@@ -100,6 +171,12 @@ class LumenaAccessibilityService : AccessibilityService() {
                 return
             }
             if (clickChatGptSend()) {
+                recordSelfAction(
+                    SelfActionKind.CHATGPT_SEND,
+                    before,
+                    nervousFrame(),
+                    performed = true
+                )
                 onFinished?.invoke(true)
                 return
             }
@@ -114,7 +191,17 @@ class LumenaAccessibilityService : AccessibilityService() {
         }
 
         fun tryInsert(remaining: Int, streamWaitRemaining: Int) {
-            if (isChatGptGenerating()) {
+            val before = nervousFrame()
+            if (before.chatGptGenerating == true) {
+                if (!insertReflexRecorded) {
+                    recordSelfAction(
+                        SelfActionKind.CHATGPT_INSERT,
+                        before,
+                        before,
+                        performed = false
+                    )
+                    insertReflexRecorded = true
+                }
                 if (streamWaitRemaining > 0) {
                     mainHandler.postDelayed(
                         { tryInsert(remaining, streamWaitRemaining - 1) },
@@ -126,6 +213,12 @@ class LumenaAccessibilityService : AccessibilityService() {
                 return
             }
             if (fillChatGptComposer(text)) {
+                recordSelfAction(
+                    SelfActionKind.CHATGPT_INSERT,
+                    before,
+                    nervousFrame(),
+                    performed = true
+                )
                 mainHandler.postDelayed(
                     { trySend(attempts, streamWaitAttempts) },
                     350
