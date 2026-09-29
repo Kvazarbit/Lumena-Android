@@ -146,4 +146,46 @@ class ContextKernelTest {
         assertTrue(ContextKernel.capsule(restored.task.kernel).contains("PENDING VERIFICATION"))
         assertTrue(controller.interpret("""{"done":true,"summary":"done"}""", restored) is ControllerInstruction.AskModelAgain)
     }
+
+    @Test fun projectTestRunInvalidatesDuplicateWriteAssumption() {
+        val first = write("config.txt", "A")
+        var state = ContextKernel.record(ContextKernelState(), first, true, "wrote A")
+        state = ContextKernel.record(
+            state,
+            AgentDecision.ToolCall("python.tests", mapOf("cwd" to ".")),
+            true,
+            "tests ran"
+        )
+
+        assertFalse(
+            "python.tests executes project code and may rewrite config.txt",
+            ContextKernel.redundantSuccessfulMutation(state, first)
+        )
+    }
+
+    @Test fun executableRunInvalidatesVerificationFreshnessLikeDuplicateWrites() {
+        val write = AgentDecision.ToolCall(
+            "file.write",
+            mapOf("path" to "a.py", "content" to "x = 1")
+        )
+        val check = AgentDecision.ToolCall(
+            "python.syntax_check",
+            mapOf("script" to "a.py")
+        )
+        var state = ContextKernel.record(ContextKernelState(), write, true, "wrote")
+        state = ContextKernel.record(state, check, true, "syntax ok")
+        state = ContextKernel.record(
+            state,
+            AgentDecision.ToolCall("python.run", mapOf("script" to "other.py")),
+            true,
+            "ran"
+        )
+
+        assertFalse(ContextKernel.redundantSuccessfulMutation(state, write))
+        assertFalse(
+            "the same executable must invalidate verification freshness too",
+            ContextKernel.redundantTargetVerification(state, check)
+        )
+    }
+
 }

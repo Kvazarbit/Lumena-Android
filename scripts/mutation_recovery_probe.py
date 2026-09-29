@@ -29,11 +29,18 @@ MUTANTS = (
     ("reflex-all-candidates", CORE / "ReflexKernel.kt",
      "scores.all { it.option in candidates.allowed }",
      "scores.any { it.option in candidates.allowed }"),
+    ("workspace-undeclared-effect", CORE / "ContextKernel.kt",
+     "WorkspaceMutationEffect.UNDECLARED,\n                    null -> true",
+     "WorkspaceMutationEffect.UNDECLARED,\n                    null -> false"),
+    ("workspace-declared-target-effect", CORE / "ContextKernel.kt",
+     "event.target == target",
+     "event.target != target"),
 )
 TEST_NAMES = (
     "*RecoveryAdversarialSearchTest",
     "*ConstitutionKernelTest",
     "*ReflexKernelTest",
+    "*ContextKernelTest",
 )
 
 

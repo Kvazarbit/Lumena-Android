@@ -379,19 +379,13 @@ object ConstitutionContributionPolicy {
         )
     }
 
+    /**
+     * One canonical task-scope policy is shared by contribution and retrieval.
+     * Non-project experience belongs to the common Lumena scope; runtime
+     * exposure of learned global rules is gated separately by the store.
+     */
     fun scopeForTask(task: TaskState): ConstitutionScope =
-        task.projectId
-            ?.takeIf { it.isNotBlank() }
-            ?.let {
-                ConstitutionScope(
-                    kind = ConstitutionScopeKind.PROJECT,
-                    key = safeId(it)
-                )
-            }
-            ?: ConstitutionScope(
-                kind = ConstitutionScopeKind.PROJECT,
-                key = "task:" + safeId(task.id)
-            )
+        ConstitutionGenomeRuntime.scopeForTask(task)
 
     private fun safeEvidenceId(value: String): String {
         val clean = value

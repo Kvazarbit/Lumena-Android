@@ -101,17 +101,12 @@ object ContextKernel {
                     )
             }
 
-        val laterTargetMutation = state.evidence
-            .drop(lastSuccess + 1)
-            .any {
-                it.phase == CognitivePhase.ACT &&
-                    (
-                        ToolRegistry.get(it.tool)?.risk == ToolRisk.EXECUTABLE ||
-                        wantedTarget.isBlank() ||
-                        it.target.isBlank() ||
-                        it.target == wantedTarget
-                    )
-            }
+        val laterTargetMutation =
+            targetMayHaveChangedSince(
+                state = state,
+                index = lastSuccess,
+                target = wantedTarget
+            )
 
         return !laterFailure && !laterTargetMutation
     }
@@ -141,13 +136,42 @@ object ContextKernel {
         }
         if (lastVerification < 0) return false
 
-        val lastTargetMutation = state.evidence.indexOfLast {
-            it.phase == CognitivePhase.ACT &&
-                it.target == wantedTarget
-        }
-
-        return lastVerification > lastTargetMutation
+        return !targetMayHaveChangedSince(
+            state = state,
+            index = lastVerification,
+            target = wantedTarget
+        )
     }
+
+    /**
+     * Conservative workspace-content freshness rule shared by duplicate-write
+     * and duplicate-verification guards.
+     *
+     * UNDECLARED execution may touch any target. DECLARED_TARGET invalidates
+     * only the declared target (or everything when the target is unknown).
+     * NONE does not invalidate file-content freshness.
+     */
+    internal fun targetMayHaveChangedSince(
+        state: ContextKernelState,
+        index: Int,
+        target: String
+    ): Boolean =
+        state.evidence
+            .drop(index + 1)
+            .any { event ->
+                when (
+                    ToolRegistry.get(event.tool)
+                        ?.workspaceMutationEffect
+                ) {
+                    WorkspaceMutationEffect.NONE -> false
+                    WorkspaceMutationEffect.DECLARED_TARGET ->
+                        target.isBlank() ||
+                            event.target.isBlank() ||
+                            event.target == target
+                    WorkspaceMutationEffect.UNDECLARED,
+                    null -> true
+                }
+            }
 
     fun completionBlocker(state: ContextKernelState): String? = when {
         state.inFlight != null -> "A tool outcome is unknown. Report partial; do not claim success or replay it automatically."
