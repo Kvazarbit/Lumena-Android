@@ -287,7 +287,12 @@ class LumenaDiagnosticReportTest {
                             contributorModels = 3,
                             legacyBackfillVersion = 1,
                             legacyBackfillRecords = 10,
-                            liveRecords = 2
+                            liveRecords = 2,
+                            causalLinks = 6,
+                            causalRecovered = 4,
+                            causalUnresolved = 2,
+                            causalLiveLinks = 1,
+                            causalRevalidatedPatterns = 1
                         )
                 )
             )
@@ -304,6 +309,11 @@ class LumenaDiagnosticReportTest {
         assertTrue(report.contains("legacy_backfill_version=1"))
         assertTrue(report.contains("legacy_backfill_records=10"))
         assertTrue(report.contains("live_records=2"))
+        assertTrue(report.contains("causal_links=6"))
+        assertTrue(report.contains("causal_recovered=4"))
+        assertTrue(report.contains("causal_unresolved=2"))
+        assertTrue(report.contains("causal_live_links=1"))
+        assertTrue(report.contains("causal_revalidated_patterns=1"))
         assertTrue(report.contains("immune_worst_peaks=4"))
         assertTrue(report.contains("immune_contested_peaks=2"))
         assertTrue(report.contains("constitution_activation=false"))
