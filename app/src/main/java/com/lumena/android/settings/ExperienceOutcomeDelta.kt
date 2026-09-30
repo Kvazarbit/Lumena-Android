@@ -27,6 +27,13 @@ enum class ObservedOutcomeStatus {
     UNKNOWN
 }
 
+enum class VerificationStatus {
+    TOOL_RESULT_ONLY,
+    OUTCOME_UNKNOWN,
+    INDEPENDENT_VERIFICATION_MISSING,
+    VERIFIED_POSTCONDITION
+}
+
 enum class OutcomeDeltaKind {
     MATCH,
     UNEXPECTED_FAILURE,
@@ -54,6 +61,7 @@ data class ObservedOutcome(
     val tool: String,
     val target: String = "",
     val status: ObservedOutcomeStatus,
+    val verificationStatus: VerificationStatus = VerificationStatus.TOOL_RESULT_ONLY,
     val failureClass: String? = null,
     val errorCode: String? = null,
     val retryable: Boolean? = null,
@@ -113,6 +121,12 @@ object ExperienceOutcomeDeltaPolicy {
             tool = ToolRegistry.canonicalize(tool),
             target = sanitize(target, 220),
             status = status,
+            verificationStatus =
+                if (status == ObservedOutcomeStatus.UNKNOWN) {
+                    VerificationStatus.OUTCOME_UNKNOWN
+                } else {
+                    VerificationStatus.TOOL_RESULT_ONLY
+                },
             failureClass = sanitizeNullable(result.failureClass, 120),
             errorCode = sanitizeNullable(result.errorCode, 120),
             retryable = result.retryable,
@@ -124,18 +138,26 @@ object ExperienceOutcomeDeltaPolicy {
         expected: ExpectedOutcome,
         observed: ObservedOutcome
     ): OutcomeDelta {
-        val kind = when (observed.status) {
-            ObservedOutcomeStatus.UNKNOWN ->
+        val kind = when {
+            expected.tool != observed.tool ||
+                expected.target != observed.target ->
+                OutcomeDeltaKind.WRONG_TARGET_STATE
+
+            observed.status == ObservedOutcomeStatus.UNKNOWN ->
                 OutcomeDeltaKind.OUTCOME_UNKNOWN
 
-            ObservedOutcomeStatus.SUCCESS ->
+            observed.verificationStatus ==
+                VerificationStatus.INDEPENDENT_VERIFICATION_MISSING ->
+                OutcomeDeltaKind.VERIFICATION_MISSING
+
+            observed.status == ObservedOutcomeStatus.SUCCESS ->
                 if (expected.expectedStatus == ExpectedOutcomeStatus.SUCCESS) {
                     OutcomeDeltaKind.MATCH
                 } else {
                     OutcomeDeltaKind.UNEXPECTED_SUCCESS
                 }
 
-            ObservedOutcomeStatus.FAILURE -> when {
+            else -> when {
                 observed.failureClass == "INVALID_INPUT" ||
                     observed.errorCode?.contains("SCHEMA", ignoreCase = true) == true ||
                     observed.errorCode?.contains("REQUIRED", ignoreCase = true) == true ->
