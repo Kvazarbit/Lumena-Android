@@ -109,6 +109,11 @@ class FractalExperienceCanvasPolicyTest {
         assertEquals(FractalExperienceStage.TRANSFERRED_SHADOW, meta.stage)
         assertEquals(0, meta.supportCount)
         assertEquals(2, meta.failureCount)
+        assertTrue(
+            FractalExperienceCanvasPolicy
+                .formatForPrompt(meta)
+                .contains("IMMUNE-WORST")
+        )
     }
 
     @Test
