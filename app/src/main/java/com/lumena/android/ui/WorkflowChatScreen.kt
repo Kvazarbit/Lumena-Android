@@ -102,6 +102,7 @@ import com.lumena.android.agent.core.ProjectContextResolver
 import com.lumena.android.agent.core.PreviousTaskOutcomeContext
 import com.lumena.android.agent.core.ResearchThreadResolver
 import com.lumena.android.agent.core.ResearchThreadState
+import com.lumena.android.agent.core.WorkThreadMemory
 import com.lumena.android.agent.core.ReflexRuntimeAdvice
 import com.lumena.android.agent.core.TinyJevReflexAdapter
 import com.lumena.android.settings.ContextGenomeStats
@@ -226,6 +227,21 @@ fun WorkflowChatScreen(
     var contextUsage by remember { mutableStateOf<ModelContextUsage?>(null) }
     var codeGoal by remember {
         mutableStateOf(restored.codeGoal ?: CodeTaskAnchor.restore(restored.chat.map { it.role to it.text }))
+    }
+    var workThreads by remember {
+        mutableStateOf(
+            if (restored.workThreads.anchors.isNotEmpty()) {
+                WorkThreadMemory.normalize(
+                    restored.workThreads
+                )
+            } else {
+                WorkThreadMemory.restore(
+                    restored.chat.map {
+                        it.role to it.text
+                    }
+                )
+            }
+        )
     }
     var researchThread by remember {
         mutableStateOf(
@@ -367,7 +383,8 @@ fun WorkflowChatScreen(
         inputDraft = input,
         researchGoal = researchThread?.rootGoal,
         researchThread = researchThread,
-        codeGoal = codeGoal
+        codeGoal = codeGoal,
+        workThreads = workThreads
     )
 
     fun persistSession() {
@@ -1200,15 +1217,35 @@ fun WorkflowChatScreen(
 
         input = ""
         val previous = currentTask
+        val workResolution =
+            WorkThreadMemory.resolve(
+                text = text,
+                state = workThreads,
+                previousProjectId =
+                    previous?.projectId
+            )
+        workThreads = workResolution.state
         val codeResolution = CodeTaskAnchor.resolve(
-            text, codeGoal, bubbles.lastOrNull { it.role == "assistant" }?.text
+            workResolution.goal,
+            codeGoal,
+            bubbles.lastOrNull {
+                it.role == "assistant"
+            }?.text
         )
         codeGoal = codeResolution.anchor
-        val resolution = ResearchThreadResolver.resolve(
-            text = codeResolution.text,
-            previousGoal = previous?.goal,
-            thread = researchThread
-        )
+        val resolution =
+            if (workResolution.continued) {
+                com.lumena.android.agent.core.ResearchThreadResolution(
+                    goal = codeResolution.text,
+                    thread = researchThread
+                )
+            } else {
+                ResearchThreadResolver.resolve(
+                    text = codeResolution.text,
+                    previousGoal = previous?.goal,
+                    thread = researchThread
+                )
+            }
         val resolvedGoal = resolution.goal
         researchThread = resolution.thread
         val referenceUsesPreviousTask =
@@ -1221,8 +1258,9 @@ fun WorkflowChatScreen(
             carryForward =
                 referenceUsesPreviousTask ||
                     resolution.followUpKind.name !=
-                    "NONE"
-        )
+                    "NONE" ||
+                    workResolution.continued
+        ) ?: workResolution.projectId
         val task = TaskState(
             id = UUID.randomUUID().toString(),
             projectId = projectId,
@@ -1255,6 +1293,20 @@ fun WorkflowChatScreen(
             listOf(OllamaMessage("user", "HISTORICAL TASK CHECKPOINT; verify current state before acting. " +
                 "Earlier tool success is not proof for this new task.\n" + ContextKernel.capsule(previous.kernel, 1200)))
             else emptyList()
+        val workContext =
+            workResolution.contextMessage
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+                ?.let {
+                    listOf(
+                        OllamaMessage(
+                            "user",
+                            it
+                        )
+                    )
+                }
+                .orEmpty()
         val researchContext = resolution.contextMessage
             ?.takeIf { it.isNotBlank() }
             ?.let { listOf(OllamaMessage("user", it)) }
@@ -1262,11 +1314,12 @@ fun WorkflowChatScreen(
         val turnHistory =
             history +
                 previousContext +
+                workContext +
                 researchContext +
                 OllamaMessage(
                     "user",
                     if (resolvedGoal != text) {
-                        "$text\nResolved research task:\n$resolvedGoal"
+                        "$text\nResolved active task:\n$resolvedGoal"
                     } else {
                         text
                     }
@@ -1322,6 +1375,12 @@ fun WorkflowChatScreen(
         pending = null
         researchThread = null
         codeGoal = null
+        workThreads =
+            WorkThreadMemory.restore(
+                branch.session.chat.map {
+                    it.role to it.text
+                }
+            )
         contextUsage = null
         history = listOf(systemMessage) + branch.session.history.map { OllamaMessage(it.role, it.content) }
         val retainedIds = branch.session.chat.map { it.id }.toSet()
