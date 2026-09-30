@@ -309,6 +309,14 @@ object FractalCausalExperiencePolicy {
             append('|')
             append(link.failedTool)
             append('|')
+            append(link.causeKnowledge.name)
+            append('|')
+            append(link.causeFailureClass.orEmpty())
+            append('|')
+            append(link.causeErrorCode.orEmpty())
+            append('|')
+            append(link.causeDependency.orEmpty())
+            append('|')
             append(link.recoveryTools.joinToString(">"))
         }
 
