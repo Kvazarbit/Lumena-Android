@@ -710,7 +710,7 @@ same-target verifier не створює independent evidence, target verificati
 
 ## Phase 3 — Verified Cause Ladder
 
-**Статус:** PERSISTENT LIVE CAUSE-PROBE WIRING IMPLEMENTED IN BRANCH → EXACT-HEAD CI / PHONE GATE PENDING.
+**Статус:** EXACT-HEAD CI GREEN + OWNER-SIGNED BASELINE PHONE VERIFIED ✅ · live cause-probe phone gate pending.
 
 ### Мета
 
@@ -763,6 +763,42 @@ Store bounded:
 При eviction hypothesis її probes теж видаляються, щоб dangling evidence не
 могло пережити джерело.
 
+### CI + phone baseline evidence
+
+Exact branch head:
+
+```text
+7c91552b201f4ed689b87a3722a6c19ce1596372
+```
+
+PR CI `#1741` completed `SUCCESS` with both `build` and `native-smoke`
+green. Owner-signed canary installed in-place on phone:
+
+```text
+version_name=0.12.19-ci1741
+version_code=45
+signed_sha256=3ed7e171800308190ea8a05b8e2102299bf1a9ad6d1da946b9074ae0ede5d78b
+```
+
+Fresh diagnostic immediately after upgrade, before any new task:
+
+```text
+cause_unknown=19
+cause_structured=0
+cause_hypothesis=0
+cause_probed=0
+cause_verified=0
+cause_contested=0
+cause_rejected=0
+cause_runtime_failures=0
+cause_runtime_hypotheses_total=0
+cause_runtime_probes_total=0
+cause_model_prose_is_evidence=false
+```
+
+This phone-verifies backward-safe baseline behavior: historic causal records are
+not retroactively rewritten into runtime failure anchors, hypotheses, or probes.
+
 ### Tests
 
 - semantic model explanation alone → лише `HYPOTHESIS`;
@@ -777,15 +813,15 @@ Store bounded:
 
 ### Наступний gate
 
-1. exact-head CI green;
-2. owner-signed in-place canary;
-3. baseline upgrade не backfill-ить synthetic hypotheses/probes;
-4. phone task створює real failure anchor;
-5. model hypothesis без probe evidence лишається `HYPOTHESIS`;
-6. один falsifiable supporting probe дає `PROBED`, не VERIFIED;
-7. другий independent supporting signature може дати `VERIFIED`;
-8. rejecting/conflicting probe дає `REJECTED/CONTESTED`;
-9. no new execution authority, model prose never evidence.
+1. exact-head CI green ✅
+2. owner-signed in-place canary ✅
+3. baseline upgrade не backfill-ить synthetic hypotheses/probes ✅
+4. phone task створює real failure anchor ⏳
+5. model hypothesis без probe evidence лишається `HYPOTHESIS` ⏳
+6. один falsifiable supporting probe дає `PROBED`, не VERIFIED ⏳
+7. другий independent supporting signature може дати `VERIFIED` ⏳
+8. rejecting/conflicting probe дає `REJECTED/CONTESTED` ⏳
+9. no new execution authority, model prose never evidence — invariant retained ✅
 
 ---
 
