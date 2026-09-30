@@ -8,7 +8,8 @@ enum class FractalCausalResolution {
 }
 
 enum class FractalCausalCauseKnowledge {
-    UNKNOWN_NOT_CAPTURED
+    UNKNOWN_NOT_CAPTURED,
+    STRUCTURED_TOOL_FAILURE
 }
 
 data class FractalCausalLink(
@@ -23,6 +24,10 @@ data class FractalCausalLink(
     val recoveryOutcomes: List<Boolean>,
     val resolution: FractalCausalResolution,
     val causeKnowledge: FractalCausalCauseKnowledge,
+    val causeFailureClass: String? = null,
+    val causeErrorCode: String? = null,
+    val causeRetryable: Boolean? = null,
+    val causeDependency: String? = null,
     val evidenceIds: List<String>,
     val contributorModelIds: List<String>,
     val origin: FractalExperienceOrigin,
@@ -41,9 +46,11 @@ data class FractalCausalStats(
 /**
  * Deterministic causal projection over already-verified Fractal records.
  *
- * Coordinator memory currently proves tool outcomes and ordering, but it does
- * not persist a verified semantic root-cause label. Therefore v1 explicitly
- * represents WHY_FAILED as UNKNOWN_NOT_CAPTURED instead of inventing a cause.
+ * Coordinator memory proves tool outcomes and ordering. When ToolResult also
+ * supplies structured failure metadata (failureClass/errorCode/retryable/
+ * dependency), v1 carries that metadata as evidence-grounded WHY_FAILED.
+ * Otherwise WHY_FAILED remains UNKNOWN_NOT_CAPTURED; semantic causes are never
+ * inferred from prose or invented.
  *
  * Advisory-only: no ToolGate, permission, execution, Constitution-promotion,
  * or Laya-authority API exists here.
@@ -164,6 +171,22 @@ object FractalCausalExperiencePolicy {
             }
             append(" · WHY_FAILED=")
             append(link.causeKnowledge.name)
+            link.causeFailureClass?.let {
+                append(" class=")
+                append(it)
+            }
+            link.causeErrorCode?.let {
+                append(" code=")
+                append(it)
+            }
+            link.causeRetryable?.let {
+                append(" retryable=")
+                append(it)
+            }
+            link.causeDependency?.let {
+                append(" dependency=")
+                append(it)
+            }
             append(" · RECOVERY=")
             append(
                 if (link.recoveryTools.isEmpty()) {
@@ -222,6 +245,24 @@ object FractalCausalExperiencePolicy {
             }
         val recoveryTools = record.tools.drop(failedIndex + 1)
         val recoveryOutcomes = record.outcomes.drop(failedIndex + 1)
+        val causeFailureClass = record.failureClasses.getOrNull(failedIndex)
+            ?.takeIf(String::isNotBlank)
+        val causeErrorCode = record.errorCodes.getOrNull(failedIndex)
+            ?.takeIf(String::isNotBlank)
+        val causeRetryable = record.retryableFlags.getOrNull(failedIndex)
+        val causeDependency = record.dependencies.getOrNull(failedIndex)
+            ?.takeIf(String::isNotBlank)
+        val causeKnowledge =
+            if (
+                causeFailureClass != null ||
+                causeErrorCode != null ||
+                causeRetryable != null ||
+                causeDependency != null
+            ) {
+                FractalCausalCauseKnowledge.STRUCTURED_TOOL_FAILURE
+            } else {
+                FractalCausalCauseKnowledge.UNKNOWN_NOT_CAPTURED
+            }
 
         return FractalCausalLink(
             id = "fx-causal-" +
@@ -242,8 +283,11 @@ object FractalCausalExperiencePolicy {
             recoveryTools = recoveryTools.take(15),
             recoveryOutcomes = recoveryOutcomes.take(15),
             resolution = resolution,
-            causeKnowledge =
-                FractalCausalCauseKnowledge.UNKNOWN_NOT_CAPTURED,
+            causeKnowledge = causeKnowledge,
+            causeFailureClass = causeFailureClass,
+            causeErrorCode = causeErrorCode,
+            causeRetryable = causeRetryable,
+            causeDependency = causeDependency,
             evidenceIds = record.evidenceIds
                 .filter(String::isNotBlank)
                 .distinct()
