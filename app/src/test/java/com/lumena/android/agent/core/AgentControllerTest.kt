@@ -16,6 +16,122 @@ class AgentControllerTest {
     )
 
     @Test
+    fun causeProbeMetadataNeedsPriorFailedToolEvidence() {
+        val state = controller.initial(
+            TaskState(
+                id = "cause-before-failure",
+                projectId = null,
+                goal = "Перевір файл demo.py",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        val instruction = controller.interpret(
+            """{"tool":"workspace.list","args":{},"cause_hypothesis":"Path state differs","cause_probe_on_success":"SUPPORTS","cause_probe_on_failure":"REJECTS"}""",
+            state
+        )
+
+        assertTrue(
+            instruction is
+                ControllerInstruction.AskModelAgain
+        )
+        instruction as ControllerInstruction.AskModelAgain
+        assertTrue(
+            instruction.feedback.contains(
+                "CAUSE_PROBE_REJECTED"
+            )
+        )
+        assertEquals(0, instruction.state.task.step)
+    }
+
+    @Test
+    fun falsifiableCauseProbeIsAllowedAfterRealFailure() {
+        var state = controller.initial(
+            TaskState(
+                id = "cause-after-failure",
+                projectId = null,
+                goal = "Перевір файл demo.py",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        state = controller.afterTool(
+            state = state,
+            call = AgentDecision.ToolCall(
+                tool = "file.read",
+                args = mapOf(
+                    "path" to "demo.py"
+                )
+            ),
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "No such file"
+        ).state
+
+        val instruction = controller.interpret(
+            """{"tool":"workspace.list","args":{},"reason":"check current paths","cause_hypothesis":"Path state differs","cause_probe_on_success":"SUPPORTS","cause_probe_on_failure":"REJECTS"}""",
+            state
+        )
+
+        assertTrue(
+            instruction is
+                ControllerInstruction.Execute
+        )
+        instruction as ControllerInstruction.Execute
+        assertEquals(
+            "Path state differs",
+            instruction.call.causeHypothesis
+        )
+        assertEquals(
+            "SUPPORTS",
+            instruction.call.causeProbeOnSuccess
+        )
+        assertEquals(
+            "REJECTS",
+            instruction.call.causeProbeOnFailure
+        )
+    }
+
+    @Test
+    fun halfSpecifiedCauseProbeIsRejectedBeforeExecution() {
+        var state = controller.initial(
+            TaskState(
+                id = "cause-half-probe",
+                projectId = null,
+                goal = "Перевір файл demo.py",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        state = controller.afterTool(
+            state = state,
+            call = AgentDecision.ToolCall(
+                tool = "file.read",
+                args = mapOf("path" to "demo.py")
+            ),
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "No such file"
+        ).state
+
+        val instruction = controller.interpret(
+            """{"tool":"workspace.list","args":{},"cause_hypothesis":"Path state differs","cause_probe_on_success":"SUPPORTS"}""",
+            state
+        )
+
+        assertTrue(
+            instruction is
+                ControllerInstruction.AskModelAgain
+        )
+        instruction as ControllerInstruction.AskModelAgain
+        assertTrue(
+            instruction.feedback.contains(
+                "provide both"
+            )
+        )
+    }
+
+    @Test
     fun ordinaryReplyCanFinishBeforeToolWork() {
         val conversational = TaskState(
             id = "chat",
