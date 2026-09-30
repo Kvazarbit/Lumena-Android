@@ -106,11 +106,36 @@ object FractalExperienceCanvasPolicy {
             )
             .takeLast(MAX_RECORDS)
 
-        val nodes = project(merged)
+        return normalize(
+            state.copy(
+                version = 1,
+                records = merged
+            )
+        )
+    }
+
+    fun normalize(
+        state: FractalExperienceCanvasState
+    ): FractalExperienceCanvasState {
+        val records = state.records
+            .distinctBy { it.id }
+            .sortedWith(
+                compareBy<FractalExampleRecord> { it.updatedAt }
+                    .thenBy { it.id }
+            )
+            .takeLast(MAX_RECORDS)
+        val language = state.languageObservations
+            .distinctBy { it.id }
+            .sortedWith(
+                compareBy<FractalLanguageObservation> { it.at }
+                    .thenBy { it.id }
+            )
+            .takeLast(MAX_LANGUAGE_OBSERVATIONS)
         return state.copy(
             version = 1,
-            records = merged,
-            nodes = nodes
+            records = records,
+            nodes = project(records),
+            languageObservations = language
         )
     }
 
@@ -137,14 +162,11 @@ object FractalExperienceCanvasPolicy {
         )
         if (state.languageObservations.any { it.id == id }) return state
 
-        return state.copy(
-            version = 1,
-            languageObservations = (state.languageObservations + observation)
-                .sortedWith(
-                    compareBy<FractalLanguageObservation> { it.at }
-                        .thenBy { it.id }
-                )
-                .takeLast(MAX_LANGUAGE_OBSERVATIONS)
+        return normalize(
+            state.copy(
+                version = 1,
+                languageObservations = state.languageObservations + observation
+            )
         )
     }
 
