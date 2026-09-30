@@ -524,7 +524,7 @@ Runtime exit=9 коректно став `UNEXPECTED_FAILURE`, а не `SCHEMA_M
 
 ## Phase 2 — Goal Contract і незалежні Verifiers
 
-**Статус:** V1 IMPLEMENTED IN BRANCH → EXACT-HEAD CI / PHONE GATE PENDING.
+**Статус:** V1 CORE SUCCESS PATH PHONE VERIFIED ✅ · pending/false-DONE phone gate pending.
 
 ### Мета
 
@@ -616,18 +616,58 @@ coverage_is_full_semantic_proof=false
 
 Деталі: [GOAL_CONTRACT_V1.uk.md](GOAL_CONTRACT_V1.uk.md).
 
+### Phone evidence
+
+Owner-signed `0.12.18-ci1666` / versionCode 44 на реальному телефоні виконав goal:
+
+```text
+Створи файл goal_contract_phone_probe.py
+з кодом print("GOAL_CONTRACT_PHONE_OK")
+і потім перевір його через python.syntax_check.
+```
+
+Kernel receipts:
+
+```text
+e1 OBSERVE context.snapshot ok=true
+e2 ACT file.write ok=true target=goal_contract_phone_probe.py
+e3 VERIFY python.syntax_check ok=true target=goal_contract_phone_probe.py
+```
+
+Фінальний diagnostic:
+
+```text
+[GOAL_CONTRACT]
+coverage=TYPED_OPERATIONAL_V1
+criteria=4
+mandatory=4
+passed=4
+independent_passed=1
+pending=
+all_mandatory_passed=true
+coverage_is_full_semantic_proof=false
+```
+
+Це phone-verifies happy path `mutation → target verification → independent evidence → DONE`.
+
+Одночасно збереглись:
+- Prediction/Delta: `expectations_total=11`, `deltas_total=11`, `matches=10`, `unexpected_failures=1`;
+- Fractal: `records=418`, `live_records=19`, `nodes=1024`;
+- Causal: `causal_links=19`, `causal_recovered=14`, `causal_live_links=1`;
+- authority invariants: `constitution_activation=false`, `laya_execution_authority=false`.
+
 ### Acceptance gate
 
-1. exact-head Android CI green;
-2. owner-signed in-place canary;
-3. phone diagnostic показує `coverage=TYPED_OPERATIONAL_V1` на operational task;
-4. preflight-only code task має pending `code-action-evidence`;
-5. Python mutation створює pending target criterion;
-6. independent verifier збільшує `independent_passed` і закриває target criterion;
-7. false-DONE regressions не з'являються;
-8. Fractal/Causal/Prediction і authority invariants не регресують.
+1. exact-head Android CI green ✅
+2. owner-signed in-place canary ✅
+3. operational task gives `coverage=TYPED_OPERATIONAL_V1` ✅
+4. successful code mutation participates in mandatory Goal Contract ✅
+5. independent same-target verifier gives `independent_passed=1` ✅
+6. final all-mandatory pass allows DONE ✅
+7. Fractal/Causal/Prediction + authority invariants preserved ✅
+8. intermediate phone `PENDING` state / false-DONE rejection still needs one focused live probe ⏳
 
-Phase 2 v1 не закривається лише за commit/CI — потрібен phone evidence.
+Phase 2 v1 closes after the focused phone false-DONE probe confirms that a Python mutation cannot reach DONE while the target-specific verifier is still pending.
 
 ---
 
