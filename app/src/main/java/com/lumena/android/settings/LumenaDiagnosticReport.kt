@@ -100,6 +100,20 @@ data class DiagnosticLayaShadowView(
     val lastErrorCode: String = ""
 )
 
+data class DiagnosticFractalExperienceView(
+    val error: String = "",
+    val records: Int = 0,
+    val nodes: Int = 0,
+    val best: Int = 0,
+    val worst: Int = 0,
+    val unknown: Int = 0,
+    val contested: Int = 0,
+    val transferredShadow: Int = 0,
+    val languageCues: Int = 0,
+    val languageTransferred: Int = 0,
+    val contributorModels: Int = 0
+)
+
 data class LumenaDiagnosticInput(
     val generatedAtMs: Long,
     val packageName: String,
@@ -138,7 +152,9 @@ data class LumenaDiagnosticInput(
         ),
     val layaShadow: DiagnosticLayaShadowView =
         DiagnosticLayaShadowView(),
-    val cognitiveRegression: CognitiveRegressionReport? = null
+    val cognitiveRegression: CognitiveRegressionReport? = null,
+    val fractalExperience: DiagnosticFractalExperienceView =
+        DiagnosticFractalExperienceView()
 )
 
 object LumenaDiagnosticFormatter {
@@ -443,6 +459,43 @@ object LumenaDiagnosticFormatter {
             }
             appendLine("scope=memory_control_regression_not_model_intelligence")
             appendLine()
+
+            appendLine("[FRACTAL_EXPERIENCE_CANVAS]")
+            appendLine("mode=SHADOW")
+            appendLine("authority=advisory_only")
+            val fractal = input.fractalExperience
+            if (fractal.error.isNotBlank()) {
+                appendLine("error=" + clean(fractal.error, 1200))
+            } else {
+                appendLine("records=" + fractal.records)
+                appendLine("nodes=" + fractal.nodes)
+                appendLine("best_peaks=" + fractal.best)
+                appendLine("worst_peaks=" + fractal.worst)
+                appendLine("unknown_peaks=" + fractal.unknown)
+                appendLine("contested_peaks=" + fractal.contested)
+                appendLine(
+                    "transferred_shadow=" +
+                        fractal.transferredShadow
+                )
+                appendLine("language_cues=" + fractal.languageCues)
+                appendLine(
+                    "language_transferred_shadow=" +
+                        fractal.languageTransferred
+                )
+                appendLine(
+                    "contributor_models=" +
+                        fractal.contributorModels
+                )
+                appendLine("immune_worst_peaks=" + fractal.worst)
+                appendLine(
+                    "immune_contested_peaks=" +
+                        fractal.contested
+                )
+            }
+            appendLine("constitution_activation=false")
+            appendLine("laya_execution_authority=false")
+            appendLine()
+
             appendLine("[E2E_FACTS]")
             appendLine(
                 "verified_project_applications=" +
@@ -582,6 +635,8 @@ object LumenaDiagnosticReport {
             tinyJevCalibrationView(app)
         val layaShadow =
             layaShadowView(app)
+        val fractalExperience =
+            fractalExperienceView(app)
 
         val input = LumenaDiagnosticInput(
             generatedAtMs = now,
@@ -680,13 +735,44 @@ object LumenaDiagnosticReport {
             cognitiveRegression = runCatching {
                 val state = CoordinatorExperienceStore.load(app)
                 CognitiveRegressionSuite.replay(CognitiveRegressionSuite.corpus(state.learnedExamples))
-            }.getOrNull()
+            }.getOrNull(),
+            fractalExperience = fractalExperience
         )
 
         return LumenaDiagnosticFormatter.render(
             input
         )
     }
+
+    private fun fractalExperienceView(
+        context: Context
+    ): DiagnosticFractalExperienceView =
+        runCatching {
+            val stats =
+                FractalExperienceCanvasStore.stats(context)
+            DiagnosticFractalExperienceView(
+                records = stats.records,
+                nodes = stats.nodes,
+                best = stats.best,
+                worst = stats.worst,
+                unknown = stats.unknown,
+                contested = stats.contested,
+                transferredShadow =
+                    stats.transferredShadow,
+                languageCues = stats.languageCues,
+                languageTransferred =
+                    stats.languageTransferred,
+                contributorModels =
+                    stats.contributorModels
+            )
+        }.getOrElse { failure ->
+            DiagnosticFractalExperienceView(
+                error =
+                    failure.message
+                        ?: failure::class.simpleName
+                        ?: "fractal experience unavailable"
+            )
+        }
 
     private fun layaShadowView(
         context: Context
