@@ -256,11 +256,11 @@ Recovery зберігає:
 
 ## Phase 0 — підтвердити LIVE causal wiring
 
-**Статус:** BUG CONFIRMED → FIX IN CI.
+**Статус:** PHONE VERIFIED ✅
 
-### Телефонний доказ
+### Виявлений баг
 
-Після контрольного Companion recovery:
+Перший контрольний Companion recovery:
 
 ```text
 python.run[failed]
@@ -268,7 +268,7 @@ python.run[failed]
 → python.run[ok]
 ```
 
-Coordinator повернув реальний `RECOVERY EXAMPLE`, але наступний phone diagnostic залишив:
+дав реальний `RECOVERY EXAMPLE`, але phone diagnostic лишив:
 
 ```text
 live_records=3
@@ -277,7 +277,7 @@ causal_revalidated_patterns=0
 ```
 
 Одночасно Constitution змінилася з `learned_active=1, contested=0` на
-`learned_active=0, contested=1`. Це підтвердило, що Companion event доходить до
+`learned_active=0, contested=1`. Це показало, що Companion event доходив до
 Coordinator/Constitution fan-out, але не до Fractal Canvas.
 
 ### Root cause
@@ -296,17 +296,62 @@ WorkflowChatScreen мав цей fan-out; Companion — ні. Тому Companion
 
 - `FractalExperienceCanvasStore.ingest(context, examples)` у verified Companion fan-out;
 - regression guard `CompanionFractalWiringRegressionTest`;
-- canary bump до `0.12.15` / versionCode 41.
+- наступні canary-збірки зберігають цей wiring.
 
-### Gate
+### Phone acceptance
 
-- exact-head Android CI green;
-- in-place owner-signed canary install;
-- повторити контрольний fail→fix→success через Companion;
-- phone diagnostic має показати `causal_live_links > 0`;
-- повторний ingest не дублює link;
-- FAILED_RECOVERY не стає RECOVERED;
-- authority invariants не змінені.
+На owner-signed `0.12.16-ci1574` / versionCode 42 виконано свіжий post-fix цикл:
+
+```text
+python.run[failed]
+→ file.write[ok]
+→ python.run[ok]
+```
+
+До циклу:
+
+```text
+records=406
+live_records=7
+causal_links=18
+causal_recovered=13
+causal_unresolved=5
+causal_live_links=0
+transferred_shadow=5
+```
+
+Після циклу:
+
+```text
+records=407
+live_records=8
+causal_links=19
+causal_recovered=14
+causal_unresolved=5
+causal_live_links=1
+transferred_shadow=6
+```
+
+Отже вертикальний тракт
+
+```text
+Companion → Coordinator → Fractal Canvas → Causal Experience
+```
+
+підтверджений реальним phone evidence. `causal_revalidated_patterns=0` на цьому
+етапі не є помилкою: один LIVE causal link сам по собі ще не виконує критерії
+revalidation у кількох незалежних source tasks із сумісним structural pattern.
+
+### Gate result
+
+- exact-head Android CI green ✅
+- in-place owner-signed install ✅
+- fresh fail→fix→success через Companion ✅
+- `causal_live_links > 0` ✅
+- recovered +1 без зменшення unresolved через хибне перепризначення ✅
+- execution authority/Laya/Constitution invariants не розширені ✅
+
+**Phase 0 закрито. Наступний пріоритет: Phase 1 — Prediction / Actual / Delta Ledger.**
 
 ---
 
