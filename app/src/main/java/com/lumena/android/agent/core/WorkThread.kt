@@ -90,9 +90,7 @@ object WorkThreadMemory {
             anchors = normalized.anchors,
             keys = keys,
             explicitProject = explicitProject,
-            allowLatest =
-                continuation &&
-                    keys.isEmpty()
+            allowLatest = false
         )
 
         val shouldContinue =
