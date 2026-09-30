@@ -385,7 +385,8 @@ object TaskIntentRouter {
         val actionTerms = listOf(
             "створ", "create", "write", "напис", "реаліз", "implement",
             "виправ", "fix", "редаг", "edit", "patch", "перевір", "test",
-            "запуст", "run", "debug", "build", "збір", "commit"
+            "запуст", "run", "debug", "build", "збір", "commit",
+            "онов", "update", "зроб", "modify", "покращ", "improve"
         )
 
         val hasStrongCodeSubject =
