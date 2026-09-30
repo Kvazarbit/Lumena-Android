@@ -264,7 +264,18 @@ object FractalExperienceCanvasPolicy {
 
     fun formatForPrompt(node: FractalExperienceNode): String =
         buildString {
-            append("FRACTAL ")
+            append(
+                when (node.peak) {
+                    FractalExperiencePeak.WORST ->
+                        "FRACTAL IMMUNE-WORST "
+                    FractalExperiencePeak.CONTESTED ->
+                        "FRACTAL IMMUNE-CONTESTED "
+                    FractalExperiencePeak.UNKNOWN ->
+                        "FRACTAL UNKNOWN "
+                    FractalExperiencePeak.BEST ->
+                        "FRACTAL BEST "
+                }
+            )
             append(node.level.name)
             append(" · peak=")
             append(node.peak.name)
