@@ -39,7 +39,8 @@ data class TaskState(
     val createdFiles: List<String> = emptyList(),
     val modifiedFiles: List<String> = emptyList(),
     val errors: List<String> = emptyList(),
-    val kernel: ContextKernelState = ContextKernelState()
+    val kernel: ContextKernelState = ContextKernelState(),
+    val goalContract: GoalContract = GoalContract()
 ) {
     /**
      * maxSteps limits tool executions, not the final model conclusion.
