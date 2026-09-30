@@ -619,6 +619,9 @@ class CoordinatorExperiencePolicyTest {
         assertTrue(event.errorCode == null)
         assertTrue(event.retryable == null)
         assertTrue(event.dependency == null)
+        assertTrue(event.expectedOutcome == null)
+        assertTrue(event.observedOutcome == null)
+        assertTrue(event.outcomeDelta == null)
 
         val example = decoded.learnedExamples.single()
         assertTrue(example.failureClasses.isEmpty())
