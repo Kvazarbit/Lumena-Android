@@ -6,6 +6,7 @@ import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.AgentDecision
 import com.lumena.android.agent.core.ControllerInstruction
 import com.lumena.android.agent.core.FailureEvent
+import com.lumena.android.agent.core.GoalContext
 import com.lumena.android.agent.core.ReflexCandidateSet
 import com.lumena.android.agent.core.ReflexKernel
 import com.lumena.android.agent.core.ReflexRuntimeAdvice
@@ -818,10 +819,11 @@ class WorkflowRunner(
             constitutionalGuidance = constitutionalGuidance,
             verifiedEvidence = verifiedEvidence
         )
-        val compactGoal = state.task.goal
-            .replace(Regex("[\\r\\n]+"), " ")
-            .trim()
-            .take(1_000)
+        val compactGoal =
+            GoalContext.clip(
+                state.task.goal,
+                1_000
+            )
         val compactLastResult = state.task.lastResult
             ?.replace(Regex("[\\r\\n]+"), " ")
             ?.trim()
