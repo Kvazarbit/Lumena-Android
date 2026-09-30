@@ -208,6 +208,43 @@ class ResearchThreadTest {
         assertFalse(resolved.contextMessage.orEmpty().contains("permission granted", ignoreCase = true))
     }
 
+
+    @Test
+    fun staleResearchThreadDoesNotHijackBareImplementationDirective() {
+        val thread = ResearchThreadState(
+            rootGoal = "Знайди офіційну документацію API",
+            discoveredUrls = listOf("https://developer.android.com/example"),
+            readUrls = listOf("https://developer.android.com/example")
+        )
+
+        val resolved = ResearchThreadResolver.resolve(
+            text = "реалізуй",
+            previousGoal = "Онови aquarium.html і додай Fly",
+            thread = thread
+        )
+
+        assertEquals("Онови aquarium.html і додай Fly", resolved.goal)
+        assertEquals(thread, resolved.thread)
+        assertEquals(ResearchFollowUpKind.NONE, resolved.followUpKind)
+    }
+
+    @Test
+    fun explicitApplyReferenceStillUsesResearchThread() {
+        val thread = ResearchThreadState(
+            rootGoal = "Знайди офіційну документацію API"
+        )
+
+        val resolved = ResearchThreadResolver.resolve(
+            text = "реалізуй це",
+            previousGoal = "Онови aquarium.html",
+            thread = thread
+        )
+
+        assertEquals(ResearchFollowUpKind.APPLY, resolved.followUpKind)
+        assertEquals("реалізуй це", resolved.goal)
+        assertEquals(thread, resolved.thread)
+    }
+
     @Test
     fun metaConversationDoesNotReplaceExistingThread() {
         val thread = ResearchThreadState(
