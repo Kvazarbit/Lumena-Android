@@ -240,6 +240,38 @@ class ProtocolNormalizer {
             ?.takeIf { it.isNotEmpty() }
             ?.let { canonical["plan"] = it }
 
+        fun copyCauseString(
+            key: String,
+            maxChars: Int
+        ): NormalizationResult.Failure? {
+            if (!obj.containsKey(key)) return null
+            val value = obj[key]
+            if (value !is String) {
+                return NormalizationResult.Failure(
+                    ProtocolFailureKind.UNSUPPORTED_SHAPE,
+                    "$key must be a string"
+                )
+            }
+            value.trim()
+                .takeIf(String::isNotBlank)
+                ?.take(maxChars)
+                ?.let { canonical[key] = it }
+            return null
+        }
+
+        copyCauseString(
+            "cause_hypothesis",
+            600
+        )?.let { return it }
+        copyCauseString(
+            "cause_probe_on_success",
+            24
+        )?.let { return it }
+        copyCauseString(
+            "cause_probe_on_failure",
+            24
+        )?.let { return it }
+
         val rule = when {
             envelope.rule == NormalizationRule.HERMES_TOOL_CALL ->
                 NormalizationRule.HERMES_TOOL_CALL
