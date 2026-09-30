@@ -13,8 +13,8 @@ android {
         applicationId = "com.lumena.android"
         minSdk = 28
         targetSdk = 35
-        versionCode = 43
-        versionName = "0.12.17" + providers.environmentVariable("GITHUB_RUN_NUMBER")
+        versionCode = 44
+        versionName = "0.12.18" + providers.environmentVariable("GITHUB_RUN_NUMBER")
             .orNull?.let { "-ci$it" }.orEmpty()
         ndk { abiFilters += listOf("arm64-v8a") }
         externalNativeBuild {
