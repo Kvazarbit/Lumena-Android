@@ -436,9 +436,9 @@ object WorkThreadMemory {
             "analy",
             "improve"
         )
-        return stems.any(
-            token::startsWith
-        )
+        return stems.any { stem ->
+            token.startsWith(stem)
+        }
     }
 
     private fun isContinuationCue(
