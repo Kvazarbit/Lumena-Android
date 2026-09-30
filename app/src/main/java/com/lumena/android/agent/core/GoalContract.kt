@@ -11,6 +11,9 @@ enum class CriterionKind {
     OPERATIONAL_TOOL_EVIDENCE,
     REQUIRED_TOOL_SUCCESS,
     VISUAL_EVIDENCE,
+    SOURCE_CONTENT_EVIDENCE,
+    FILE_CONTENT_EVIDENCE,
+    CODE_ACTION_EVIDENCE,
     PYTHON_TARGET_VERIFIED
 }
 
@@ -93,6 +96,30 @@ object GoalContractPolicy {
             )
         }
 
+        if (intent == TaskIntent.PUBLIC_WEB) {
+            criteria += AcceptanceCriterion(
+                id = "source-content-evidence",
+                kind = CriterionKind.SOURCE_CONTENT_EVIDENCE,
+                subject = "web.read|http.get|http.json"
+            )
+        }
+
+        if (intent == TaskIntent.FILE_INSPECTION) {
+            criteria += AcceptanceCriterion(
+                id = "file-content-evidence",
+                kind = CriterionKind.FILE_CONTENT_EVIDENCE,
+                subject = "file.read"
+            )
+        }
+
+        if (intent == TaskIntent.CODE_WORK) {
+            criteria += AcceptanceCriterion(
+                id = "code-action-evidence",
+                kind = CriterionKind.CODE_ACTION_EVIDENCE,
+                subject = "mutating-or-executable"
+            )
+        }
+
         return GoalContract(
             coverage =
                 if (criteria.isEmpty()) GoalContractCoverage.NONE
@@ -162,6 +189,60 @@ object GoalContractPolicy {
                     } else {
                         criterion
                     }
+
+                CriterionKind.SOURCE_CONTENT_EVIDENCE ->
+                    if (
+                        ok &&
+                        canonical in setOf(
+                            "web.read",
+                            "http.get",
+                            "http.json"
+                        ) &&
+                        toolEvidence != null
+                    ) {
+                        pass(
+                            criterion,
+                            toolEvidence.copy(
+                                strength =
+                                    VerificationStrength.INDEPENDENT_TOOL_RESULT
+                            )
+                        )
+                    } else {
+                        criterion
+                    }
+
+                CriterionKind.FILE_CONTENT_EVIDENCE ->
+                    if (
+                        ok &&
+                        canonical == "file.read" &&
+                        toolEvidence != null
+                    ) {
+                        pass(
+                            criterion,
+                            toolEvidence.copy(
+                                strength =
+                                    VerificationStrength.INDEPENDENT_TOOL_RESULT
+                            )
+                        )
+                    } else {
+                        criterion
+                    }
+
+                CriterionKind.CODE_ACTION_EVIDENCE -> {
+                    val risk = ToolRegistry.get(canonical)?.risk
+                    if (
+                        ok &&
+                        risk in setOf(
+                            ToolRisk.MUTATING,
+                            ToolRisk.EXECUTABLE
+                        ) &&
+                        toolEvidence != null
+                    ) {
+                        pass(criterion, toolEvidence)
+                    } else {
+                        criterion
+                    }
+                }
 
                 CriterionKind.PYTHON_TARGET_VERIFIED ->
                     verifyPythonCriterion(
