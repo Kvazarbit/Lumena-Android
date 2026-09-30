@@ -111,7 +111,10 @@ data class DiagnosticFractalExperienceView(
     val transferredShadow: Int = 0,
     val languageCues: Int = 0,
     val languageTransferred: Int = 0,
-    val contributorModels: Int = 0
+    val contributorModels: Int = 0,
+    val legacyBackfillVersion: Int = 0,
+    val legacyBackfillRecords: Int = 0,
+    val liveRecords: Int = 0
 )
 
 data class LumenaDiagnosticInput(
@@ -486,6 +489,18 @@ object LumenaDiagnosticFormatter {
                     "contributor_models=" +
                         fractal.contributorModels
                 )
+                appendLine(
+                    "legacy_backfill_version=" +
+                        fractal.legacyBackfillVersion
+                )
+                appendLine(
+                    "legacy_backfill_records=" +
+                        fractal.legacyBackfillRecords
+                )
+                appendLine(
+                    "live_records=" +
+                        fractal.liveRecords
+                )
                 appendLine("immune_worst_peaks=" + fractal.worst)
                 appendLine(
                     "immune_contested_peaks=" +
@@ -763,7 +778,13 @@ object LumenaDiagnosticReport {
                 languageTransferred =
                     stats.languageTransferred,
                 contributorModels =
-                    stats.contributorModels
+                    stats.contributorModels,
+                legacyBackfillVersion =
+                    stats.legacyBackfillVersion,
+                legacyBackfillRecords =
+                    stats.legacyBackfillRecords,
+                liveRecords =
+                    stats.liveRecords
             )
         }.getOrElse { failure ->
             DiagnosticFractalExperienceView(
