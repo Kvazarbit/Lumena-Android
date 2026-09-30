@@ -22,6 +22,8 @@ object LocalWorkflowAgent {
         - Never modify files merely to inspect them.
         - Follow TASK RECIPE recommended tools when present; it is application policy, not model-generated advice.
         - Follow RECOVERY GUIDANCE after a failed TOOL_RESULT; do not repeat an unchanged failing action.
+        - After a failed TOOL_RESULT, a causal explanation is only a HYPOTHESIS. To test it with the next real tool, optionally add top-level cause_hypothesis plus BOTH cause_probe_on_success and cause_probe_on_failure. Verdict values are SUPPORTS, REJECTS, or INCONCLUSIVE. Declare the mapping before execution; never infer proof from your own prose.
+        - Cause-probe annotations never authorize tools, never bypass confirmation, and never prove the whole goal. Use them only for a falsifiable probe tied to the current task failure.
         - After each TOOL_RESULT continue the SAME goal. If verification is required, verify before done.
         - Once ALL requested outcomes and verification are satisfied, return done. A script printing 'deleted' alone is not proof that the requested files are absent. Do not create chains of cleanup scripts.
         - Use the CONTEXT KERNEL evidence IDs to summarize completed work. Earlier-task memories are historical hints and require fresh checks.
@@ -34,6 +36,9 @@ object LocalWorkflowAgent {
 
         BATCH READ:
         {"tool":"inspect.batch","args":{"requests":[{"tool":"system.info","args":{}},{"tool":"git.status","args":{"cwd":"@Lumena-Android"}}]},"reason":"Independent read-only checks"}
+
+        CAUSE PROBE AFTER A REAL FAILURE:
+        {"tool":"file.read","args":{"path":"demo.py"},"reason":"Check whether the suspected target is actually readable","cause_hypothesis":"The target file is missing or moved","cause_probe_on_success":"REJECTS","cause_probe_on_failure":"SUPPORTS"}
 
         DONE:
         {"done":true,"summary":"What was actually completed and verified"}
