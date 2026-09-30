@@ -961,6 +961,8 @@ object LumenaDiagnosticReport {
         runCatching {
             val stats =
                 FractalExperienceCanvasStore.stats(context)
+            val causeRuntime =
+                VerifiedCauseLadderStore.stats(context)
             DiagnosticFractalExperienceView(
                 records = stats.records,
                 nodes = stats.nodes,
@@ -996,15 +998,15 @@ object LumenaDiagnosticReport {
                 causeStructured =
                     stats.causeStructured,
                 causeHypothesis =
-                    stats.causeHypothesis,
+                    causeRuntime.hypothesisStage,
                 causeProbed =
-                    stats.causeProbed,
+                    causeRuntime.probedStage,
                 causeVerified =
-                    stats.causeVerified,
+                    causeRuntime.verifiedStage,
                 causeContested =
-                    stats.causeContested,
+                    causeRuntime.contestedStage,
                 causeRejected =
-                    stats.causeRejected
+                    causeRuntime.rejectedStage
             )
         }.getOrElse { failure ->
             DiagnosticFractalExperienceView(
