@@ -100,6 +100,18 @@ data class DiagnosticLayaShadowView(
     val lastErrorCode: String = ""
 )
 
+data class DiagnosticPredictionDeltaView(
+    val error: String = "",
+    val expectations: Int = 0,
+    val deltas: Int = 0,
+    val matches: Int = 0,
+    val unexpectedFailures: Int = 0,
+    val unexpectedSuccesses: Int = 0,
+    val schemaMismatches: Int = 0,
+    val outcomeUnknown: Int = 0,
+    val verificationMissing: Int = 0
+)
+
 data class DiagnosticFractalExperienceView(
     val error: String = "",
     val records: Int = 0,
@@ -161,6 +173,8 @@ data class LumenaDiagnosticInput(
     val layaShadow: DiagnosticLayaShadowView =
         DiagnosticLayaShadowView(),
     val cognitiveRegression: CognitiveRegressionReport? = null,
+    val predictionDelta: DiagnosticPredictionDeltaView =
+        DiagnosticPredictionDeltaView(),
     val fractalExperience: DiagnosticFractalExperienceView =
         DiagnosticFractalExperienceView()
 )
@@ -468,6 +482,42 @@ object LumenaDiagnosticFormatter {
             appendLine("scope=memory_control_regression_not_model_intelligence")
             appendLine()
 
+            appendLine("[PREDICTION_DELTA]")
+            val prediction = input.predictionDelta
+            if (prediction.error.isNotBlank()) {
+                appendLine(
+                    "error=" +
+                        clean(prediction.error, 1200)
+                )
+            } else {
+                appendLine("expectations_total=" + prediction.expectations)
+                appendLine("deltas_total=" + prediction.deltas)
+                appendLine("matches=" + prediction.matches)
+                appendLine(
+                    "unexpected_failures=" +
+                        prediction.unexpectedFailures
+                )
+                appendLine(
+                    "unexpected_successes=" +
+                        prediction.unexpectedSuccesses
+                )
+                appendLine(
+                    "schema_mismatches=" +
+                        prediction.schemaMismatches
+                )
+                appendLine(
+                    "outcome_unknown=" +
+                        prediction.outcomeUnknown
+                )
+                appendLine(
+                    "verification_missing=" +
+                        prediction.verificationMissing
+                )
+                appendLine("authority=advisory_only")
+                appendLine("model_prose_is_evidence=false")
+            }
+            appendLine()
+
             appendLine("[FRACTAL_EXPERIENCE_CANVAS]")
             appendLine("mode=SHADOW")
             appendLine("authority=advisory_only")
@@ -677,6 +727,8 @@ object LumenaDiagnosticReport {
             layaShadowView(app)
         val fractalExperience =
             fractalExperienceView(app)
+        val predictionDelta =
+            predictionDeltaView(app)
 
         val input = LumenaDiagnosticInput(
             generatedAtMs = now,
@@ -776,6 +828,7 @@ object LumenaDiagnosticReport {
                 val state = CoordinatorExperienceStore.load(app)
                 CognitiveRegressionSuite.replay(CognitiveRegressionSuite.corpus(state.learnedExamples))
             }.getOrNull(),
+            predictionDelta = predictionDelta,
             fractalExperience = fractalExperience
         )
 
@@ -783,6 +836,33 @@ object LumenaDiagnosticReport {
             input
         )
     }
+
+    private fun predictionDeltaView(
+        context: Context
+    ): DiagnosticPredictionDeltaView =
+        runCatching {
+            val stats =
+                ExperienceOutcomeDeltaPolicy.stats(
+                    CoordinatorExperienceStore.load(context)
+                )
+            DiagnosticPredictionDeltaView(
+                expectations = stats.expectations,
+                deltas = stats.deltas,
+                matches = stats.matches,
+                unexpectedFailures = stats.unexpectedFailures,
+                unexpectedSuccesses = stats.unexpectedSuccesses,
+                schemaMismatches = stats.schemaMismatches,
+                outcomeUnknown = stats.outcomeUnknown,
+                verificationMissing = stats.verificationMissing
+            )
+        }.getOrElse { failure ->
+            DiagnosticPredictionDeltaView(
+                error =
+                    failure.message
+                        ?: failure::class.simpleName
+                        ?: "prediction delta unavailable"
+            )
+        }
 
     private fun fractalExperienceView(
         context: Context
