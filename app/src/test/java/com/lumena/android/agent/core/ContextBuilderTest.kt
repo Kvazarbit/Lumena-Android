@@ -92,7 +92,16 @@ class ContextBuilderTest {
 
         assertTrue(context.length <= ConstitutionCapsule.MIN_CONTEXT_CHARS)
         assertTrue(context.contains("CONSTITUTION CAPSULE ${ConstitutionCapsule.VERSION}"))
-        assertTrue(context.contains("goal=" + "G".repeat(320)))
+        assertTrue(
+            context.contains(
+                "goal=" + "G".repeat(100)
+            )
+        )
+        assertTrue(
+            context.contains(
+                "goal middle omitted"
+            )
+        )
         assertTrue(context.contains("VERIFICATION REQUIRED BEFORE DONE"))
         assertTrue(context.contains("V".repeat(320)))
         assertTrue(context.contains("NO TOOL BUDGET"))
