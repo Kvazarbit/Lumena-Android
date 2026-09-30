@@ -177,6 +177,29 @@ class GoalContractPolicyTest {
     }
 
     @Test
+    fun readOnlyCodeReviewDoesNotInventMutationCriterion() {
+        val contract = GoalContractPolicy.initial(
+            intent = TaskIntent.CODE_WORK,
+            requiredTools = emptySet(),
+            visualRequired = false,
+            goal = "перевір код у файлі та поясни можливу проблему"
+        )
+
+        assertTrue(
+            contract.criteria.none {
+                it.kind ==
+                    CriterionKind.CODE_ACTION_EVIDENCE
+            }
+        )
+        assertTrue(
+            contract.criteria.any {
+                it.kind ==
+                    CriterionKind.OPERATIONAL_TOOL_EVIDENCE
+            }
+        )
+    }
+
+    @Test
     fun codeWorkNeedsMutationOrExecutableEvidence() {
         var contract = GoalContractPolicy.initial(
             intent = TaskIntent.CODE_WORK,
