@@ -159,7 +159,7 @@ object FractalExperienceCanvasPolicy {
                 val tasks = observations.map { it.sourceTaskHash }.toSet()
                 val peak = when {
                     byIntent.size > 1 -> FractalExperiencePeak.CONTESTED
-                    observations.isEmpty() -> FractalExperiencePeak.UNKNOWN
+                    tasks.size < 2 -> FractalExperiencePeak.UNKNOWN
                     else -> FractalExperiencePeak.BEST
                 }
                 val stage =
