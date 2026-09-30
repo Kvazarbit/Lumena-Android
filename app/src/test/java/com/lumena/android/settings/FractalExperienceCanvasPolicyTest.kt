@@ -358,4 +358,145 @@ class FractalExperienceCanvasPolicyTest {
         assertEquals(once.records.map { it.id }, twice.records.map { it.id })
         assertEquals(once.nodes.map { it.id }, twice.nodes.map { it.id })
     }
+
+    @Test
+    fun legacyBackfillIsIdempotentAndStaysShadowUntilCurrentEvidence() {
+        val legacy = listOf(
+            example(
+                id = "legacy-a",
+                kind = CoordinatorExampleKind.VERIFIED_SEQUENCE,
+                task = "old-task-a",
+                tools = listOf("file.patch", "python.tests"),
+                outcomes = listOf(true, true),
+                at = 1_000L
+            ),
+            example(
+                id = "legacy-b",
+                kind = CoordinatorExampleKind.VERIFIED_SEQUENCE,
+                task = "old-task-b",
+                tools = listOf("file.patch", "python.tests"),
+                outcomes = listOf(true, true),
+                at = 2_000L
+            )
+        )
+
+        val migrated = FractalExperienceCanvasPolicy.backfillLegacy(
+            FractalExperienceCanvasState(),
+            legacy
+        )
+
+        assertEquals(1, migrated.legacyBackfillVersion)
+        assertEquals(2, migrated.records.size)
+        assertTrue(
+            migrated.records.all {
+                it.origin == FractalExperienceOrigin.LEGACY_BACKFILL
+            }
+        )
+        val meta = migrated.nodes.single {
+            it.level == FractalExperienceLevel.META_RULE &&
+                it.key == "meta:MUTATE_THEN_VERIFY"
+        }
+        assertEquals(2, meta.distinctTasks)
+        assertEquals(FractalExperienceStage.SHADOW, meta.stage)
+
+        val repeated = FractalExperienceCanvasPolicy.backfillLegacy(
+            migrated,
+            legacy + example(
+                id = "should-not-run-twice",
+                kind = CoordinatorExampleKind.VERIFIED_SEQUENCE,
+                task = "old-task-c",
+                tools = listOf("file.patch", "python.tests"),
+                outcomes = listOf(true, true),
+                at = 3_000L
+            )
+        )
+        assertEquals(migrated, repeated)
+    }
+
+    @Test
+    fun currentVerifiedEvidenceCanRevalidateLegacyPattern() {
+        val legacy = FractalExperienceCanvasPolicy.backfillLegacy(
+            FractalExperienceCanvasState(),
+            listOf(
+                example(
+                    id = "legacy-a",
+                    kind = CoordinatorExampleKind.VERIFIED_SEQUENCE,
+                    task = "old-task-a",
+                    tools = listOf("file.patch", "python.tests"),
+                    outcomes = listOf(true, true),
+                    at = 1_000L
+                )
+            )
+        )
+
+        val revalidated = FractalExperienceCanvasPolicy.ingest(
+            legacy,
+            listOf(
+                example(
+                    id = "live-b",
+                    kind = CoordinatorExampleKind.VERIFIED_SEQUENCE,
+                    task = "current-task-b",
+                    tools = listOf("file.patch", "python.tests"),
+                    outcomes = listOf(true, true),
+                    at = 2_000L
+                )
+            )
+        )
+
+        val meta = revalidated.nodes.single {
+            it.level == FractalExperienceLevel.META_RULE &&
+                it.key == "meta:MUTATE_THEN_VERIFY"
+        }
+        assertEquals(FractalExperienceStage.TRANSFERRED_SHADOW, meta.stage)
+        assertTrue(
+            revalidated.records.any {
+                it.origin == FractalExperienceOrigin.LIVE
+            }
+        )
+        assertTrue(
+            revalidated.records.any {
+                it.origin == FractalExperienceOrigin.LEGACY_BACKFILL
+            }
+        )
+    }
+
+    @Test
+    fun backfillNeverDowngradesLiveRecordAndRejectsEvidenceFreeExample() {
+        val liveExample = example(
+            id = "same-id",
+            kind = CoordinatorExampleKind.VERIFIED_SEQUENCE,
+            task = "current-task",
+            tools = listOf("workspace.list", "file.read"),
+            outcomes = listOf(true, true),
+            at = 2_000L
+        )
+        val live = FractalExperienceCanvasPolicy.ingest(
+            FractalExperienceCanvasState(),
+            listOf(liveExample)
+        )
+
+        val migrated = FractalExperienceCanvasPolicy.backfillLegacy(
+            live,
+            listOf(
+                liveExample.copy(updatedAt = 1_000L),
+                example(
+                    id = "no-evidence",
+                    kind = CoordinatorExampleKind.VERIFIED_SEQUENCE,
+                    task = "old-task",
+                    tools = listOf("workspace.list", "file.read"),
+                    outcomes = listOf(true, true),
+                    at = 1_500L
+                ).copy(evidenceIds = emptyList())
+            )
+        )
+
+        assertEquals(1, migrated.legacyBackfillVersion)
+        assertEquals(1, migrated.records.size)
+        assertEquals(
+            FractalExperienceOrigin.LIVE,
+            migrated.records.single().origin
+        )
+        assertFalse(migrated.records.any { it.id == "no-evidence" })
+    }
+
 }
