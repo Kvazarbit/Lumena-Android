@@ -230,29 +230,29 @@ fun WorkflowChatScreen(
     }
     var workThreads by remember {
         mutableStateOf(
-            if (restored.workThreads.anchors.isNotEmpty()) {
-                WorkThreadMemory.normalize(
+            WorkThreadMemory.restore(
+                turns =
+                    restored.chat.map {
+                        it.role to it.text
+                    },
+                seedState =
                     restored.workThreads
-                )
-            } else {
-                val fromChat =
-                    WorkThreadMemory.restore(
-                        restored.chat.map {
-                            it.role to it.text
-                        }
-                    )
+            ).let { recovered ->
                 if (
-                    fromChat.anchors.isNotEmpty() ||
+                    recovered.anchors.isNotEmpty() ||
                     restored.codeGoal.isNullOrBlank()
                 ) {
-                    fromChat
+                    recovered
                 } else {
                     WorkThreadMemory.restore(
-                        listOf(
-                            "user" to
-                                restored.codeGoal
-                                    .orEmpty()
-                        )
+                        turns =
+                            listOf(
+                                "user" to
+                                    restored.codeGoal
+                                        .orEmpty()
+                            ),
+                        seedState =
+                            recovered
                     )
                 }
             }
