@@ -93,6 +93,44 @@ class AgentControllerTest {
     }
 
     @Test
+    fun explicitCauseProbeGoalRejectsUnannotatedProbeAfterFailure() {
+        var state = controller.initial(
+            TaskState(
+                id = "cause-required-probe",
+                projectId = null,
+                goal = "Після FAILED TOOL_RESULT виконай workspace.list як cause probe з cause_hypothesis і mappings.",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        state = controller.afterTool(
+            state = state,
+            call = AgentDecision.ToolCall(
+                tool = "file.read",
+                args = mapOf("path" to "missing.txt")
+            ),
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "No such file"
+        ).state
+
+        val instruction = controller.interpret(
+            """{"tool":"workspace.list","args":{},"reason":"probe current workspace"}""",
+            state
+        )
+
+        assertTrue(
+            instruction is ControllerInstruction.AskModelAgain
+        )
+        instruction as ControllerInstruction.AskModelAgain
+        assertTrue(
+            instruction.feedback.contains(
+                "CAUSE_PROBE_REQUIRED"
+            )
+        )
+    }
+
+    @Test
     fun halfSpecifiedCauseProbeIsRejectedBeforeExecution() {
         var state = controller.initial(
             TaskState(
