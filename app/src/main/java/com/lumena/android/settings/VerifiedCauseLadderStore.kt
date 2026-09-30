@@ -90,8 +90,7 @@ object VerifiedCauseLadderStore {
                 !file.baseFile.exists() &&
                 !File(file.baseFile.path + ".bak").exists()
             ) {
-                return@synchronized
-                    VerifiedCauseLadderState()
+                return@synchronized VerifiedCauseLadderState()
             }
 
             val json = try {
