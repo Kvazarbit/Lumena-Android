@@ -710,7 +710,7 @@ same-target verifier не створює independent evidence, target verificati
 
 ## Phase 3 — Verified Cause Ladder
 
-**Статус:** LADDER POLICY + BASE TELEMETRY IMPLEMENTED IN BRANCH → CI PENDING · live probe persistence/wiring pending.
+**Статус:** PERSISTENT LIVE CAUSE-PROBE WIRING IMPLEMENTED IN BRANCH → EXACT-HEAD CI / PHONE GATE PENDING.
 
 ### Мета
 
@@ -739,12 +739,28 @@ same-target verifier не створює independent evidence, target verificati
    `cause_unknown / cause_structured / cause_hypothesis / cause_probed / cause_verified / cause_contested / cause_rejected`
    та invariant `cause_model_prose_is_evidence=false`.
 
-### Що ще не підключено live
+### Live runtime wiring
 
-Pure ladder policy вже є, але app ще не має persistent runtime store для
-`CauseHypothesis/CauseProbeEvidence`. Тому live records зараз можуть реально
-показувати лише base stages `UNKNOWN` або `STRUCTURED`; higher stages не
-вигадуються і залишаються 0 до появи перевірених probe records.
+Додано bounded app-private `VerifiedCauseLadderStore`:
+
+- failure anchor зберігає тільки task hash, tool/target, structured failure metadata і evidence id;
+- model causal prose перед pending approval хешується; `CauseProbeExecutionIntent` переносить лише 24-hex claim hash + predeclared outcome mappings;
+- raw hypothesis prose не входить у Cause Ladder store;
+- після реального failed TOOL_RESULT створюється failure anchor;
+- наступний model tool може додати `cause_hypothesis` і обидва mappings:
+  `cause_probe_on_success` / `cause_probe_on_failure`;
+- допустимі verdicts: `SUPPORTS / REJECTS / INCONCLUSIVE`;
+- annotation без попереднього failed TOOL_RESULT блокується до execution;
+- half-specified або нефальсифікований probe блокується до execution;
+- ToolGate/confirmation не змінюються;
+- після tool result store прив'язує verdict до реального request/evidence id;
+- pending approval/session persistence переносить тільки hash, не raw hypothesis;
+- diagnostics зливають persistent runtime stages з base causal telemetry.
+
+Store bounded:
+`failures<=128`, `hypotheses<=128`, `probes<=256`.
+При eviction hypothesis її probes теж видаляються, щоб dangling evidence не
+могло пережити джерело.
 
 ### Tests
 
@@ -761,12 +777,14 @@ Pure ladder policy вже є, але app ще не має persistent runtime sto
 ### Наступний gate
 
 1. exact-head CI green;
-2. persistent bounded Cause Probe store;
-3. runtime wiring:
-   `failure → hypothesis → explicit probe tool → evidence id → assessment`;
-4. phone test SUPPORT path;
-5. phone test REJECT/CONTESTED path;
-6. no new execution authority.
+2. owner-signed in-place canary;
+3. baseline upgrade не backfill-ить synthetic hypotheses/probes;
+4. phone task створює real failure anchor;
+5. model hypothesis без probe evidence лишається `HYPOTHESIS`;
+6. один falsifiable supporting probe дає `PROBED`, не VERIFIED;
+7. другий independent supporting signature може дати `VERIFIED`;
+8. rejecting/conflicting probe дає `REJECTED/CONTESTED`;
+9. no new execution authority, model prose never evidence.
 
 ---
 
