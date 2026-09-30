@@ -487,15 +487,22 @@ class AgentControllerTest {
 
     @Test
     fun taskAllowsFinalModelTurnAtToolLimit() {
-        val atLimit = task().copy(
+        val atLimit = TaskState(
+            id = "final-turn-general",
+            projectId = null,
+            goal = "Summarize the already verified result",
             status = TaskStatus.WAITING_MODEL,
             step = 4,
             maxSteps = 4
         )
         assertTrue(atLimit.canContinue)
 
-        val state = controller.initial(atLimit).copy(toolUsed = true)
-        val done = controller.interpret("""{"done":true,"summary":"verified"}""", state)
+        val state =
+            controller.initial(atLimit)
+        val done = controller.interpret(
+            """{"done":true,"summary":"verified"}""",
+            state
+        )
         assertTrue(done is ControllerInstruction.Finish)
     }
 
