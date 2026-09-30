@@ -153,10 +153,12 @@ class WorkThreadMemoryTest {
     }
 
     @Test
-    fun bareContinueDoesNotJumpToOldNamedThread() {
+    fun bareContinueResumesCurrentlyActiveWorkThread() {
+        val root =
+            "Create HTML aquarium simulator"
         val started =
             WorkThreadMemory.resolve(
-                text = "Create HTML aquarium simulator",
+                text = root,
                 state = WorkThreadState()
             )
 
@@ -166,10 +168,46 @@ class WorkThreadMemoryTest {
                 state = started.state
             )
 
-        assertFalse(bare.continued)
-        assertEquals(
-            "продовж",
-            bare.goal
+        assertTrue(bare.continued)
+        assertTrue(
+            bare.goal.contains(root)
         )
+    }
+
+    @Test
+    fun unrelatedResearchClearsActiveWorkThreadButKeepsAnchor() {
+        val started =
+            WorkThreadMemory.resolve(
+                text = "Create HTML aquarium simulator",
+                state = WorkThreadState()
+            )
+        val research =
+            WorkThreadMemory.resolve(
+                text = "Знайди в інтернеті останні новини Python сьогодні",
+                state = started.state
+            )
+
+        assertEquals(
+            1,
+            research.state.anchors.size
+        )
+        assertEquals(
+            null,
+            research.state.activeKey
+        )
+
+        val bare =
+            WorkThreadMemory.resolve(
+                text = "продовж",
+                state = research.state
+            )
+        assertFalse(bare.continued)
+
+        val named =
+            WorkThreadMemory.resolve(
+                text = "продовж акваріум",
+                state = research.state
+            )
+        assertTrue(named.continued)
     }
 }
