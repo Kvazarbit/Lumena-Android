@@ -291,4 +291,79 @@ class FractalCausalExperiencePolicyTest {
         assertEquals(null, link.causeDependency)
     }
 
+
+    @Test
+    fun endToEndVerifiedToolFailureProjectsIntoCausalRecovery() {
+        val events = listOf(
+            CoordinatorEpisodeEvent(
+                id = "e2e-fail",
+                sessionId = "e2e-session",
+                taskId = "e2e-task",
+                tool = "python.run",
+                target = "script=missing.py",
+                ok = false,
+                experienceId = "ev-e2e-fail",
+                at = 100L,
+                surprise = 0.9,
+                scopeHash = "scope-a",
+                outcomeKnown = true,
+                failureClass = "INVALID_INPUT",
+                errorCode = "PYTHON_SCRIPT_REQUIRED",
+                retryable = true,
+                dependency = "tool-schema"
+            ),
+            CoordinatorEpisodeEvent(
+                id = "e2e-inspect",
+                sessionId = "e2e-session",
+                taskId = "e2e-task",
+                tool = "workspace.list",
+                target = "",
+                ok = true,
+                experienceId = "ev-e2e-inspect",
+                at = 200L,
+                surprise = 0.8,
+                scopeHash = "scope-a"
+            ),
+            CoordinatorEpisodeEvent(
+                id = "e2e-ok",
+                sessionId = "e2e-session",
+                taskId = "e2e-task",
+                tool = "python.run",
+                target = "script=missing.py",
+                ok = true,
+                experienceId = "ev-e2e-ok",
+                at = 300L,
+                surprise = 1.0,
+                scopeHash = "scope-a"
+            )
+        )
+        val coordinator = events.fold(CoordinatorEpisodeState()) { state, event ->
+            CoordinatorExperiencePolicy.record(state, event)
+        }
+        val verified =
+            CoordinatorExperiencePolicy.allVerifiedExamples(coordinator)
+        val canvas = FractalExperienceCanvasPolicy.ingest(
+            FractalExperienceCanvasState(),
+            verified
+        )
+        val link = FractalCausalExperiencePolicy
+            .links(canvas.records)
+            .first { it.resolution == FractalCausalResolution.RECOVERED }
+
+        assertEquals("python.run", link.failedTool)
+        assertEquals(
+            FractalCausalCauseKnowledge.STRUCTURED_TOOL_FAILURE,
+            link.causeKnowledge
+        )
+        assertEquals("INVALID_INPUT", link.causeFailureClass)
+        assertEquals("PYTHON_SCRIPT_REQUIRED", link.causeErrorCode)
+        assertEquals(
+            listOf("workspace.list", "python.run"),
+            link.recoveryTools
+        )
+        assertEquals(listOf(true, true), link.recoveryOutcomes)
+        assertTrue(link.evidenceIds.contains("ev-e2e-fail"))
+        assertTrue(link.evidenceIds.contains("ev-e2e-ok"))
+    }
+
 }
