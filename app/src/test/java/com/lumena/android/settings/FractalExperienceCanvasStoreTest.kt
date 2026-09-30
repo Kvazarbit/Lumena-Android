@@ -170,4 +170,26 @@ class FractalExperienceCanvasStoreTest {
         }
     }
 
+
+    @Test
+    fun ci1484CanvasWithoutBackfillFieldsDecodesWithSafeDefaults() {
+        val current = FractalExperienceCanvasPolicy.ingest(
+            FractalExperienceCanvasState(),
+            listOf(example(id = "ci1484-record"))
+        )
+        val legacyJson = FractalExperienceCanvasCodec
+            .encode(current)
+            .replace(",\"origin\":\"LIVE\"", "")
+            .replace(",\"legacyBackfillVersion\":0", "")
+
+        val decoded = FractalExperienceCanvasCodec.decode(legacyJson)
+
+        assertEquals(0, decoded.legacyBackfillVersion)
+        assertEquals(1, decoded.records.size)
+        assertEquals(
+            FractalExperienceOrigin.LIVE,
+            decoded.records.single().origin
+        )
+    }
+
 }
