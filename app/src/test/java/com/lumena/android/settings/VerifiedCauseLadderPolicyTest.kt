@@ -83,6 +83,53 @@ class VerifiedCauseLadderPolicyTest {
     }
 
     @Test
+    fun preHashedRuntimeClaimCanCreateHypothesisWithoutRawProse() {
+        val hash = "0123456789abcdef01234567"
+        val hypothesis =
+            VerifiedCauseLadderPolicy.proposeHashed(
+                anchorId = "cause-fail-1",
+                claimHash = hash,
+                modelId = "gemma",
+                structuredFailureClass =
+                    "STATE_DRIFT",
+                structuredErrorCode =
+                    "PATH_CHANGED",
+                structuredDependency =
+                    "filesystem"
+            )
+
+        assertNotNull(hypothesis)
+        hypothesis!!
+        assertEquals(hash, hypothesis.claimHash)
+        assertEquals(
+            "cause-fail-1",
+            hypothesis.causalLinkId
+        )
+        assertEquals(
+            "STATE_DRIFT",
+            hypothesis.structuredFailureClass
+        )
+        assertFalse(
+            hypothesis.toString()
+                .contains(
+                    "The target moved"
+                )
+        )
+    }
+
+    @Test
+    fun malformedRuntimeClaimHashCannotBecomeHypothesis() {
+        val hypothesis =
+            VerifiedCauseLadderPolicy.proposeHashed(
+                anchorId = "cause-fail-1",
+                claimHash = "not-a-hash",
+                modelId = "gemma"
+            )
+
+        assertEquals(null, hypothesis)
+    }
+
+    @Test
     fun oneSupportingProbeIsProbedButNotVerified() {
         val hypothesis = requireNotNull(
             VerifiedCauseLadderPolicy.propose(
