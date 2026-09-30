@@ -137,7 +137,14 @@ data class DiagnosticFractalExperienceView(
     val causalRecovered: Int = 0,
     val causalUnresolved: Int = 0,
     val causalLiveLinks: Int = 0,
-    val causalRevalidatedPatterns: Int = 0
+    val causalRevalidatedPatterns: Int = 0,
+    val causeUnknown: Int = 0,
+    val causeStructured: Int = 0,
+    val causeHypothesis: Int = 0,
+    val causeProbed: Int = 0,
+    val causeVerified: Int = 0,
+    val causeContested: Int = 0,
+    val causeRejected: Int = 0
 )
 
 data class LumenaDiagnosticInput(
@@ -631,6 +638,35 @@ object LumenaDiagnosticFormatter {
                     "causal_revalidated_patterns=" +
                         fractal.causalRevalidatedPatterns
                 )
+                appendLine(
+                    "cause_unknown=" +
+                        fractal.causeUnknown
+                )
+                appendLine(
+                    "cause_structured=" +
+                        fractal.causeStructured
+                )
+                appendLine(
+                    "cause_hypothesis=" +
+                        fractal.causeHypothesis
+                )
+                appendLine(
+                    "cause_probed=" +
+                        fractal.causeProbed
+                )
+                appendLine(
+                    "cause_verified=" +
+                        fractal.causeVerified
+                )
+                appendLine(
+                    "cause_contested=" +
+                        fractal.causeContested
+                )
+                appendLine(
+                    "cause_rejected=" +
+                        fractal.causeRejected
+                )
+                appendLine("cause_model_prose_is_evidence=false")
                 appendLine("immune_worst_peaks=" + fractal.worst)
                 appendLine(
                     "immune_contested_peaks=" +
@@ -954,7 +990,21 @@ object LumenaDiagnosticReport {
                 causalLiveLinks =
                     stats.causalLiveLinks,
                 causalRevalidatedPatterns =
-                    stats.causalRevalidatedPatterns
+                    stats.causalRevalidatedPatterns,
+                causeUnknown =
+                    stats.causeUnknown,
+                causeStructured =
+                    stats.causeStructured,
+                causeHypothesis =
+                    stats.causeHypothesis,
+                causeProbed =
+                    stats.causeProbed,
+                causeVerified =
+                    stats.causeVerified,
+                causeContested =
+                    stats.causeContested,
+                causeRejected =
+                    stats.causeRejected
             )
         }.getOrElse { failure ->
             DiagnosticFractalExperienceView(
