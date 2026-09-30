@@ -844,6 +844,61 @@ was globally combined into CODE_WORK, producing a spurious
 branch so generic test + execution-verb matching is clause-local; explicit
 software-test phrases remain CODE_WORK.
 
+### Phone findings after the first live PROBED success
+
+The next phone attempt deliberately asked for two independent supporting probes.
+The kernel did execute both read-only probes, but persistent Cause Ladder totals
+remained:
+
+```text
+cause_runtime_failures=2
+cause_runtime_hypotheses_total=1
+cause_runtime_probes_total=1
+cause_probed=1
+cause_verified=0
+```
+
+So the second task did **not** produce persisted cause-probe metadata even though
+the model's final prose claimed both probes supported the hypothesis. This is
+exactly the distinction Phase 3 is meant to enforce: model narration is not
+evidence.
+
+Branch fix: when the user goal explicitly requires a cause probe and a real
+failed TOOL_RESULT already exists, an unannotated next tool call is now rejected
+before execution with `CAUSE_PROBE_REQUIRED`. The model must supply
+`cause_hypothesis`, `cause_probe_on_success`, and
+`cause_probe_on_failure`; otherwise the app asks for protocol repair instead
+of silently running an ordinary tool.
+
+### Durable work-thread context regression
+
+The same session exposed a separate context architecture flaw while resuming the
+aquarium project. Visible chat can retain more history than the model request:
+LocalSession keeps bounded history while Ollama context compaction drops older
+messages to fit the request budget. In addition, the old `CodeTaskAnchor` is a
+single slot, and an unrelated task can replace it. A stale research thread can
+also interpret a generic "continue" as a research continuation.
+
+A generic bounded `WorkThreadMemory` is now implemented in branch:
+
+- up to 8 named code/project anchors are persisted separately from raw model
+  context;
+- each anchor keeps the original user root goal plus up to 4 recent user
+  directives;
+- matching is deterministic from explicit project ids and subject/file tokens;
+- returning to a named subject such as aquarium resumes that anchor even after
+  unrelated tasks;
+- a matching work thread bypasses stale research-thread continuation routing;
+- old sessions can reconstruct anchors from retained visible chat, with legacy
+  `codeGoal` as fallback;
+- only user-authored goal text is stored; approvals, permissions, tool receipts
+  and execution state are never inherited;
+- diagnostics expose `work_thread_anchors` and bounded
+  `work_thread_subjects`.
+
+This is intended to make "same session" operationally meaningful even when raw
+backend history has been compacted.
+
 ### Tests
 
 - semantic model explanation alone → лише `HYPOTHESIS`;
