@@ -1508,6 +1508,31 @@ class AgentControllerTest {
     }
 
     @Test
+    fun scientificTestQuestionAcceptsPlainConversationalReplyWithoutToolProtocol() {
+        val conversational = TaskState(
+            id = "science-tests",
+            projectId = null,
+            goal = "це перевірено тестами на 100%, і які є методи стимуляції?",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val state = controller.initial(conversational)
+
+        assertEquals(TaskIntent.GENERAL, state.intent)
+        assertFalse(state.toolUsed)
+        assertTrue(state.plan.isEmpty())
+
+        val instruction = controller.interpret(
+            "Ні, у біології майже ніколи не можна говорити про 100% підтвердження; методи залежать від того, що саме стимулюють.",
+            state
+        )
+
+        assertTrue(instruction is ControllerInstruction.Finish)
+        instruction as ControllerInstruction.Finish
+        assertEquals(TaskStatus.DONE, instruction.state.task.status)
+        assertEquals(0, instruction.state.protocolRetries)
+    }
+
+    @Test
     fun knownActionReplyEnvelopeFinishesWithoutProtocolRetry() {
         val conversational = TaskState(
             id = "normalized-reply",
