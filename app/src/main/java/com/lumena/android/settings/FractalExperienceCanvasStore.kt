@@ -16,7 +16,10 @@ data class FractalExperienceCanvasStats(
     val transferredShadow: Int,
     val languageCues: Int,
     val languageTransferred: Int,
-    val contributorModels: Int
+    val contributorModels: Int,
+    val legacyBackfillVersion: Int,
+    val legacyBackfillRecords: Int,
+    val liveRecords: Int
 )
 
 object FractalExperienceCanvasCodec {
@@ -176,6 +179,32 @@ object FractalExperienceCanvasStore {
             next
         }
 
+    fun backfillFromCoordinator(
+        context: Context
+    ): FractalLegacyBackfillResult =
+        synchronized(lock) {
+            val current = load(context)
+            if (current.legacyBackfillVersion >= 1) {
+                return@synchronized FractalLegacyBackfillResult(
+                    state = current,
+                    sourceExamples = 0,
+                    importedRecords = 0,
+                    alreadyApplied = true
+                )
+            }
+
+            val coordinator = CoordinatorExperienceStore.load(context)
+            val result = FractalLegacyBackfillPolicy.migrate(
+                canvas = current,
+                coordinator = coordinator
+            )
+            if (result.state != current) {
+                save(context, result.state)
+                StateVault.requestSave(context)
+            }
+            result
+        }
+
     fun observeLanguage(
         context: Context,
         phrase: String,
@@ -288,7 +317,14 @@ object FractalExperienceCanvasStore {
                     it.stage ==
                         FractalExperienceStage.TRANSFERRED_SHADOW
                 },
-                contributorModels = models.size
+                contributorModels = models.size,
+                legacyBackfillVersion = state.legacyBackfillVersion,
+                legacyBackfillRecords = state.records.count {
+                    it.origin == FractalExperienceOrigin.LEGACY_BACKFILL
+                },
+                liveRecords = state.records.count {
+                    it.origin == FractalExperienceOrigin.LIVE
+                }
             )
         }
 
