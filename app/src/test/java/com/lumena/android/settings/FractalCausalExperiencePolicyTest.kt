@@ -264,6 +264,15 @@ class FractalCausalExperiencePolicyTest {
         assertTrue(prompt.contains("retryable=true"))
         assertTrue(prompt.contains("dependency=tool-schema"))
         assertFalse(prompt.contains("stderr", ignoreCase = true))
+
+        val retrieved = FractalCausalExperiencePolicy.relevant(
+            records = listOf(source),
+            query = "PYTHON_SCRIPT_REQUIRED",
+            scopeHash = "scope-a",
+            limit = 4
+        )
+        assertEquals(1, retrieved.size)
+        assertEquals(link.id, retrieved.single().id)
     }
 
     @Test
