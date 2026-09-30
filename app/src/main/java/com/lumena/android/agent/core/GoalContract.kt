@@ -64,7 +64,8 @@ object GoalContractPolicy {
     fun initial(
         intent: TaskIntent,
         requiredTools: Set<String>,
-        visualRequired: Boolean
+        visualRequired: Boolean,
+        goal: String = ""
     ): GoalContract {
         val criteria = mutableListOf<AcceptanceCriterion>()
 
@@ -104,7 +105,13 @@ object GoalContractPolicy {
             )
         }
 
-        if (intent == TaskIntent.FILE_INSPECTION) {
+        if (
+            intent == TaskIntent.FILE_INSPECTION &&
+            (
+                goal.isBlank() ||
+                    requiresFileContent(goal)
+                )
+        ) {
             criteria += AcceptanceCriterion(
                 id = "file-content-evidence",
                 kind = CriterionKind.FILE_CONTENT_EVIDENCE,
@@ -398,6 +405,25 @@ object GoalContractPolicy {
                 }
                 .takeLast(MAX_EVIDENCE_PER_CRITERION)
         )
+
+    private fun requiresFileContent(
+        goal: String
+    ): Boolean {
+        val lower = goal.lowercase()
+        return listOf(
+            "прочит",
+            "прочитай",
+            "read ",
+            "readme",
+            "відкрий файл",
+            "open file",
+            "покажи вміст",
+            "show content",
+            "содержим",
+            "zawartość",
+            "przeczytaj"
+        ).any { lower.contains(it) }
+    }
 
     private fun requiresToolEvidence(
         intent: TaskIntent
