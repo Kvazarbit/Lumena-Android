@@ -119,18 +119,20 @@ object GoalContractPolicy {
             )
         }
 
-        if (
-            intent == TaskIntent.CODE_WORK &&
-            (
-                goal.isBlank() ||
-                    requiresCodeAction(goal)
+        if (intent == TaskIntent.CODE_WORK) {
+            val requirement =
+                if (goal.isBlank()) {
+                    "mutating-or-executable"
+                } else {
+                    codeActionRequirement(goal)
+                }
+            if (requirement != null) {
+                criteria += AcceptanceCriterion(
+                    id = "code-action-evidence",
+                    kind = CriterionKind.CODE_ACTION_EVIDENCE,
+                    subject = requirement
                 )
-        ) {
-            criteria += AcceptanceCriterion(
-                id = "code-action-evidence",
-                kind = CriterionKind.CODE_ACTION_EVIDENCE,
-                subject = "mutating-or-executable"
-            )
+            }
         }
 
         return GoalContract(
@@ -242,13 +244,23 @@ object GoalContractPolicy {
                     }
 
                 CriterionKind.CODE_ACTION_EVIDENCE -> {
-                    val risk = ToolRegistry.get(canonical)?.risk
+                    val risk =
+                        ToolRegistry.get(canonical)?.risk
+                    val expectedRiskSatisfied =
+                        when (criterion.subject) {
+                            "mutating" ->
+                                risk == ToolRisk.MUTATING
+                            "executable" ->
+                                risk == ToolRisk.EXECUTABLE
+                            else ->
+                                risk in setOf(
+                                    ToolRisk.MUTATING,
+                                    ToolRisk.EXECUTABLE
+                                )
+                        }
                     if (
                         ok &&
-                        risk in setOf(
-                            ToolRisk.MUTATING,
-                            ToolRisk.EXECUTABLE
-                        ) &&
+                        expectedRiskSatisfied &&
                         toolEvidence != null
                     ) {
                         pass(criterion, toolEvidence)
@@ -412,11 +424,12 @@ object GoalContractPolicy {
                 .takeLast(MAX_EVIDENCE_PER_CRITERION)
         )
 
-    private fun requiresCodeAction(
+    private fun codeActionRequirement(
         goal: String
-    ): Boolean {
+    ): String? {
         val lower = goal.lowercase()
-        return listOf(
+
+        val mutationTerms = listOf(
             "створ",
             "create",
             "write",
@@ -428,6 +441,14 @@ object GoalContractPolicy {
             "редаг",
             "edit",
             "patch",
+            "додай",
+            "add "
+        )
+        if (mutationTerms.any { lower.contains(it) }) {
+            return "mutating"
+        }
+
+        val executionTerms = listOf(
             "запуст",
             "run ",
             "build",
@@ -437,7 +458,12 @@ object GoalContractPolicy {
             "pytest",
             "python.tests",
             "тест"
-        ).any { lower.contains(it) }
+        )
+        if (executionTerms.any { lower.contains(it) }) {
+            return "executable"
+        }
+
+        return null
     }
 
     private fun requiresFileContent(
