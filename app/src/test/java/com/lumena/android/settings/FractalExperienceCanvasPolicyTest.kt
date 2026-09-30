@@ -14,13 +14,14 @@ class FractalExperienceCanvasPolicyTest {
         outcomes: List<Boolean>,
         scope: String = "scope-a",
         model: String = "model-a",
-        at: Long = 1_000L
+        at: Long = 1_000L,
+        targets: List<String>? = null
     ) = CoordinatorExecutionExample(
         id = id,
         kind = kind,
         sourceSessionHash = task,
         tools = tools,
-        targets = tools.mapIndexed { index, tool -> "target=$tool-$index" },
+        targets = targets ?: tools.mapIndexed { index, tool -> "target=$tool-$index" },
         evidenceIds = listOf("evidence-$id"),
         updatedAt = at,
         surprise = 0.8,
@@ -233,6 +234,63 @@ class FractalExperienceCanvasPolicyTest {
             2_000L
         )
         assertTrue(state.languageObservations.isEmpty())
+    }
+
+    @Test
+    fun socialRetrievalCombinesVerifiedModelsForSameScopedTarget() {
+        val state = FractalExperienceCanvasPolicy.ingest(
+            FractalExperienceCanvasState(),
+            listOf(
+                example(
+                    id = "social-a",
+                    kind = CoordinatorExampleKind.VERIFIED_SEQUENCE,
+                    task = "task-a",
+                    tools = listOf("file.patch", "python.tests"),
+                    outcomes = listOf(true, true),
+                    model = "ollama:gemma",
+                    targets = listOf(
+                        "path=aquarium.html",
+                        "cwd=aquarium"
+                    ),
+                    at = 1_000L
+                ),
+                example(
+                    id = "social-b",
+                    kind = CoordinatorExampleKind.VERIFIED_SEQUENCE,
+                    task = "task-b",
+                    tools = listOf("file.patch", "python.tests"),
+                    outcomes = listOf(true, true),
+                    model = "ollama:glm",
+                    targets = listOf(
+                        "path=aquarium.html",
+                        "cwd=aquarium"
+                    ),
+                    at = 2_000L
+                )
+            )
+        )
+
+        val relevant = FractalExperienceCanvasPolicy.relevant(
+            state = state,
+            query = "update aquarium.html",
+            scopeHash = "scope-a",
+            limit = 8
+        )
+        assertTrue(relevant.isNotEmpty())
+        val social = relevant.first {
+            it.contributorModelIds.toSet() ==
+                setOf("ollama:gemma", "ollama:glm")
+        }
+        assertEquals(FractalExperiencePeak.BEST, social.peak)
+        assertEquals(
+            FractalExperienceStage.TRANSFERRED_SHADOW,
+            social.stage
+        )
+        val prompt =
+            FractalExperienceCanvasPolicy.formatForPrompt(social)
+        assertTrue(prompt.contains("models=2"))
+        assertTrue(prompt.contains("aquarium.html"))
+        assertTrue(prompt.contains("advisory only"))
     }
 
     @Test
