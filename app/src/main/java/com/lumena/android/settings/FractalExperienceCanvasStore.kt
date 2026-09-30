@@ -37,6 +37,9 @@ object FractalExperienceCanvasCodec {
         require(parsed.version == 1) {
             "Unsupported fractal experience canvas version: ${parsed.version}"
         }
+        require(parsed.legacyBackfillVersion in 0..1) {
+            "Unsupported fractal legacy backfill version: ${parsed.legacyBackfillVersion}"
+        }
         require(parsed.records.size <= FractalExperienceCanvasPolicy.MAX_RECORDS)
         require(parsed.nodes.size <= FractalExperienceCanvasPolicy.MAX_NODES)
         require(
@@ -148,6 +151,23 @@ object FractalExperienceCanvasStore {
             val next = FractalExperienceCanvasPolicy.ingest(
                 current,
                 examples
+            )
+            if (next != current) {
+                save(context, next)
+                StateVault.requestSave(context)
+            }
+            next
+        }
+
+    fun backfillLegacy(
+        context: Context,
+        examples: List<CoordinatorExecutionExample>
+    ): FractalExperienceCanvasState =
+        synchronized(lock) {
+            val current = load(context)
+            val next = FractalExperienceCanvasPolicy.backfillLegacy(
+                state = current,
+                examples = examples
             )
             if (next != current) {
                 save(context, next)
