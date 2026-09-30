@@ -389,12 +389,23 @@ class AgentControllerTest {
 
     @Test
     fun successfulPythonVerificationClearsRequirement() {
-        var state = controller.initial(task()).copy(
-            toolUsed = true,
-            verificationRequired = true,
-            pendingPythonPaths = setOf("demo.py"),
-            verificationReason = "verify python"
-        )
+        var state = controller.initial(task())
+        state = controller.afterTool(
+            state = state,
+            call = AgentDecision.ToolCall(
+                tool = "file.write",
+                args = mapOf(
+                    "path" to "demo.py",
+                    "content" to "print('ok')"
+                )
+            ),
+            ok = true,
+            stdout = "wrote=demo.py",
+            stderr = "",
+            error = null
+        ).state
+        assertTrue(state.verificationRequired)
+
         val call = AgentDecision.ToolCall(
             tool = "python.syntax_check",
             args = mapOf("script" to "demo.py")
@@ -403,13 +414,21 @@ class AgentControllerTest {
             state,
             call,
             ok = true,
-            stdout = "",
+            stdout = "Syntax OK",
             stderr = "",
             error = null
         ).state
         assertFalse(state.verificationRequired)
+        assertTrue(
+            GoalContractPolicy.allMandatoryPassed(
+                state.task.goalContract
+            )
+        )
 
-        val done = controller.interpret("""{"done":true,"summary":"verified"}""", state)
+        val done = controller.interpret(
+            """{"done":true,"summary":"verified"}""",
+            state
+        )
         assertTrue(done is ControllerInstruction.Finish)
     }
 
