@@ -754,7 +754,7 @@ same-target verifier не створює independent evidence, target verificati
 - half-specified або нефальсифікований probe блокується до execution;
 - ToolGate/confirmation не змінюються;
 - після tool result store прив'язує verdict до реального request/evidence id;
-- pending approval/session persistence переносить тільки hash, не raw hypothesis;
+- cause-probe metadata для pending approval/session переносить тільки hash; звичайний bounded chat history лишається окремим контекстом і ніколи не рахується cause evidence;
 - diagnostics зливають persistent runtime stages з base causal telemetry;
 - окремо видно `cause_runtime_failures`, `cause_runtime_hypotheses_total` і `cause_runtime_probes_total`, щоб failure anchor/probe не губився за stage counters.
 
