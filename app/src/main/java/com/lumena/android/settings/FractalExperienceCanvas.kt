@@ -27,6 +27,7 @@ data class FractalExampleRecord(
     val kind: CoordinatorExampleKind,
     val sourceTaskHash: String,
     val tools: List<String>,
+    val targets: List<String>,
     val outcomes: List<Boolean>,
     val evidenceIds: List<String>,
     val contributorModelIds: List<String>,
@@ -301,8 +302,9 @@ object FractalExperienceCanvasPolicy {
                         }
             },
             childIdOf = { record -> episodeId(record.id) },
-            summaryOf = { key, _ ->
-                "Observed exact execution shape ${key.removePrefix("pattern:")}."
+            summaryOf = { key, grouped ->
+                "Observed exact execution shape ${key.removePrefix("pattern:")}." +
+                    topicHints(grouped)
             }
         )
         val patternByRecord = records.associate { record ->
@@ -319,8 +321,9 @@ object FractalExperienceCanvasPolicy {
                         }
             },
             childIdOf = { record -> patternByRecord.getValue(record.id) },
-            summaryOf = { key, _ ->
-                "Coarse action strategy ${key.removePrefix("strategy:")}."
+            summaryOf = { key, grouped ->
+                "Coarse action strategy ${key.removePrefix("strategy:")}." +
+                    topicHints(grouped)
             }
         )
         val strategyByRecord = records.associate { record ->
@@ -331,7 +334,10 @@ object FractalExperienceCanvasPolicy {
             level = FractalExperienceLevel.META_RULE,
             keyOf = { record -> "meta:" + metaRuleKey(record) },
             childIdOf = { record -> strategyByRecord.getValue(record.id) },
-            summaryOf = { key, _ -> metaRuleSummary(key.removePrefix("meta:")) }
+            summaryOf = { key, grouped ->
+                metaRuleSummary(key.removePrefix("meta:")) +
+                    topicHints(grouped)
+            }
         )
 
         return (episodeNodes + patternNodes + strategyNodes + metaNodes)
@@ -453,6 +459,10 @@ object FractalExperienceCanvasPolicy {
             kind = example.kind,
             sourceTaskHash = example.sourceSessionHash.take(64),
             tools = tools.take(16),
+            targets = example.targets
+                .map { sanitizeTarget(it) }
+                .filter(String::isNotBlank)
+                .take(16),
             outcomes = example.outcomes.take(16),
             evidenceIds = example.evidenceIds
                 .filter(String::isNotBlank)
@@ -603,6 +613,28 @@ object FractalExperienceCanvasPolicy {
         else ->
             "Prefer short chains of verified steps over unsupported completion claims."
     }
+
+    private fun topicHints(
+        records: List<FractalExampleRecord>
+    ): String {
+        val hints = records
+            .flatMap { it.targets }
+            .filter(String::isNotBlank)
+            .distinct()
+            .take(4)
+        return if (hints.isEmpty()) {
+            ""
+        } else {
+            " targets=" + hints.joinToString(",")
+        }
+    }
+
+    private fun sanitizeTarget(value: String): String =
+        value
+            .replace(Regex("[\\r\\n\\t]+"), " ")
+            .replace(Regex("\\s{2,}"), " ")
+            .trim()
+            .take(240)
 
     private fun normalizeCue(raw: String): String? {
         val trimmed = raw
