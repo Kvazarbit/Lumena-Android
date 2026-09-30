@@ -1296,10 +1296,19 @@ class AgentControllerTest {
             goal = "знайди фото жінки в інтернеті і покажи",
             status = TaskStatus.WAITING_MODEL
         )
-        val state = controller.initial(visualTask).copy(
-            toolUsed = true,
-            visualEvidenceReady = true
-        )
+        val state = controller.afterTool(
+            state = controller.initial(visualTask),
+            call = AgentDecision.ToolCall(
+                tool = "image.search",
+                args = mapOf(
+                    "query" to "woman portrait"
+                )
+            ),
+            ok = true,
+            stdout = """{"display_ready":true,"images":[{"thumbnail_url":"https://upload.wikimedia.org/example.jpg"}]}""",
+            stderr = "",
+            error = null
+        ).state
 
         val instruction = controller.interpret(
             """{"reply":"Ось знайдені фото."}""",
