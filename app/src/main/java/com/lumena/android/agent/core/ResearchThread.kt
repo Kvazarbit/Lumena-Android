@@ -99,13 +99,24 @@ object ResearchThreadResolver {
         val explicitResearchGoal = isExplicitResearchGoal(trimmed)
         val relationalFollowUp =
             classified.first != ResearchFollowUpKind.NONE &&
-                (
-                    !explicitResearchGoal ||
+                when {
+                    // APPLY is too broad to win merely because an old research
+                    // thread exists. It must explicitly point at that thread
+                    // ("use this", "apply it", "застосуй це", ...). This keeps
+                    // stale research context from hijacking an implementation
+                    // continuation such as a bare "реалізуй".
+                    classified.first == ResearchFollowUpKind.APPLY ->
                         clearlyReferencesActiveThread(
                             text = trimmed,
                             kind = classified.first
                         )
-                    )
+                    !explicitResearchGoal -> true
+                    else ->
+                        clearlyReferencesActiveThread(
+                            text = trimmed,
+                            kind = classified.first
+                        )
+                }
 
         if (thread != null && relationalFollowUp) {
             val kind = classified.first
