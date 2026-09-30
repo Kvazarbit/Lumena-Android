@@ -752,22 +752,6 @@ class AgentController(
         ContextKernel.completionBlocker(state.task.kernel)?.let {
             return protocolRetry(state, it)
         }
-        val incompleteGoalCriteria =
-            GoalContractPolicy.incompleteMandatory(
-                state.task.goalContract
-            )
-        if (incompleteGoalCriteria.isNotEmpty()) {
-            return protocolRetry(
-                state,
-                "Goal contract has unverified mandatory criteria: " +
-                    incompleteGoalCriteria
-                        .take(8)
-                        .joinToString { it.id } +
-                    ". Use independent TOOL_RESULT evidence where required, " +
-                    "or return partial. Passing typed criteria still does not " +
-                    "prove arbitrary semantic/business properties."
-            )
-        }
         val missingRequired =
             state.requiredTools - state.completedRequiredTools
         if (missingRequired.isNotEmpty()) {
@@ -796,6 +780,23 @@ class AgentController(
             return protocolRetry(
                 state,
                 "Task cannot be marked done yet. ${state.verificationReason ?: "Verification is required."}"
+            )
+        }
+
+        val incompleteGoalCriteria =
+            GoalContractPolicy.incompleteMandatory(
+                state.task.goalContract
+            )
+        if (incompleteGoalCriteria.isNotEmpty()) {
+            return protocolRetry(
+                state,
+                "Goal contract has unverified mandatory criteria: " +
+                    incompleteGoalCriteria
+                        .take(8)
+                        .joinToString { it.id } +
+                    ". Use independent TOOL_RESULT evidence where required, " +
+                    "or return partial. Passing typed criteria still does not " +
+                    "prove arbitrary semantic/business properties."
             )
         }
 
