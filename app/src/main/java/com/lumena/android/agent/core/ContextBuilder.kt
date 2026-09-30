@@ -267,6 +267,29 @@ class ContextBuilder(
             appendLine("VERIFICATION REQUIRED BEFORE DONE")
             appendLine(sanitize(verificationRequirement).take(320))
         }
+        if (task.goalContract.criteria.isNotEmpty()) {
+            appendLine()
+            appendLine("GOAL CONTRACT (typed operational coverage; not full semantic proof)")
+            appendLine(
+                GoalContractPolicy.summary(
+                    task.goalContract
+                ).take(700)
+            )
+            val pending =
+                GoalContractPolicy.incompleteMandatory(
+                    task.goalContract
+                )
+            if (pending.isNotEmpty()) {
+                appendLine("mandatory_pending:")
+                pending.take(8).forEach {
+                    appendLine(
+                        "- " +
+                            sanitize(it.id)
+                                .take(220)
+                    )
+                }
+            }
+        }
     }
 
     private fun sanitize(value: String): String = value
