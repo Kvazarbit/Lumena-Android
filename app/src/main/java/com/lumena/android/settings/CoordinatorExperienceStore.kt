@@ -165,6 +165,25 @@ object CoordinatorExperiencePolicy {
             .map { it.first }
     }
 
+    fun allVerifiedExamples(
+        state: CoordinatorEpisodeState,
+        limit: Int = MAX_LEARNED_EXAMPLES
+    ): List<CoordinatorExecutionExample> =
+        (state.learnedExamples + deriveExamples(state.events))
+            .distinctBy { it.id }
+            .filter { example ->
+                example.id.isNotBlank() &&
+                    example.tools.isNotEmpty() &&
+                    example.tools.size == example.outcomes.size &&
+                    example.evidenceIds.any(String::isNotBlank) &&
+                    example.tools.all { ToolRegistry.get(it) != null }
+            }
+            .sortedWith(
+                compareBy<CoordinatorExecutionExample> { it.updatedAt }
+                    .thenBy { it.id }
+            )
+            .takeLast(limit.coerceIn(1, MAX_LEARNED_EXAMPLES))
+
     fun scoped(state: CoordinatorEpisodeState, scopeHash: String, modelId: String?): CoordinatorEpisodeState {
         // Retain all events of the scope as barriers; never splice across a
         // different model by deleting its intermediate events.
@@ -423,6 +442,16 @@ object CoordinatorExperienceStore {
             loaded, CoordinatorExperiencePolicy.hash(scopeId), modelId?.let(::stableId)
         )
         CoordinatorExperiencePolicy.examples(scoped, query, limit)
+    }
+
+    fun verifiedExamplesForBackfill(
+        context: Context,
+        limit: Int = CoordinatorExperiencePolicy.MAX_LEARNED_EXAMPLES
+    ): List<CoordinatorExecutionExample> = synchronized(lock) {
+        CoordinatorExperiencePolicy.allVerifiedExamples(
+            state = load(context),
+            limit = limit
+        )
     }
 
     fun examplesForTask(
