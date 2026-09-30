@@ -192,7 +192,9 @@ data class LumenaDiagnosticInput(
     val predictionDelta: DiagnosticPredictionDeltaView =
         DiagnosticPredictionDeltaView(),
     val fractalExperience: DiagnosticFractalExperienceView =
-        DiagnosticFractalExperienceView()
+        DiagnosticFractalExperienceView(),
+    val workThreadAnchors: Int = 0,
+    val workThreadSubjects: List<String> = emptyList()
 )
 
 object LumenaDiagnosticFormatter {
@@ -232,6 +234,18 @@ object LumenaDiagnosticFormatter {
             appendLine("history_messages=${input.historyMessages}")
             appendLine("pending_approval=${input.pendingApproval}")
             appendLine("research_thread_present=${input.researchThreadPresent}")
+            appendLine(
+                "work_thread_anchors=" +
+                    input.workThreadAnchors
+            )
+            appendLine(
+                "work_thread_subjects=" +
+                    input.workThreadSubjects
+                        .take(12)
+                        .joinToString(",") {
+                            clean(it, 80)
+                        }
+            )
             appendLine(
                 "partial_outcome_capsule_present=" +
                     input.partialOutcomeCapsulePresent
@@ -935,7 +949,16 @@ object LumenaDiagnosticReport {
                 CognitiveRegressionSuite.replay(CognitiveRegressionSuite.corpus(state.learnedExamples))
             }.getOrNull(),
             predictionDelta = predictionDelta,
-            fractalExperience = fractalExperience
+            fractalExperience = fractalExperience,
+            workThreadAnchors =
+                session.workThreads.anchors.size,
+            workThreadSubjects =
+                session.workThreads.anchors
+                    .takeLast(4)
+                    .flatMap {
+                        it.subjectKeys.take(3)
+                    }
+                    .distinct()
         )
 
         return LumenaDiagnosticFormatter.render(
