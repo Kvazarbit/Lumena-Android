@@ -83,7 +83,8 @@ class AgentController(
                 intent = profile.intent,
                 requiredTools = requiredTools,
                 visualRequired =
-                    VisualGoalRouter.route(task.goal) != null
+                    VisualGoalRouter.route(task.goal) != null,
+                goal = task.goal
             )
         val reserve = if (profile.preflight != null) 1 else 0
         val initialToolBudget = maxOf(
