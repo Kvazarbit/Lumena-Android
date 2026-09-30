@@ -1,6 +1,8 @@
 package com.lumena.android.settings
 
 import com.lumena.android.agent.local.ToolResult
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -162,6 +164,113 @@ class ExperienceOutcomeDeltaPolicyTest {
                 "x"
             )
         )
+    }
+
+    @Test
+    fun wrongObservedTargetNeverCountsAsMatch() {
+        val expected = requireNotNull(
+            ExperienceOutcomeDeltaPolicy.expected(
+                "file.read",
+                "path=expected.txt"
+            )
+        )
+        val observed = ObservedOutcome(
+            tool = "file.read",
+            target = "path=other.txt",
+            status = ObservedOutcomeStatus.SUCCESS
+        )
+
+        val delta = ExperienceOutcomeDeltaPolicy.compare(
+            expected,
+            observed
+        )
+
+        assertEquals(
+            OutcomeDeltaKind.WRONG_TARGET_STATE,
+            delta.kind
+        )
+    }
+
+    @Test
+    fun modelProposalCannotSelfConfirmWithoutObservedToolResult() {
+        val proposal = ExpectedOutcome(
+            source = ExpectationSource.MODEL_PROPOSAL,
+            tool = "file.read",
+            target = "path=README.md",
+            expectedEffectClass = "READ_ONLY_OBSERVATION",
+            expectedPostcondition = "KNOWN_SUCCESSFUL_TOOL_OUTCOME",
+            confidence = 0.9
+        )
+
+        // A proposal by itself has no observed outcome and therefore cannot
+        // create a delta or evidence record.
+        val state = CoordinatorEpisodeState()
+        val stats = ExperienceOutcomeDeltaPolicy.stats(state)
+
+        assertEquals(ExpectationSource.MODEL_PROPOSAL, proposal.source)
+        assertEquals(0, stats.expectations)
+        assertEquals(0, stats.deltas)
+    }
+
+    @Test
+    fun outcomeLedgerSurvivesJsonRoundTripAndOmitsRawToolProse() {
+        val expected = requireNotNull(
+            ExperienceOutcomeDeltaPolicy.expected(
+                "python.run",
+                "script=demo.py"
+            )
+        )
+        val observed = ExperienceOutcomeDeltaPolicy.observed(
+            tool = "python.run",
+            target = "script=demo.py",
+            result = ToolResult(
+                ok = false,
+                error = "SECRET RAW ERROR PROSE",
+                stderr = "SECRET RAW STDERR",
+                errorCode = "PYTHON_SCRIPT_REQUIRED",
+                failureClass = "INVALID_INPUT",
+                retryable = true,
+                dependency = "tool-schema"
+            ),
+            verifiedOk = false
+        )
+        val event = CoordinatorEpisodeEvent(
+            id = "ledger-event",
+            sessionId = "s",
+            taskId = "t",
+            tool = "python.run",
+            target = "script=demo.py",
+            ok = false,
+            experienceId = "e",
+            at = 1L,
+            surprise = 0.8,
+            expectedOutcome = expected,
+            observedOutcome = observed,
+            outcomeDelta = ExperienceOutcomeDeltaPolicy.compare(
+                expected,
+                observed
+            )
+        )
+        val adapter = Moshi.Builder()
+            .add(KotlinJsonAdapterFactory())
+            .build()
+            .adapter(CoordinatorEpisodeState::class.java)
+        val encoded = adapter.toJson(
+            CoordinatorEpisodeState(events = listOf(event))
+        )
+        val decoded = requireNotNull(adapter.fromJson(encoded))
+            .events.single()
+
+        assertEquals(
+            OutcomeDeltaKind.SCHEMA_MISMATCH,
+            decoded.outcomeDelta?.kind
+        )
+        assertEquals(
+            VerificationStatus.TOOL_RESULT_ONLY,
+            decoded.observedOutcome?.verificationStatus
+        )
+        assertTrue(!encoded.contains("SECRET RAW ERROR PROSE"))
+        assertTrue(!encoded.contains("SECRET RAW STDERR"))
     }
 
     @Test
