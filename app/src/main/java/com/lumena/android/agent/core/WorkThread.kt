@@ -9,7 +9,8 @@ data class WorkThreadAnchor(
 
 data class WorkThreadState(
     val version: Int = 1,
-    val anchors: List<WorkThreadAnchor> = emptyList()
+    val anchors: List<WorkThreadAnchor> = emptyList(),
+    val activeKey: String? = null
 )
 
 data class WorkThreadResolution(
@@ -37,16 +38,28 @@ object WorkThreadMemory {
 
     fun normalize(
         state: WorkThreadState
-    ): WorkThreadState =
-        WorkThreadState(
-            version = 1,
-            anchors = state.anchors
+    ): WorkThreadState {
+        val anchors =
+            state.anchors
                 .mapNotNull(::normalizeAnchor)
                 .distinctBy {
                     keyOf(it)
                 }
                 .takeLast(MAX_ANCHORS)
+        val validKeys =
+            anchors
+                .map(::keyOf)
+                .toSet()
+        return WorkThreadState(
+            version = 1,
+            anchors = anchors,
+            activeKey =
+                state.activeKey
+                    ?.takeIf {
+                        it in validKeys
+                    }
         )
+    }
 
     fun restore(
         turns: List<Pair<String, String>>
@@ -86,12 +99,32 @@ object WorkThreadMemory {
         val continuation =
             isContinuationCue(clean)
 
-        val matched = bestMatch(
+        val explicitMatch = bestMatch(
             anchors = normalized.anchors,
             keys = keys,
             explicitProject = explicitProject,
             allowLatest = false
         )
+        val activeMatch =
+            if (
+                explicitMatch == null &&
+                continuation &&
+                keys.isEmpty()
+            ) {
+                normalized.activeKey
+                    ?.let { active ->
+                        normalized.anchors
+                            .firstOrNull {
+                                keyOf(it) ==
+                                    active
+                            }
+                    }
+            } else {
+                null
+            }
+        val matched =
+            explicitMatch
+                ?: activeMatch
 
         val shouldContinue =
             matched != null &&
@@ -151,7 +184,9 @@ object WorkThreadMemory {
                         nextAnchors
                             .takeLast(
                                 MAX_ANCHORS
-                            )
+                            ),
+                    activeKey =
+                        keyOf(updated)
                 ),
                 continued = true,
                 projectId =
@@ -196,16 +231,33 @@ object WorkThreadMemory {
                 goal = clean,
                 state =
                     WorkThreadState(
-                        anchors = next
+                        anchors = next,
+                        activeKey =
+                            keyOf(anchor)
                     ),
                 projectId =
                     anchor.projectId
             )
         }
 
+        val nextState =
+            if (
+                intent in setOf(
+                    TaskIntent.PUBLIC_WEB,
+                    TaskIntent.OLLAMA_OPERATION,
+                    TaskIntent.VISUAL_SEARCH
+                )
+            ) {
+                normalized.copy(
+                    activeKey = null
+                )
+            } else {
+                normalized
+            }
+
         return WorkThreadResolution(
             goal = clean,
-            state = normalized
+            state = nextState
         )
     }
 
