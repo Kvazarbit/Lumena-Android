@@ -16,6 +16,7 @@ import com.lumena.android.agent.core.ToolRisk
 import com.lumena.android.agent.core.TaskIntentRouter
 import com.lumena.android.agent.local.PlannedTool
 import com.lumena.android.agent.local.PlannerDecision
+import com.lumena.android.agent.local.CauseProbeExecutionIntent
 import com.lumena.android.agent.local.ToolExecutor
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
@@ -77,6 +78,13 @@ class WorkflowRunner(
         TaskState
     ) -> ReflexRuntimeAdvice? = { _, _, _ -> null },
     private val onToolExperience: (TaskState, ToolRequest, ToolResult, Long) -> Unit = { _, _, _, _ -> },
+    private val onCauseProbeExperience: (
+        TaskState,
+        ToolRequest,
+        ToolResult,
+        CauseProbeExecutionIntent?,
+        Long
+    ) -> Unit = { _, _, _, _, _ -> },
     private val checkpoint: suspend (AgentControlState) -> Unit = {}
 ) {
     suspend fun run(
@@ -410,6 +418,21 @@ class WorkflowRunner(
                                 "Agent requested ${instruction.call.tool}"
                             }
                         )
+                    ).copy(
+                        causeProbeIntent =
+                            instruction.call.causeHypothesis
+                                ?.takeIf(String::isNotBlank)
+                                ?.let { hypothesis ->
+                                    CauseProbeExecutionIntent(
+                                        hypothesisHash =
+                                            ContextKernel.hash(hypothesis)
+                                                .take(24),
+                                        onSuccess =
+                                            instruction.call.causeProbeOnSuccess,
+                                        onFailure =
+                                            instruction.call.causeProbeOnFailure
+                                    )
+                                }
                     )
 
                     if (!planned.allowed) {
@@ -474,7 +497,14 @@ class WorkflowRunner(
                             collectedImages += image
                         }
                     }
-                    recordExperience(state.task, planned.request, result, startedNs, onProgress)
+                    recordExperience(
+                        state.task,
+                        planned.request,
+                        result,
+                        startedNs,
+                        onProgress,
+                        planned.causeProbeIntent
+                    )
 
                     val transition = controller.afterTool(
                         state = state,
@@ -608,7 +638,14 @@ class WorkflowRunner(
             pending.plan.request,
             rawResult
         )
-        recordExperience(pending.control.task, pending.plan.request, result, startedNs, onProgress)
+        recordExperience(
+            pending.control.task,
+            pending.plan.request,
+            result,
+            startedNs,
+            onProgress,
+            pending.plan.causeProbeIntent
+        )
 
         val call = AgentDecision.ToolCall(
             tool = pending.plan.request.tool,
@@ -952,16 +989,50 @@ class WorkflowRunner(
         task = state.task.copy(status = TaskStatus.EXECUTING, kernel = ContextKernel.before(
             state.task.kernel, AgentDecision.ToolCall(request.tool, request.args))))
 
-    private fun recordExperience(task: TaskState, request: ToolRequest, result: ToolResult,
-                                 startedNs: Long, onProgress: (String) -> Unit) {
+    private fun recordExperience(
+        task: TaskState,
+        request: ToolRequest,
+        result: ToolResult,
+        startedNs: Long,
+        onProgress: (String) -> Unit,
+        causeProbeIntent: CauseProbeExecutionIntent? = null
+    ) {
         if (result.outcomeUnknown) {
             onProgress("UNKNOWN OUTCOME · результат не врахований як успіх або невдача")
             return
         }
+
+        val elapsedMs =
+            ((System.nanoTime() - startedNs) / 1_000_000)
+                .coerceAtLeast(0)
+
         try {
-            onToolExperience(task, request, result, ((System.nanoTime() - startedNs) / 1_000_000).coerceAtLeast(0))
+            onToolExperience(
+                task,
+                request,
+                result,
+                elapsedMs
+            )
         } catch (error: Exception) {
-            onProgress("EXPERIENCE NOT SAVED · ${error.message.orEmpty().take(300)}")
+            onProgress(
+                "EXPERIENCE NOT SAVED · " +
+                    error.message.orEmpty().take(300)
+            )
+        }
+
+        try {
+            onCauseProbeExperience(
+                task,
+                request,
+                result,
+                causeProbeIntent,
+                elapsedMs
+            )
+        } catch (error: Exception) {
+            onProgress(
+                "CAUSE PROBE NOT SAVED · " +
+                    error.message.orEmpty().take(300)
+            )
         }
     }
 
