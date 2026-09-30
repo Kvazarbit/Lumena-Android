@@ -524,7 +524,7 @@ Runtime exit=9 коректно став `UNEXPECTED_FAILURE`, а не `SCHEMA_M
 
 ## Phase 2 — Goal Contract і незалежні Verifiers
 
-**Статус:** V1 CORE SUCCESS PATH PHONE VERIFIED ✅ · pending/false-DONE phone gate pending.
+**Статус:** V1 PHONE VERIFIED ✅.
 
 ### Мета
 
@@ -656,6 +656,42 @@ coverage_is_full_semantic_proof=false
 - Causal: `causal_links=19`, `causal_recovered=14`, `causal_live_links=1`;
 - authority invariants: `constitution_activation=false`, `laya_execution_authority=false`.
 
+### Failure-path phone evidence
+
+На тому самому owner-signed `0.12.18-ci1666` виконано окремий goal із навмисно
+некоректним Python target:
+
+```text
+goal_contract_phone_fail.py
+def broken(:
+```
+
+Phone kernel receipts:
+
+```text
+e1 OBSERVE context.snapshot ok=true
+e2 ACT file.write ok=true target=goal_contract_phone_fail.py
+e3 VERIFY python.syntax_check ok=false target=goal_contract_phone_fail.py
+```
+
+Task завершився як `PARTIAL`, а не `DONE`. Diagnostic:
+
+```text
+[GOAL_CONTRACT]
+coverage=TYPED_OPERATIONAL_V1
+criteria=4
+mandatory=4
+passed=2
+independent_passed=0
+pending=required-tool:python.syntax_check,python-verified:0867075899b34f8f
+all_mandatory_passed=false
+coverage_is_full_semantic_proof=false
+```
+
+Це phone-verifies failure path: успішний mutation сам не закриває goal, failed
+same-target verifier не створює independent evidence, target verification
+залишається PENDING і task деградує в PARTIAL.
+
 ### Acceptance gate
 
 1. exact-head Android CI green ✅
@@ -664,10 +700,11 @@ coverage_is_full_semantic_proof=false
 4. successful code mutation participates in mandatory Goal Contract ✅
 5. independent same-target verifier gives `independent_passed=1` ✅
 6. final all-mandatory pass allows DONE ✅
-7. Fractal/Causal/Prediction + authority invariants preserved ✅
-8. intermediate phone `PENDING` state / false-DONE rejection still needs one focused live probe ⏳
+7. failed verifier leaves mandatory target criterion PENDING ✅
+8. failed verifier path finishes PARTIAL, not DONE ✅
+9. Fractal/Causal/Prediction + authority invariants preserved ✅
 
-Phase 2 v1 closes after the focused phone false-DONE probe confirms that a Python mutation cannot reach DONE while the target-specific verifier is still pending.
+**Phase 2 v1 закрито на телефоні.**
 
 ---
 
