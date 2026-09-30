@@ -99,6 +99,52 @@ object VerifiedCauseLadderPolicy {
         )
     }
 
+    fun proposeHashed(
+        anchorId: String,
+        claimHash: String,
+        modelId: String,
+        structuredFailureClass: String? = null,
+        structuredErrorCode: String? = null,
+        structuredDependency: String? = null
+    ): CauseHypothesis? {
+        val cleanAnchor = anchorId.trim()
+        val cleanHash = claimHash.trim().lowercase()
+        val cleanModel = modelId.trim()
+        if (
+            cleanAnchor.isBlank() ||
+            cleanModel.isBlank() ||
+            !cleanHash.matches(Regex("[0-9a-f]{24}"))
+        ) {
+            return null
+        }
+
+        return CauseHypothesis(
+            id = "cause-hyp-" +
+                FractalExperienceCanvasPolicy
+                    .hash(
+                        cleanAnchor + "|" +
+                            cleanHash + "|" +
+                            cleanModel
+                    )
+                    .take(20),
+            causalLinkId = cleanAnchor.take(160),
+            claimHash = cleanHash,
+            proposedByModelId = cleanModel.take(160),
+            structuredFailureClass =
+                structuredFailureClass
+                    ?.takeIf(String::isNotBlank)
+                    ?.take(120),
+            structuredErrorCode =
+                structuredErrorCode
+                    ?.takeIf(String::isNotBlank)
+                    ?.take(120),
+            structuredDependency =
+                structuredDependency
+                    ?.takeIf(String::isNotBlank)
+                    ?.take(160)
+        )
+    }
+
     fun assess(
         hypothesis: CauseHypothesis,
         probes: List<CauseProbeEvidence>
