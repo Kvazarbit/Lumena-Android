@@ -1617,11 +1617,22 @@ class AgentController(
                 success != null ||
                 failure != null
 
-        if (!anyProbeMetadata) return null
-
         val priorFailure =
             state.task.kernel.evidence
                 .any { !it.ok }
+
+        if (
+            priorFailure &&
+            requiresExplicitCauseProbe(
+                state.task.goal
+            ) &&
+            !anyProbeMetadata
+        ) {
+            return "CAUSE_PROBE_REQUIRED: this goal explicitly requires a causal probe after failure. The next probe tool call must include top-level cause_hypothesis, cause_probe_on_success, and cause_probe_on_failure. No tool was executed."
+        }
+
+        if (!anyProbeMetadata) return null
+
         if (!priorFailure) {
             return "CAUSE_PROBE_REJECTED: causal probe annotations require a prior failed TOOL_RESULT in the current task. No tool was executed."
         }
@@ -1660,6 +1671,23 @@ class AgentController(
         }
 
         return null
+    }
+
+    private fun requiresExplicitCauseProbe(
+        goal: String
+    ): Boolean {
+        val lower =
+            goal.lowercase()
+        return listOf(
+            "cause probe",
+            "cause_hypothesis",
+            "cause_probe_on_success",
+            "cause_probe_on_failure",
+            "causal hypothesis",
+            "причинну гіпотез",
+            "причинної гіпотез",
+            "причинна гіпотез"
+        ).any(lower::contains)
     }
 
     private fun requiresToolEvidence(intent: TaskIntent): Boolean =
