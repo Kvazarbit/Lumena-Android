@@ -665,11 +665,16 @@ object FractalExperienceCanvasPolicy {
         return trimmed
     }
 
-    private fun tokenize(value: String): Set<String> =
-        value.lowercase()
+    private fun tokenize(value: String): Set<String> {
+        val lower = value.lowercase()
+        val compound = lower
             .split(Regex("[^\\p{L}\\p{N}._:@/=-]+"))
             .filter { it.length >= 2 }
-            .toSet()
+        val components = lower
+            .split(Regex("[^\\p{L}\\p{N}]+"))
+            .filter { it.length >= 2 }
+        return (compound + components).toSet()
+    }
 
     fun hash(value: String): String =
         MessageDigest.getInstance("SHA-256")
