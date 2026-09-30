@@ -373,7 +373,14 @@ class LumenaDiagnosticReportTest {
                             causalRecovered = 4,
                             causalUnresolved = 2,
                             causalLiveLinks = 1,
-                            causalRevalidatedPatterns = 1
+                            causalRevalidatedPatterns = 1,
+                            causeUnknown = 4,
+                            causeStructured = 2,
+                            causeHypothesis = 0,
+                            causeProbed = 0,
+                            causeVerified = 0,
+                            causeContested = 0,
+                            causeRejected = 0
                         )
                 )
             )
@@ -395,6 +402,18 @@ class LumenaDiagnosticReportTest {
         assertTrue(report.contains("causal_unresolved=2"))
         assertTrue(report.contains("causal_live_links=1"))
         assertTrue(report.contains("causal_revalidated_patterns=1"))
+        assertTrue(report.contains("cause_unknown=4"))
+        assertTrue(report.contains("cause_structured=2"))
+        assertTrue(report.contains("cause_hypothesis=0"))
+        assertTrue(report.contains("cause_probed=0"))
+        assertTrue(report.contains("cause_verified=0"))
+        assertTrue(report.contains("cause_contested=0"))
+        assertTrue(report.contains("cause_rejected=0"))
+        assertTrue(
+            report.contains(
+                "cause_model_prose_is_evidence=false"
+            )
+        )
         assertTrue(report.contains("immune_worst_peaks=4"))
         assertTrue(report.contains("immune_contested_peaks=2"))
         assertTrue(report.contains("constitution_activation=false"))
