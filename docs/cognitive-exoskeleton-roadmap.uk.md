@@ -562,7 +562,7 @@ business/visual/subjective властивості.
   `web.read/http.get/http.json`.
 - FILE_INSPECTION: content criterion додається лише коли goal просить прочитати
   вміст, а не для простого listing.
-- CODE_WORK із create/fix/run/build/test intent: `context.snapshot` сам не закриває task; потрібен successful MUTATING або EXECUTABLE action. Read-only code review не отримує штучної mutation-вимоги.
+- CODE_WORK: create/fix intent вимагає successful MUTATING action; run/test/build intent — EXECUTABLE action. Read-only code review не отримує mutation-вимоги, але потребує `file.read` content evidence. `context.snapshot` сам не закриває жоден із цих типів code goal.
 - Python mutation: successful `file.write/file.patch` створює target-specific
   pending verification criterion.
 - `python.syntax_check/python.run` того самого target або full-project
