@@ -256,27 +256,54 @@ Recovery зберігає:
 
 ## Phase 0 — підтвердити LIVE causal wiring
 
-**Статус:** IN PROGRESS.
+**Статус:** BUG CONFIRMED → FIX IN CI.
 
-### Робота
+### Телефонний доказ
 
-1. Після контрольного recovery згенерувати новий diagnostic.
-2. Перевірити:
-   - `live_records` збільшився;
-   - `causal_live_links > 0`;
-   - `causal_recovered` збільшився;
-   - `causal_unresolved` не перетворився помилково на recovered.
-3. Якщо `causal_live_links=0`:
-   - трасувати `CoordinatorExperienceStore.record`;
-   - `examplesForTask`;
-   - `FractalExperienceCanvasStore.ingest`;
-   - `FractalCausalExperiencePolicy.links`;
-   - diagnostic stats.
-4. Додати integration test, який проходить той самий вертикальний шлях.
+Після контрольного Companion recovery:
+
+```text
+python.run[failed]
+→ file.write[ok]
+→ python.run[ok]
+```
+
+Coordinator повернув реальний `RECOVERY EXAMPLE`, але наступний phone diagnostic залишив:
+
+```text
+live_records=3
+causal_live_links=0
+causal_revalidated_patterns=0
+```
+
+Одночасно Constitution змінилася з `learned_active=1, contested=0` на
+`learned_active=0, contested=1`. Це підтвердило, що Companion event доходить до
+Coordinator/Constitution fan-out, але не до Fractal Canvas.
+
+### Root cause
+
+У `CompanionScreen.executeCommand` після
+`CoordinatorExperienceStore.examplesForTask(...)` викликався
+`ConstitutionGenomeStore.ingestVerifiedRecoveryExamples(...)`, але був відсутній
+`FractalExperienceCanvasStore.ingest(...)`.
+
+WorkflowChatScreen мав цей fan-out; Companion — ні. Тому Companion міг вивести
+`RECOVERY EXAMPLE` у `experience_context`, але causal diagnostics не бачили LIVE link.
+
+### Fix
+
+На гілці `feature/causal-experience-v1` додано:
+
+- `FractalExperienceCanvasStore.ingest(context, examples)` у verified Companion fan-out;
+- regression guard `CompanionFractalWiringRegressionTest`;
+- canary bump до `0.12.15` / versionCode 41.
 
 ### Gate
 
-- реальний phone diagnostic показує хоча б один LIVE causal link;
+- exact-head Android CI green;
+- in-place owner-signed canary install;
+- повторити контрольний fail→fix→success через Companion;
+- phone diagnostic має показати `causal_live_links > 0`;
 - повторний ingest не дублює link;
 - FAILED_RECOVERY не стає RECOVERED;
 - authority invariants не змінені.
