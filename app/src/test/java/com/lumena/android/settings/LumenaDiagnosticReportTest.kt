@@ -150,6 +150,33 @@ class LumenaDiagnosticReportTest {
     }
 
     @Test
+    fun reportIncludesDurableWorkThreadTelemetry() {
+        val report =
+            LumenaDiagnosticFormatter.render(
+                input().copy(
+                    workThreadAnchors = 2,
+                    workThreadSubjects =
+                        listOf(
+                            "aquarium",
+                            "рибками",
+                            "snake"
+                        )
+                )
+            )
+
+        assertTrue(
+            report.contains(
+                "work_thread_anchors=2"
+            )
+        )
+        assertTrue(
+            report.contains(
+                "work_thread_subjects=aquarium,рибками,snake"
+            )
+        )
+    }
+
+    @Test
     fun activeGeneIsReportedWithoutTreatingModelSelfCheckAsProof() {
         val report =
             LumenaDiagnosticFormatter.render(
