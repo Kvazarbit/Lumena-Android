@@ -258,7 +258,7 @@ class ContextBuilder(
             "goal=" +
                 GoalContext.clip(
                     task.goal,
-                    900
+                    320
                 )
         )
         appendLine("status=${task.status}")
