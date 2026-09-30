@@ -80,6 +80,24 @@ data class FractalExperienceCanvasState(
     val languageObservations: List<FractalLanguageObservation> = emptyList()
 )
 
+object FractalLanguageIntentPolicy {
+    fun canonicalIntent(
+        codeContinued: Boolean,
+        researchFollowUpKind: com.lumena.android.agent.core.ResearchFollowUpKind,
+        resolvedGoal: String
+    ): String = when {
+        codeContinued -> "CONTINUE_CODE"
+        researchFollowUpKind !=
+            com.lumena.android.agent.core.ResearchFollowUpKind.NONE ->
+            "RESEARCH_" + researchFollowUpKind.name
+        else ->
+            com.lumena.android.agent.core.TaskIntentRouter
+                .route(resolvedGoal)
+                .intent
+                .name
+    }
+}
+
 /**
  * Deterministic projection of verified coordinator examples into a four-level
  * experience hierarchy. This policy is advisory-only: it has no permission,
