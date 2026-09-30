@@ -127,4 +127,69 @@ class FractalExperienceCanvasStoreTest {
         assertTrue(observation.phrase.length <= 96)
         assertFalse(observation.phrase.contains("://"))
     }
+
+    @Test
+    fun legacyBackfillRoundTripPreservesMarkerAndOrigin() {
+        val state = FractalExperienceCanvasPolicy.backfillLegacy(
+            FractalExperienceCanvasState(),
+            listOf(example(id = "legacy-store"))
+        )
+
+        val decoded = FractalExperienceCanvasCodec.decode(
+            FractalExperienceCanvasCodec.encode(state)
+        )
+
+        assertEquals(1, decoded.legacyBackfillVersion)
+        assertEquals(1, decoded.records.size)
+        assertEquals(
+            FractalExperienceOrigin.LEGACY_BACKFILL,
+            decoded.records.single().origin
+        )
+        assertTrue(
+            decoded.nodes.all {
+                it.stage == FractalExperienceStage.SHADOW
+            }
+        )
+    }
+
+    @Test
+    fun unsupportedLegacyBackfillVersionFailsClosed() {
+        val state = FractalExperienceCanvasState(
+            version = 1,
+            legacyBackfillVersion = 1
+        )
+        val json = FractalExperienceCanvasCodec
+            .encode(state)
+            .replace(
+                "\"legacyBackfillVersion\":1",
+                "\"legacyBackfillVersion\":2"
+            )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            FractalExperienceCanvasCodec.decode(json)
+        }
+    }
+
+
+    @Test
+    fun ci1484CanvasWithoutBackfillFieldsDecodesWithSafeDefaults() {
+        val current = FractalExperienceCanvasPolicy.ingest(
+            FractalExperienceCanvasState(),
+            listOf(example(id = "ci1484-record"))
+        )
+        val legacyJson = FractalExperienceCanvasCodec
+            .encode(current)
+            .replace(",\"origin\":\"LIVE\"", "")
+            .replace(",\"legacyBackfillVersion\":0", "")
+
+        val decoded = FractalExperienceCanvasCodec.decode(legacyJson)
+
+        assertEquals(0, decoded.legacyBackfillVersion)
+        assertEquals(1, decoded.records.size)
+        assertEquals(
+            FractalExperienceOrigin.LIVE,
+            decoded.records.single().origin
+        )
+    }
+
 }

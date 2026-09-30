@@ -22,6 +22,11 @@ enum class FractalExperienceStage {
     TRANSFERRED_SHADOW
 }
 
+enum class FractalExperienceOrigin {
+    LIVE,
+    LEGACY_BACKFILL
+}
+
 data class FractalExampleRecord(
     val id: String,
     val kind: CoordinatorExampleKind,
@@ -33,7 +38,8 @@ data class FractalExampleRecord(
     val contributorModelIds: List<String>,
     val scopeHash: String?,
     val updatedAt: Long,
-    val summary: String
+    val summary: String,
+    val origin: FractalExperienceOrigin = FractalExperienceOrigin.LIVE
 )
 
 data class FractalExperienceNode(
@@ -78,7 +84,8 @@ data class FractalExperienceCanvasState(
     val version: Int = 1,
     val records: List<FractalExampleRecord> = emptyList(),
     val nodes: List<FractalExperienceNode> = emptyList(),
-    val languageObservations: List<FractalLanguageObservation> = emptyList()
+    val languageObservations: List<FractalLanguageObservation> = emptyList(),
+    val legacyBackfillVersion: Int = 0
 )
 
 object FractalLanguageIntentPolicy {
@@ -116,19 +123,33 @@ object FractalExperienceCanvasPolicy {
     ): FractalExperienceCanvasState {
         if (examples.isEmpty()) return state
 
-        val merged = (state.records + examples.mapNotNull(::toRecord))
-            .associateBy { it.id }
-            .values
-            .sortedWith(
-                compareBy<FractalExampleRecord> { it.updatedAt }
-                    .thenBy { it.id }
-            )
-            .takeLast(MAX_RECORDS)
-
         return normalize(
             state.copy(
                 version = 1,
-                records = merged
+                records = mergeRecords(
+                    state.records,
+                    examples.mapNotNull {
+                        toRecord(it, FractalExperienceOrigin.LIVE)
+                    }
+                )
+            )
+        )
+    }
+
+    fun backfillLegacy(
+        state: FractalExperienceCanvasState,
+        examples: List<CoordinatorExecutionExample>
+    ): FractalExperienceCanvasState {
+        if (state.legacyBackfillVersion >= 1) return state
+
+        val backfilled = examples.mapNotNull {
+            toRecord(it, FractalExperienceOrigin.LEGACY_BACKFILL)
+        }
+        return normalize(
+            state.copy(
+                version = 1,
+                records = mergeRecords(state.records, backfilled),
+                legacyBackfillVersion = 1
             )
         )
     }
@@ -136,13 +157,10 @@ object FractalExperienceCanvasPolicy {
     fun normalize(
         state: FractalExperienceCanvasState
     ): FractalExperienceCanvasState {
-        val records = state.records
-            .distinctBy { it.id }
-            .sortedWith(
-                compareBy<FractalExampleRecord> { it.updatedAt }
-                    .thenBy { it.id }
-            )
-            .takeLast(MAX_RECORDS)
+        val records = mergeRecords(
+            emptyList(),
+            state.records
+        )
         val language = state.languageObservations
             .distinctBy { it.id }
             .sortedWith(
@@ -401,7 +419,11 @@ object FractalExperienceCanvasPolicy {
                     id = id,
                     level = level,
                     peak = peak,
-                    stage = stage(peak, tasks.size),
+                    stage = stage(
+                        peak = peak,
+                        records = grouped,
+                        distinctTasks = tasks.size
+                    ),
                     scopeHash = scope,
                     key = key,
                     summary = summaryOf(key, grouped).take(600),
@@ -456,11 +478,13 @@ object FractalExperienceCanvasPolicy {
     }
 
     private fun toRecord(
-        example: CoordinatorExecutionExample
+        example: CoordinatorExecutionExample,
+        origin: FractalExperienceOrigin
     ): FractalExampleRecord? {
         if (example.id.isBlank() || example.updatedAt <= 0L) return null
         if (example.tools.isEmpty()) return null
         if (example.outcomes.size != example.tools.size) return null
+        if (example.evidenceIds.none(String::isNotBlank)) return null
         val tools = example.tools
             .map(ToolRegistry::canonicalize)
         if (tools.any { ToolRegistry.get(it) == null }) return null
@@ -488,7 +512,8 @@ object FractalExperienceCanvasPolicy {
                 ?.takeIf(String::isNotBlank)
                 ?.take(64),
             updatedAt = example.updatedAt,
-            summary = CoordinatorExperiencePolicy.formatForPrompt(example)
+            summary = CoordinatorExperiencePolicy.formatForPrompt(example),
+            origin = origin
         )
     }
 
@@ -537,17 +562,46 @@ object FractalExperienceCanvasPolicy {
 
     private fun stage(
         peak: FractalExperiencePeak,
+        records: List<FractalExampleRecord>,
         distinctTasks: Int
     ): FractalExperienceStage =
         if (
             peak != FractalExperiencePeak.CONTESTED &&
             peak != FractalExperiencePeak.UNKNOWN &&
-            distinctTasks >= 2
+            distinctTasks >= 2 &&
+            records.any { it.origin == FractalExperienceOrigin.LIVE }
         ) {
             FractalExperienceStage.TRANSFERRED_SHADOW
         } else {
             FractalExperienceStage.SHADOW
         }
+
+    private fun mergeRecords(
+        existing: List<FractalExampleRecord>,
+        incoming: List<FractalExampleRecord>
+    ): List<FractalExampleRecord> {
+        val merged = linkedMapOf<String, FractalExampleRecord>()
+        (existing + incoming).forEach { candidate ->
+            val previous = merged[candidate.id]
+            merged[candidate.id] = when {
+                previous == null -> candidate
+                previous.origin == FractalExperienceOrigin.LIVE &&
+                    candidate.origin == FractalExperienceOrigin.LEGACY_BACKFILL ->
+                    previous
+                candidate.origin == FractalExperienceOrigin.LIVE &&
+                    previous.origin == FractalExperienceOrigin.LEGACY_BACKFILL ->
+                    candidate
+                candidate.updatedAt >= previous.updatedAt -> candidate
+                else -> previous
+            }
+        }
+        return merged.values
+            .sortedWith(
+                compareBy<FractalExampleRecord> { it.updatedAt }
+                    .thenBy { it.id }
+            )
+            .takeLast(MAX_RECORDS)
+    }
 
     private fun confidence(
         support: Int,

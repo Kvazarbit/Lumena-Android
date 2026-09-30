@@ -16,7 +16,10 @@ data class FractalExperienceCanvasStats(
     val transferredShadow: Int,
     val languageCues: Int,
     val languageTransferred: Int,
-    val contributorModels: Int
+    val contributorModels: Int,
+    val legacyBackfillVersion: Int,
+    val legacyBackfillRecords: Int,
+    val liveRecords: Int
 )
 
 object FractalExperienceCanvasCodec {
@@ -36,6 +39,9 @@ object FractalExperienceCanvasCodec {
         }
         require(parsed.version == 1) {
             "Unsupported fractal experience canvas version: ${parsed.version}"
+        }
+        require(parsed.legacyBackfillVersion in 0..1) {
+            "Unsupported fractal legacy backfill version: ${parsed.legacyBackfillVersion}"
         }
         require(parsed.records.size <= FractalExperienceCanvasPolicy.MAX_RECORDS)
         require(parsed.nodes.size <= FractalExperienceCanvasPolicy.MAX_NODES)
@@ -156,6 +162,49 @@ object FractalExperienceCanvasStore {
             next
         }
 
+    fun backfillLegacy(
+        context: Context,
+        examples: List<CoordinatorExecutionExample>
+    ): FractalExperienceCanvasState =
+        synchronized(lock) {
+            val current = load(context)
+            val next = FractalExperienceCanvasPolicy.backfillLegacy(
+                state = current,
+                examples = examples
+            )
+            if (next != current) {
+                save(context, next)
+                StateVault.requestSave(context)
+            }
+            next
+        }
+
+    fun backfillFromCoordinator(
+        context: Context
+    ): FractalLegacyBackfillResult =
+        synchronized(lock) {
+            val current = load(context)
+            if (current.legacyBackfillVersion >= 1) {
+                return@synchronized FractalLegacyBackfillResult(
+                    state = current,
+                    sourceExamples = 0,
+                    importedRecords = 0,
+                    alreadyApplied = true
+                )
+            }
+
+            val coordinator = CoordinatorExperienceStore.load(context)
+            val result = FractalLegacyBackfillPolicy.migrate(
+                canvas = current,
+                coordinator = coordinator
+            )
+            if (result.state != current) {
+                save(context, result.state)
+                StateVault.requestSave(context)
+            }
+            result
+        }
+
     fun observeLanguage(
         context: Context,
         phrase: String,
@@ -268,7 +317,14 @@ object FractalExperienceCanvasStore {
                     it.stage ==
                         FractalExperienceStage.TRANSFERRED_SHADOW
                 },
-                contributorModels = models.size
+                contributorModels = models.size,
+                legacyBackfillVersion = state.legacyBackfillVersion,
+                legacyBackfillRecords = state.records.count {
+                    it.origin == FractalExperienceOrigin.LEGACY_BACKFILL
+                },
+                liveRecords = state.records.count {
+                    it.origin == FractalExperienceOrigin.LIVE
+                }
             )
         }
 

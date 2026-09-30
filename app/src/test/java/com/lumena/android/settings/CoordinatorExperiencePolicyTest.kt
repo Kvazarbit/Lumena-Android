@@ -450,4 +450,50 @@ class CoordinatorExperiencePolicyTest {
         assertTrue(CoordinatorExperiencePolicy.examples(state, "", 64).isEmpty())
     }
 
+
+    @Test
+    fun verifiedBackfillHistoryCanReturnMoreThanInteractiveLimitAndRejectsUnverifiedSeeds() {
+        val valid = (1..100).map { index ->
+            CoordinatorExecutionExample(
+                id = "legacy-$index",
+                kind = CoordinatorExampleKind.VERIFIED_SEQUENCE,
+                sourceSessionHash = CoordinatorExperiencePolicy
+                    .hash("legacy-task-$index")
+                    .take(16),
+                tools = listOf("workspace.list", "file.read"),
+                targets = listOf("", "path=legacy-$index"),
+                evidenceIds = listOf("legacy-evidence-$index"),
+                updatedAt = index.toLong(),
+                surprise = 0.4,
+                text = "legacy fixture $index",
+                outcomes = listOf(true, true)
+            )
+        }
+        val invalid = CoordinatorExecutionExample(
+            id = "unverified",
+            kind = CoordinatorExampleKind.VERIFIED_SEQUENCE,
+            sourceSessionHash = "bad-source",
+            tools = listOf("workspace.list", "file.read"),
+            targets = listOf("", "path=bad"),
+            evidenceIds = emptyList(),
+            updatedAt = 10_000L,
+            surprise = 0.9,
+            text = "must not backfill",
+            outcomes = listOf(true, true)
+        )
+        val state = CoordinatorEpisodeState(
+            learnedExamples = valid + invalid
+        )
+
+        val backfill = CoordinatorExperiencePolicy.allVerifiedExamples(
+            state = state,
+            limit = 100
+        )
+
+        assertEquals(100, backfill.size)
+        assertTrue(backfill.any { it.id == "legacy-1" })
+        assertTrue(backfill.any { it.id == "legacy-100" })
+        assertFalse(backfill.any { it.id == "unverified" })
+    }
+
 }
