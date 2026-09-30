@@ -357,53 +357,116 @@ revalidation у кількох незалежних source tasks із суміс
 
 ## Phase 1 — Prediction / Actual / Delta Ledger
 
-**Статус:** PLAN.
+**Статус:** IMPLEMENTED IN BRANCH → EXACT-HEAD CI / PHONE GATE PENDING.
 
 ### Мета
 
-Навчити Lumena пам'ятати не лише «що сталося», а **чого вона очікувала і наскільки помилилася**.
+Навчити Lumena пам'ятати не лише «що сталося», а **чого вона очікувала від вибраної дії і наскільки фактичний результат відрізнився**.
 
-### Реалізація
+### Реалізований vertical slice
 
-Додати bounded типи:
+Додано bounded типи:
 
 - `ExpectedOutcome`;
 - `ObservedOutcome`;
 - `OutcomeDelta`;
 - `ExpectationSource`;
-- `VerificationStatus`.
+- `VerificationStatus`;
+- `OutcomeDeltaStats`.
 
-Перший rollout повинен підтримувати deterministic expectations для типових інструментів:
+Кожний новий verified Coordinator tool event тепер отримує deterministic expectation:
 
-- `file.write` → target має бути змінений;
-- `file.read` → target має бути читабельний;
-- `python.syntax_check` → syntax pass/fail;
-- `python.run` → known exit outcome;
-- `python.tests` → tests pass/fail/no-tests;
-- `web.read` → retrieved/blocked/unknown;
-- `health` → bridge responsive/unavailable.
+```text
+intentional registered tool call
+    ↓
+ExpectedOutcome(
+  source=DETERMINISTIC_TOOL_CONTRACT,
+  expectedStatus=SUCCESS,
+  expectedEffectClass=READ_ONLY_OBSERVATION | MUTATING_EFFECT | EXECUTABLE_EFFECT,
+  expectedPostcondition=KNOWN_SUCCESSFUL_TOOL_OUTCOME
+)
+    ↓
+real ToolResult
+    ↓
+ObservedOutcome
+    ↓
+OutcomeDelta
+```
 
-Model-proposed expectation допускається як proposal, але ніколи не як evidence.
+Це **не** твердження моделі «я впевнена, що дія спрацює». Це мінімальний контракт: якщо агент свідомо вибрав валідний інструмент як наступну дію, очікуваний операційний результат — відомий successful tool outcome. `confidence=null`, доки реальний prediction source не надасть калібровану оцінку.
+
+Поточні structural delta:
+
+- `MATCH`;
+- `UNEXPECTED_FAILURE`;
+- `UNEXPECTED_SUCCESS` — зарезервовано для майбутніх non-success expectations;
+- `WRONG_TARGET_STATE`;
+- `PARTIAL_EFFECT` — зарезервовано для GoalContract/verifier layer;
+- `DEPENDENCY_CHANGED` — тільки якщо ToolResult прямо дає цей verified failure class;
+- `SCHEMA_MISMATCH` — тільки зі structured failure metadata;
+- `OUTCOME_UNKNOWN`;
+- `VERIFICATION_MISSING`.
+
+`ToolResult.error`, raw stdout і raw stderr не копіюються в цей ledger. Зберігаються лише bounded target + structured metadata: failureClass/errorCode/retryable/dependency.
+
+### Verification semantics
+
+Поточний `VerificationStatus=TOOL_RESULT_ONLY` означає: ми знаємо результат самого інструмента, але це ще не незалежний доказ user-level postcondition.
+
+`OUTCOME_UNKNOWN` ніколи не стає success/failure training label.
+
+`INDEPENDENT_VERIFICATION_MISSING` і `VERIFIED_POSTCONDITION` підключаються повністю на Phase 2 через GoalContract/verifier; Phase 1 не вигадує їх із model prose.
+
+### Compatibility
+
+Нові поля `CoordinatorEpisodeEvent.expectedOutcome / observedOutcome / outcomeDelta` optional і мають safe defaults. Старий Coordinator JSON без цих полів продовжує читатися; legacy events не ретроактивно отримують вигадані expectations.
 
 ### Tests
 
-- expectation survives JSON round-trip;
-- old state без expectation полів читається;
-- unknown tool outcome не дає fake delta;
-- wrong target не рахується MATCH;
-- model expectation не підтверджує себе;
-- bounded/sanitized fields;
-- imported expectation не стає local verified.
+На гілці додано перевірки:
 
-### Gate
+- deterministic expectation semantics;
+- success → MATCH;
+- verified failure → UNEXPECTED_FAILURE;
+- structured INVALID_INPUT / REQUIRED → SCHEMA_MISMATCH;
+- unknown outcome → OUTCOME_UNKNOWN;
+- wrong observed target ніколи не MATCH;
+- model proposal саме по собі не створює evidence/delta;
+- JSON round-trip;
+- raw error/stderr prose не потрапляє в ledger;
+- old Coordinator JSON читається з null prediction fields;
+- legacy events не рахуються як Phase-1 observations;
+- diagnostic formatter показує окремий `[PREDICTION_DELTA]` блок.
 
-Diagnostic показує:
+### Diagnostic gate
 
-- `expectations_total`;
-- `deltas_total`;
-- `unexpected_failures`;
-- `unexpected_successes`;
-- `verification_missing`.
+Новий блок:
+
+```text
+[PREDICTION_DELTA]
+expectations_total=
+deltas_total=
+matches=
+unexpected_failures=
+unexpected_successes=
+schema_mismatches=
+outcome_unknown=
+verification_missing=
+authority=advisory_only
+model_prose_is_evidence=false
+```
+
+### Acceptance gate
+
+1. exact-head Android CI green;
+2. owner-signed in-place canary;
+3. phone diagnostic показує `expectations_total > 0` після нового tool event;
+4. контрольний success збільшує `matches`;
+5. контрольний fail збільшує відповідний non-match delta;
+6. unknown-effect mutation не перетворюється на success/failure;
+7. старі causal/fractal counters і authority invariants не регресують.
+
+Phase 1 не закривається тільки за commit/CI. Потрібен реальний phone diagnostic.
 
 ---
 
