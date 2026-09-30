@@ -144,7 +144,10 @@ data class DiagnosticFractalExperienceView(
     val causeProbed: Int = 0,
     val causeVerified: Int = 0,
     val causeContested: Int = 0,
-    val causeRejected: Int = 0
+    val causeRejected: Int = 0,
+    val causeRuntimeFailures: Int = 0,
+    val causeRuntimeHypotheses: Int = 0,
+    val causeRuntimeProbes: Int = 0
 )
 
 data class LumenaDiagnosticInput(
@@ -666,6 +669,18 @@ object LumenaDiagnosticFormatter {
                     "cause_rejected=" +
                         fractal.causeRejected
                 )
+                appendLine(
+                    "cause_runtime_failures=" +
+                        fractal.causeRuntimeFailures
+                )
+                appendLine(
+                    "cause_runtime_hypotheses_total=" +
+                        fractal.causeRuntimeHypotheses
+                )
+                appendLine(
+                    "cause_runtime_probes_total=" +
+                        fractal.causeRuntimeProbes
+                )
                 appendLine("cause_model_prose_is_evidence=false")
                 appendLine("immune_worst_peaks=" + fractal.worst)
                 appendLine(
@@ -1006,7 +1021,13 @@ object LumenaDiagnosticReport {
                 causeContested =
                     causeRuntime.contestedStage,
                 causeRejected =
-                    causeRuntime.rejectedStage
+                    causeRuntime.rejectedStage,
+                causeRuntimeFailures =
+                    causeRuntime.failures,
+                causeRuntimeHypotheses =
+                    causeRuntime.hypotheses,
+                causeRuntimeProbes =
+                    causeRuntime.probes
             )
         }.getOrElse { failure ->
             DiagnosticFractalExperienceView(
