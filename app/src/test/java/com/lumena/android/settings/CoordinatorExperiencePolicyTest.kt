@@ -496,4 +496,73 @@ class CoordinatorExperiencePolicyTest {
         assertFalse(backfill.any { it.id == "unverified" })
     }
 
+
+    @Test
+    fun recoveryPreservesStructuredFailureMetadataFromVerifiedToolResult() {
+        val failed = CoordinatorEpisodeEvent(
+            id = "structured-fail",
+            sessionId = "structured-session",
+            taskId = "structured-session",
+            tool = "python.run",
+            target = "script=missing.py",
+            ok = false,
+            experienceId = "ev-structured-fail",
+            at = 100L,
+            surprise = 0.9,
+            outcomeKnown = true,
+            failureClass = "INVALID_INPUT",
+            errorCode = "PYTHON_SCRIPT_REQUIRED",
+            retryable = true,
+            dependency = "tool-schema"
+        )
+        val inspected = CoordinatorEpisodeEvent(
+            id = "structured-inspect",
+            sessionId = "structured-session",
+            taskId = "structured-session",
+            tool = "workspace.list",
+            target = "",
+            ok = true,
+            experienceId = "ev-structured-inspect",
+            at = 200L,
+            surprise = 0.8
+        )
+        val recovered = CoordinatorEpisodeEvent(
+            id = "structured-ok",
+            sessionId = "structured-session",
+            taskId = "structured-session",
+            tool = "python.run",
+            target = "script=missing.py",
+            ok = true,
+            experienceId = "ev-structured-ok",
+            at = 300L,
+            surprise = 1.0
+        )
+
+        val state = listOf(failed, inspected, recovered)
+            .fold(CoordinatorEpisodeState()) { acc, event ->
+                CoordinatorExperiencePolicy.record(acc, event)
+            }
+
+        val example = CoordinatorExperiencePolicy
+            .allVerifiedExamples(state)
+            .first { it.kind == CoordinatorExampleKind.RECOVERY }
+
+        assertEquals(
+            listOf("INVALID_INPUT", null, null),
+            example.failureClasses
+        )
+        assertEquals(
+            listOf("PYTHON_SCRIPT_REQUIRED", null, null),
+            example.errorCodes
+        )
+        assertEquals(
+            listOf(true, null, null),
+            example.retryableFlags
+        )
+        assertEquals(
+            listOf("tool-schema", null, null),
+            example.dependencies
+        )
+    }
+
 }
