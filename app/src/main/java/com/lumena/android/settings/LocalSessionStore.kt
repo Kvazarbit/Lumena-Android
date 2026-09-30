@@ -4,6 +4,8 @@ import android.content.Context
 import com.lumena.android.agent.core.AgentControlState
 import com.lumena.android.agent.core.ResearchThreadState
 import com.lumena.android.agent.core.TaskState
+import com.lumena.android.agent.core.WorkThreadMemory
+import com.lumena.android.agent.core.WorkThreadState
 import com.lumena.android.agent.local.CauseProbeExecutionIntent
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -48,7 +50,8 @@ data class LocalSessionSnapshot(
     // bounded researchThread and mirrors rootGoal here for safe migration.
     val researchGoal: String? = null,
     val researchThread: ResearchThreadState? = null,
-    val codeGoal: String? = null
+    val codeGoal: String? = null,
+    val workThreads: WorkThreadState = WorkThreadState()
 )
 
 /**
@@ -149,7 +152,11 @@ object LocalSessionStore {
                     .map { it.take(2_000) }
                     .distinct()
                     .takeLast(16)
-            )
+            ),
+            workThreads =
+                WorkThreadMemory.normalize(
+                    snapshot.workThreads
+                )
         )
         prefs(context).edit().putString(KEY_SNAPSHOT, adapter.toJson(bounded)).apply()
         // History mirrors only bounded, app-private context. Workspace files are never copied/rolled back.
