@@ -269,6 +269,42 @@ class LumenaDiagnosticReportTest {
     }
 
     @Test
+    fun reportIncludesFractalExperienceAndImmuneShadowTelemetry() {
+        val report =
+            LumenaDiagnosticFormatter.render(
+                input().copy(
+                    fractalExperience =
+                        DiagnosticFractalExperienceView(
+                            records = 12,
+                            nodes = 31,
+                            best = 9,
+                            worst = 4,
+                            unknown = 3,
+                            contested = 2,
+                            transferredShadow = 5,
+                            languageCues = 7,
+                            languageTransferred = 2,
+                            contributorModels = 3
+                        )
+                )
+            )
+
+        assertTrue(report.contains("[FRACTAL_EXPERIENCE_CANVAS]"))
+        assertTrue(report.contains("mode=SHADOW"))
+        assertTrue(report.contains("authority=advisory_only"))
+        assertTrue(report.contains("best_peaks=9"))
+        assertTrue(report.contains("worst_peaks=4"))
+        assertTrue(report.contains("unknown_peaks=3"))
+        assertTrue(report.contains("contested_peaks=2"))
+        assertTrue(report.contains("language_cues=7"))
+        assertTrue(report.contains("contributor_models=3"))
+        assertTrue(report.contains("immune_worst_peaks=4"))
+        assertTrue(report.contains("immune_contested_peaks=2"))
+        assertTrue(report.contains("constitution_activation=false"))
+        assertTrue(report.contains("laya_execution_authority=false"))
+    }
+
+    @Test
     fun formatterRedactsBearerSecrets() {
         val dirty = input().copy(
             bridgeProbe = DiagnosticProbe(

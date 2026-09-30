@@ -111,6 +111,8 @@ import com.lumena.android.settings.ExperienceMemoryStore
 import com.lumena.android.settings.EvidenceGraphStore
 import com.lumena.android.settings.ExperienceLandscapeStore
 import com.lumena.android.settings.CoordinatorExperienceStore
+import com.lumena.android.settings.FractalExperienceCanvasStore
+import com.lumena.android.settings.FractalLanguageIntentPolicy
 import com.lumena.android.settings.ReflexExperienceRanker
 import com.lumena.android.settings.TinyJevAssetLoader
 import com.lumena.android.settings.TinyJevCalibrationStore
@@ -717,13 +719,29 @@ fun WorkflowChatScreen(
                         "Coordinator playbook unavailable; continue from current verified evidence only."
                     )
                 }
+                val fractalExperience = try {
+                    // Social memory intentionally aggregates verified
+                    // contributor models inside the same project scope.
+                    // It is advisory only and grants no tool authority.
+                    FractalExperienceCanvasStore.relevant(
+                        context = context,
+                        query = task.goal,
+                        scopeId = task.projectId ?: "global",
+                        limit = 4
+                    )
+                } catch (_: Exception) {
+                    listOf(
+                        "Fractal experience canvas unavailable; continue from current verified evidence only."
+                    )
+                }
                 (
                     advice.take(2) +
                         coordinatorExamples.take(2) +
+                        fractalExperience.take(2) +
                         verifiedMemory.take(4)
                     )
                     .distinct()
-                    .take(8)
+                    .take(10)
             },
             webStrategyAdviceProvider = { task, modelHistory ->
                 val researchGoal =
@@ -984,6 +1002,10 @@ fun WorkflowChatScreen(
                                     taskId = task.id,
                                     limit = 64
                                 )
+                            FractalExperienceCanvasStore.ingest(
+                                context = context,
+                                examples = examples
+                            )
                             ConstitutionGenomeStore.ingestVerifiedRecoveryExamples(
                                 context = context,
                                 task = task,
@@ -1173,6 +1195,23 @@ fun WorkflowChatScreen(
             goal = resolvedGoal,
             status = TaskStatus.WAITING_MODEL
         )
+        val languageIntent = FractalLanguageIntentPolicy.canonicalIntent(
+            codeContinued = codeResolution.continued,
+            researchFollowUpKind = resolution.followUpKind,
+            resolvedGoal = resolvedGoal
+        )
+        uiScope.launch {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    FractalExperienceCanvasStore.observeLanguage(
+                        context = context,
+                        phrase = text,
+                        canonicalIntent = languageIntent,
+                        sourceTaskId = task.id
+                    )
+                }
+            }
+        }
         taskApprovals.clear()
         currentTask = task
         bubbles += ChatBubble("user", text)
