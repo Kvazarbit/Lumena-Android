@@ -235,11 +235,26 @@ fun WorkflowChatScreen(
                     restored.workThreads
                 )
             } else {
-                WorkThreadMemory.restore(
-                    restored.chat.map {
-                        it.role to it.text
-                    }
-                )
+                val fromChat =
+                    WorkThreadMemory.restore(
+                        restored.chat.map {
+                            it.role to it.text
+                        }
+                    )
+                if (
+                    fromChat.anchors.isNotEmpty() ||
+                    restored.codeGoal.isNullOrBlank()
+                ) {
+                    fromChat
+                } else {
+                    WorkThreadMemory.restore(
+                        listOf(
+                            "user" to
+                                restored.codeGoal
+                                    .orEmpty()
+                        )
+                    )
+                }
             }
         )
     }
