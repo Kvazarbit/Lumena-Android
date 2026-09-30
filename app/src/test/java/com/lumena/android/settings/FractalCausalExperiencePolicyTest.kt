@@ -366,4 +366,42 @@ class FractalCausalExperiencePolicyTest {
         assertTrue(link.evidenceIds.contains("ev-e2e-ok"))
     }
 
+
+    @Test
+    fun differentStructuredFailureCauseDoesNotCountAsRevalidatedPattern() {
+        val legacy = record(
+            id = "legacy-structured",
+            kind = CoordinatorExampleKind.RECOVERY,
+            task = "old-task-structured",
+            outcomes = listOf(false, true, true),
+            origin = FractalExperienceOrigin.LEGACY_BACKFILL
+        ).copy(
+            failureClasses = listOf("INVALID_INPUT", null, null),
+            errorCodes = listOf("PYTHON_SCRIPT_REQUIRED", null, null),
+            retryableFlags = listOf(true, null, null),
+            dependencies = listOf("tool-schema", null, null)
+        )
+        val live = record(
+            id = "live-structured",
+            kind = CoordinatorExampleKind.RECOVERY,
+            task = "new-task-structured",
+            outcomes = listOf(false, true, true),
+            origin = FractalExperienceOrigin.LIVE
+        ).copy(
+            failureClasses = listOf("RUNTIME_ERROR", null, null),
+            errorCodes = listOf("PYTHON_RUNTIME_FAILURE", null, null),
+            retryableFlags = listOf(true, null, null),
+            dependencies = listOf("python-runtime", null, null)
+        )
+
+        val stats = FractalCausalExperiencePolicy.stats(
+            listOf(legacy, live)
+        )
+
+        assertEquals(2, stats.recovered)
+        assertEquals(1, stats.liveLinks)
+        assertEquals(1, stats.legacyLinks)
+        assertEquals(0, stats.revalidatedPatterns)
+    }
+
 }
