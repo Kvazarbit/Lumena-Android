@@ -216,4 +216,36 @@ class TaskIntentRouterTest {
         assertEquals("context.snapshot", profile.preflight?.tool)
     }
 
+    @Test
+    fun scientificQuestionAboutTestsStaysGeneral() {
+        val profile = TaskIntentRouter.route(
+            "це перевірено тестами на 100%, і які є методи стимуляції?"
+        )
+
+        assertEquals(TaskIntent.GENERAL, profile.intent)
+        assertNull(profile.preflight)
+    }
+
+    @Test
+    fun researchFollowUpMentioningTestsDoesNotBecomeCodeWork() {
+        val profile = TaskIntentRouter.route(
+            """
+            Знайди в інтернеті сучасні дані про нейропластичність.
+            RESEARCH FOLLOW-UP: verify the relevant claim with current source evidence.
+            USER FOLLOW-UP: це перевірено тестами на 100%, і які є методи стимуляції?
+            """.trimIndent()
+        )
+
+        assertEquals(TaskIntent.PUBLIC_WEB, profile.intent)
+        assertTrue(profile.intent != TaskIntent.CODE_WORK)
+    }
+
+    @Test
+    fun explicitRunTestsStillRoutesToCodeWork() {
+        val profile = TaskIntentRouter.route("запусти тести")
+
+        assertEquals(TaskIntent.CODE_WORK, profile.intent)
+        assertEquals("context.snapshot", profile.preflight?.tool)
+    }
+
 }
