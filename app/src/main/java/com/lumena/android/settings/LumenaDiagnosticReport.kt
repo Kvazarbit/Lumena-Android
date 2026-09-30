@@ -30,7 +30,13 @@ data class DiagnosticTaskView(
     val kernelObserved: Int,
     val worldRevision: Int,
     val inFlight: String,
-    val evidence: List<String>
+    val evidence: List<String>,
+    val goalContractCoverage: String = "NONE",
+    val goalContractCriteria: Int = 0,
+    val goalContractMandatory: Int = 0,
+    val goalContractPassed: Int = 0,
+    val goalContractIndependentPassed: Int = 0,
+    val goalContractPending: List<String> = emptyList()
 )
 
 data class DiagnosticEvidenceView(
@@ -260,6 +266,55 @@ object LumenaDiagnosticFormatter {
                         appendLine("- " + clean(it, 900))
                     }
                 }
+            }
+            appendLine()
+
+            appendLine("[GOAL_CONTRACT]")
+            if (task == null) {
+                appendLine("present=false")
+            } else {
+                appendLine("present=true")
+                appendLine(
+                    "coverage=" +
+                        clean(
+                            task.goalContractCoverage,
+                            120
+                        )
+                )
+                appendLine(
+                    "criteria=" +
+                        task.goalContractCriteria
+                )
+                appendLine(
+                    "mandatory=" +
+                        task.goalContractMandatory
+                )
+                appendLine(
+                    "passed=" +
+                        task.goalContractPassed
+                )
+                appendLine(
+                    "independent_passed=" +
+                        task.goalContractIndependentPassed
+                )
+                appendLine(
+                    "pending=" +
+                        task.goalContractPending
+                            .take(12)
+                            .joinToString(",") {
+                                clean(it, 220)
+                            }
+                )
+                appendLine(
+                    "all_mandatory_passed=" +
+                        (
+                            task.goalContractMandatory ==
+                                task.goalContractPassed
+                            )
+                )
+                appendLine(
+                    "coverage_is_full_semantic_proof=false"
+                )
             }
             appendLine()
 
@@ -1067,7 +1122,37 @@ object LumenaDiagnosticReport {
                             "ok=${it.ok}|target=${it.target}|" +
                             "rev=${it.revision}|" +
                             it.excerpt
-                    }
+                    },
+            goalContractCoverage =
+                task.goalContract.coverage.name,
+            goalContractCriteria =
+                task.goalContract.criteria.size,
+            goalContractMandatory =
+                task.goalContract.criteria.count {
+                    it.required
+                },
+            goalContractPassed =
+                task.goalContract.criteria.count {
+                    it.required &&
+                        it.status ==
+                            com.lumena.android.agent.core.CriterionStatus.PASSED
+                },
+            goalContractIndependentPassed =
+                task.goalContract.criteria.count { criterion ->
+                    criterion.required &&
+                        criterion.status ==
+                            com.lumena.android.agent.core.CriterionStatus.PASSED &&
+                        criterion.evidence.any {
+                            it.strength ==
+                                com.lumena.android.agent.core.VerificationStrength.INDEPENDENT_TOOL_RESULT
+                        }
+                },
+            goalContractPending =
+                com.lumena.android.agent.core.GoalContractPolicy
+                    .incompleteMandatory(
+                        task.goalContract
+                    )
+                    .map { it.id }
         )
 
     private fun evidenceView(
