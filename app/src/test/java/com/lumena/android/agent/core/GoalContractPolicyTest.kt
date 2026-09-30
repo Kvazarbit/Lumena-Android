@@ -274,6 +274,13 @@ class GoalContractPolicyTest {
         )
         assertTrue(
             contract.criteria.any {
+                it.id == "code-content-evidence" &&
+                    it.kind ==
+                        CriterionKind.FILE_CONTENT_EVIDENCE
+            }
+        )
+        assertTrue(
+            contract.criteria.any {
                 it.kind ==
                     CriterionKind.OPERATIONAL_TOOL_EVIDENCE
             }
