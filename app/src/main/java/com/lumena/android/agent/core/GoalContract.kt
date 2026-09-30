@@ -119,7 +119,13 @@ object GoalContractPolicy {
             )
         }
 
-        if (intent == TaskIntent.CODE_WORK) {
+        if (
+            intent == TaskIntent.CODE_WORK &&
+            (
+                goal.isBlank() ||
+                    requiresCodeAction(goal)
+                )
+        ) {
             criteria += AcceptanceCriterion(
                 id = "code-action-evidence",
                 kind = CriterionKind.CODE_ACTION_EVIDENCE,
@@ -405,6 +411,34 @@ object GoalContractPolicy {
                 }
                 .takeLast(MAX_EVIDENCE_PER_CRITERION)
         )
+
+    private fun requiresCodeAction(
+        goal: String
+    ): Boolean {
+        val lower = goal.lowercase()
+        return listOf(
+            "створ",
+            "create",
+            "write",
+            "напис",
+            "реаліз",
+            "implement",
+            "виправ",
+            "fix",
+            "редаг",
+            "edit",
+            "patch",
+            "запуст",
+            "run ",
+            "build",
+            "збір",
+            "компіля",
+            "compile",
+            "pytest",
+            "python.tests",
+            "тест"
+        ).any { lower.contains(it) }
+    }
 
     private fun requiresFileContent(
         goal: String
