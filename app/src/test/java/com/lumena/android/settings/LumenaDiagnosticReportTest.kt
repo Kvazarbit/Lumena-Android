@@ -269,6 +269,57 @@ class LumenaDiagnosticReportTest {
     }
 
     @Test
+    fun reportIncludesTypedGoalContractWithoutCallingItFullSemanticProof() {
+        val report =
+            LumenaDiagnosticFormatter.render(
+                input().copy(
+                    task = requireNotNull(input().task).copy(
+                        goalContractCoverage =
+                            "TYPED_OPERATIONAL_V1",
+                        goalContractCriteria = 3,
+                        goalContractMandatory = 3,
+                        goalContractPassed = 2,
+                        goalContractIndependentPassed = 1,
+                        goalContractPending =
+                            listOf(
+                                "python-verified:abc123"
+                            )
+                    )
+                )
+            )
+
+        assertTrue(report.contains("[GOAL_CONTRACT]"))
+        assertTrue(
+            report.contains(
+                "coverage=TYPED_OPERATIONAL_V1"
+            )
+        )
+        assertTrue(report.contains("criteria=3"))
+        assertTrue(report.contains("mandatory=3"))
+        assertTrue(report.contains("passed=2"))
+        assertTrue(
+            report.contains(
+                "independent_passed=1"
+            )
+        )
+        assertTrue(
+            report.contains(
+                "pending=python-verified:abc123"
+            )
+        )
+        assertTrue(
+            report.contains(
+                "all_mandatory_passed=false"
+            )
+        )
+        assertTrue(
+            report.contains(
+                "coverage_is_full_semantic_proof=false"
+            )
+        )
+    }
+
+    @Test
     fun reportIncludesPredictionActualDeltaTelemetryWithoutClaimingAuthority() {
         val report =
             LumenaDiagnosticFormatter.render(
