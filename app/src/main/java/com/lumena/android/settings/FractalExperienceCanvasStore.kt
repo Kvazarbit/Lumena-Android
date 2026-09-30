@@ -24,7 +24,14 @@ data class FractalExperienceCanvasStats(
     val causalRecovered: Int = 0,
     val causalUnresolved: Int = 0,
     val causalLiveLinks: Int = 0,
-    val causalRevalidatedPatterns: Int = 0
+    val causalRevalidatedPatterns: Int = 0,
+    val causeUnknown: Int = 0,
+    val causeStructured: Int = 0,
+    val causeHypothesis: Int = 0,
+    val causeProbed: Int = 0,
+    val causeVerified: Int = 0,
+    val causeContested: Int = 0,
+    val causeRejected: Int = 0
 )
 
 object FractalExperienceCanvasCodec {
@@ -384,7 +391,21 @@ object FractalExperienceCanvasStore {
                 causalUnresolved = causal.unresolved,
                 causalLiveLinks = causal.liveLinks,
                 causalRevalidatedPatterns =
-                    causal.revalidatedPatterns
+                    causal.revalidatedPatterns,
+                causeUnknown =
+                    causal.causeUnknown,
+                causeStructured =
+                    causal.causeStructured,
+                causeHypothesis =
+                    causal.causeHypothesis,
+                causeProbed =
+                    causal.causeProbed,
+                causeVerified =
+                    causal.causeVerified,
+                causeContested =
+                    causal.causeContested,
+                causeRejected =
+                    causal.causeRejected
             )
         }
 
