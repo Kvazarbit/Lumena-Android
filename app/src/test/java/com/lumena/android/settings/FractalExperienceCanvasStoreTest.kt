@@ -196,11 +196,11 @@ class FractalExperienceCanvasStoreTest {
     @Test
     fun structuredFailureMetadataRoundTripsAndLegacyJsonDefaultsSafely() {
         val structured = example(id = "structured-store").copy(
-            outcomes = listOf(false),
-            failureClasses = listOf("INVALID_INPUT"),
-            errorCodes = listOf("PYTHON_SCRIPT_REQUIRED"),
-            retryableFlags = listOf(true),
-            dependencies = listOf("tool-schema")
+            outcomes = listOf(false, true),
+            failureClasses = listOf("INVALID_INPUT", null),
+            errorCodes = listOf("PYTHON_SCRIPT_REQUIRED", null),
+            retryableFlags = listOf(true, null),
+            dependencies = listOf("tool-schema", null)
         )
         val state = FractalExperienceCanvasPolicy.ingest(
             FractalExperienceCanvasState(),
@@ -210,16 +210,16 @@ class FractalExperienceCanvasStoreTest {
         val decoded = FractalExperienceCanvasCodec.decode(encoded)
         val record = decoded.records.single()
 
-        assertEquals(listOf("INVALID_INPUT"), record.failureClasses)
-        assertEquals(listOf("PYTHON_SCRIPT_REQUIRED"), record.errorCodes)
-        assertEquals(listOf(true), record.retryableFlags)
-        assertEquals(listOf("tool-schema"), record.dependencies)
+        assertEquals(listOf("INVALID_INPUT", null), record.failureClasses)
+        assertEquals(listOf("PYTHON_SCRIPT_REQUIRED", null), record.errorCodes)
+        assertEquals(listOf(true, null), record.retryableFlags)
+        assertEquals(listOf("tool-schema", null), record.dependencies)
 
         val legacyJson = encoded
-            .replace(",\"failureClasses\":[\"INVALID_INPUT\"]", "")
-            .replace(",\"errorCodes\":[\"PYTHON_SCRIPT_REQUIRED\"]", "")
-            .replace(",\"retryableFlags\":[true]", "")
-            .replace(",\"dependencies\":[\"tool-schema\"]", "")
+            .replace(",\"failureClasses\":[\"INVALID_INPUT\",null]", "")
+            .replace(",\"errorCodes\":[\"PYTHON_SCRIPT_REQUIRED\",null]", "")
+            .replace(",\"retryableFlags\":[true,null]", "")
+            .replace(",\"dependencies\":[\"tool-schema\",null]", "")
         val legacyDecoded = FractalExperienceCanvasCodec.decode(legacyJson)
         val legacyRecord = legacyDecoded.records.single()
 
