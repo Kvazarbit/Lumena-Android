@@ -229,4 +229,29 @@ class FractalExperienceCanvasStoreTest {
         assertTrue(legacyRecord.dependencies.isEmpty())
     }
 
+
+    @Test
+    fun structuredFailureMetadataIsSanitizedAndBoundedBeforeCausalUse() {
+        val structured = example(id = "structured-bounds").copy(
+            outcomes = listOf(false, true),
+            failureClasses = listOf("INVALID\nINPUT\tCLASS", null),
+            errorCodes = listOf("E".repeat(240), null),
+            retryableFlags = listOf(false, null),
+            dependencies = listOf(("dependency-" + "x".repeat(240)), null)
+        )
+
+        val state = FractalExperienceCanvasPolicy.ingest(
+            FractalExperienceCanvasState(),
+            listOf(structured)
+        )
+        val record = state.records.single()
+
+        assertEquals("INVALID INPUT CLASS", record.failureClasses[0])
+        assertEquals(120, record.errorCodes[0]?.length)
+        assertEquals(false, record.retryableFlags[0])
+        assertEquals(160, record.dependencies[0]?.length)
+        assertFalse(record.failureClasses[0].orEmpty().contains("\n"))
+        assertFalse(record.failureClasses[0].orEmpty().contains("\t"))
+    }
+
 }
