@@ -242,4 +242,91 @@ class WorkThreadMemoryTest {
             )
         assertTrue(named.continued)
     }
+
+    @Test
+    fun persistedStaleAnchorDoesNotBlockRetainedAquariumRecovery() {
+        val stale =
+            WorkThreadMemory.resolve(
+                text =
+                    "Створи Python скрипт для окремого аналізу диска.",
+                state = WorkThreadState()
+            ).state
+
+        val restored =
+            WorkThreadMemory.restore(
+                turns =
+                    listOf(
+                        "user" to
+                            "Онови aquarium.html: зроби реалістичний 3D акваріум з рибками.",
+                        "assistant" to
+                            "Знайду файл і продовжу роботу."
+                    ),
+                seedState = stale
+            )
+
+        assertEquals(
+            2,
+            restored.anchors.size
+        )
+
+        val resumed =
+            WorkThreadMemory.resolve(
+                text =
+                    "продовж роботу над акваріумом",
+                state = restored
+            )
+
+        assertTrue(resumed.continued)
+        assertTrue(
+            resumed.goal.contains(
+                "aquarium.html"
+            )
+        )
+        assertFalse(
+            resumed.goal.contains(
+                "аналізу диска"
+            )
+        )
+    }
+
+    @Test
+    fun namedAquariumCorrectionReactivatesMatchedThread() {
+        val root =
+            "Онови aquarium.html: зроби реалістичний 3D акваріум з рибками."
+        var state =
+            WorkThreadMemory.resolve(
+                text = root,
+                state = WorkThreadState()
+            ).state
+
+        state =
+            WorkThreadMemory.resolve(
+                text =
+                    "Write Python script for separate square rendering.",
+                state = state
+            ).state
+
+        val corrected =
+            WorkThreadMemory.resolve(
+                text =
+                    "до чого тут квадрат, де акваріум з рибками?!",
+                state = state
+            )
+
+        assertTrue(corrected.continued)
+        assertTrue(
+            corrected.goal.contains(root)
+        )
+        assertTrue(
+            corrected.goal.contains(
+                "де акваріум з рибками"
+            )
+        )
+        assertFalse(
+            corrected.goal.contains(
+                "separate square rendering"
+            )
+        )
+    }
+
 }
