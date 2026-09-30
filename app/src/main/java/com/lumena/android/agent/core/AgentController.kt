@@ -1643,7 +1643,8 @@ class AgentController(
         if (
             success != null &&
             (
-                success !in allowed ||
+                failure == null ||
+                    success !in allowed ||
                     failure !in allowed
                 )
         ) {
