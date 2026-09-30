@@ -224,4 +224,71 @@ class FractalCausalExperiencePolicyTest {
                 .contains("permission")
         )
     }
+
+    @Test
+    fun structuredToolFailureBecomesEvidenceGroundedWhyFailed() {
+        val source = record(
+            id = "structured-cause",
+            kind = CoordinatorExampleKind.RECOVERY,
+            task = "task-structured",
+            outcomes = listOf(false, true, true)
+        ).copy(
+            failureClasses = listOf("INVALID_INPUT", null, null),
+            errorCodes = listOf("PYTHON_SCRIPT_REQUIRED", null, null),
+            retryableFlags = listOf(true, null, null),
+            dependencies = listOf("tool-schema", null, null)
+        )
+
+        val link = FractalCausalExperiencePolicy
+            .links(listOf(source))
+            .single()
+
+        assertEquals(
+            FractalCausalCauseKnowledge.STRUCTURED_TOOL_FAILURE,
+            link.causeKnowledge
+        )
+        assertEquals("INVALID_INPUT", link.causeFailureClass)
+        assertEquals("PYTHON_SCRIPT_REQUIRED", link.causeErrorCode)
+        assertEquals(true, link.causeRetryable)
+        assertEquals("tool-schema", link.causeDependency)
+
+        val prompt =
+            FractalCausalExperiencePolicy.formatForPrompt(link)
+        assertTrue(
+            prompt.contains(
+                "WHY_FAILED=STRUCTURED_TOOL_FAILURE"
+            )
+        )
+        assertTrue(prompt.contains("class=INVALID_INPUT"))
+        assertTrue(prompt.contains("code=PYTHON_SCRIPT_REQUIRED"))
+        assertTrue(prompt.contains("retryable=true"))
+        assertTrue(prompt.contains("dependency=tool-schema"))
+        assertFalse(prompt.contains("stderr", ignoreCase = true))
+    }
+
+    @Test
+    fun missingStructuredFailureMetadataStillFailsClosedToUnknownCause() {
+        val link = FractalCausalExperiencePolicy
+            .links(
+                listOf(
+                    record(
+                        id = "unknown-cause",
+                        kind = CoordinatorExampleKind.RECOVERY,
+                        task = "task-unknown",
+                        outcomes = listOf(false, true, true)
+                    )
+                )
+            )
+            .single()
+
+        assertEquals(
+            FractalCausalCauseKnowledge.UNKNOWN_NOT_CAPTURED,
+            link.causeKnowledge
+        )
+        assertEquals(null, link.causeFailureClass)
+        assertEquals(null, link.causeErrorCode)
+        assertEquals(null, link.causeRetryable)
+        assertEquals(null, link.causeDependency)
+    }
+
 }
