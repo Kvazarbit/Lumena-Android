@@ -132,6 +132,12 @@ object GoalContractPolicy {
                     kind = CriterionKind.CODE_ACTION_EVIDENCE,
                     subject = requirement
                 )
+            } else {
+                criteria += AcceptanceCriterion(
+                    id = "code-content-evidence",
+                    kind = CriterionKind.FILE_CONTENT_EVIDENCE,
+                    subject = "file.read"
+                )
             }
         }
 
