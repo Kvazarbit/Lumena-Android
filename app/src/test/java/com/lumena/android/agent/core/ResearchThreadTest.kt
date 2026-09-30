@@ -210,20 +210,27 @@ class ResearchThreadTest {
 
 
     @Test
-    fun staleResearchThreadDoesNotHijackBareImplementationDirective() {
+    fun staleResearchThreadDoesNotHijackAnchoredImplementationContinuation() {
+        val codeGoal = "Онови aquarium.html і додай Fly"
         val thread = ResearchThreadState(
             rootGoal = "Знайди офіційну документацію API",
             discoveredUrls = listOf("https://developer.android.com/example"),
             readUrls = listOf("https://developer.android.com/example")
         )
+        val codeResolution = CodeTaskAnchor.resolve(
+            text = "реалізуй",
+            anchor = codeGoal,
+            lastAssistant = "План готовий."
+        )
+        assertTrue(codeResolution.continued)
 
         val resolved = ResearchThreadResolver.resolve(
-            text = "реалізуй",
-            previousGoal = "Онови aquarium.html і додай Fly",
+            text = codeResolution.text,
+            previousGoal = codeGoal,
             thread = thread
         )
 
-        assertEquals("Онови aquarium.html і додай Fly", resolved.goal)
+        assertEquals(codeGoal, resolved.goal)
         assertEquals(thread, resolved.thread)
         assertEquals(ResearchFollowUpKind.NONE, resolved.followUpKind)
     }
