@@ -237,7 +237,7 @@ class WorkThreadMemoryTest {
 
         val named =
             WorkThreadMemory.resolve(
-                text = "продовж акваріум",
+                text = "продовж aquarium",
                 state = research.state
             )
         assertTrue(named.continued)
