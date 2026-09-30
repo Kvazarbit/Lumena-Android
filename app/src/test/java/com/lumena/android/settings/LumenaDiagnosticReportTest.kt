@@ -284,7 +284,10 @@ class LumenaDiagnosticReportTest {
                             transferredShadow = 5,
                             languageCues = 7,
                             languageTransferred = 2,
-                            contributorModels = 3
+                            contributorModels = 3,
+                            legacyBackfillVersion = 1,
+                            legacyBackfillRecords = 10,
+                            liveRecords = 2
                         )
                 )
             )
@@ -298,6 +301,9 @@ class LumenaDiagnosticReportTest {
         assertTrue(report.contains("contested_peaks=2"))
         assertTrue(report.contains("language_cues=7"))
         assertTrue(report.contains("contributor_models=3"))
+        assertTrue(report.contains("legacy_backfill_version=1"))
+        assertTrue(report.contains("legacy_backfill_records=10"))
+        assertTrue(report.contains("live_records=2"))
         assertTrue(report.contains("immune_worst_peaks=4"))
         assertTrue(report.contains("immune_contested_peaks=2"))
         assertTrue(report.contains("constitution_activation=false"))
