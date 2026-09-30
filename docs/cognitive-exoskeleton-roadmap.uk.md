@@ -755,7 +755,8 @@ same-target verifier не створює independent evidence, target verificati
 - ToolGate/confirmation не змінюються;
 - після tool result store прив'язує verdict до реального request/evidence id;
 - pending approval/session persistence переносить тільки hash, не raw hypothesis;
-- diagnostics зливають persistent runtime stages з base causal telemetry.
+- diagnostics зливають persistent runtime stages з base causal telemetry;
+- окремо видно `cause_runtime_failures`, `cause_runtime_hypotheses_total` і `cause_runtime_probes_total`, щоб failure anchor/probe не губився за stage counters.
 
 Store bounded:
 `failures<=128`, `hypotheses<=128`, `probes<=256`.
