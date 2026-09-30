@@ -685,6 +685,69 @@ class AgentControllerTest {
     }
 
     @Test
+    fun missingPythonRunScriptUsesGroundedSchemaRepairAndDiscoveryFallback() {
+        val localTask = TaskState(
+            id = "python-schema-repair",
+            projectId = "transfer_recovery_lab",
+            goal = "Виправ failing tests у transfer_recovery_lab і повторно запусти той самий тест.",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val initial = controller.initial(localTask)
+
+        val repair = controller.interpret(
+            """{"tool":"python.run","args":{}}""",
+            initial
+        )
+
+        assertTrue(repair is ControllerInstruction.AskModelAgain)
+        repair as ControllerInstruction.AskModelAgain
+        assertEquals(0, repair.state.protocolRetries)
+        assertEquals(1, repair.state.schemaRepairs)
+        assertEquals(TaskStatus.WAITING_MODEL, repair.state.task.status)
+        assertEquals(localTask.goal, repair.state.task.goal)
+        assertTrue(repair.feedback.contains("TOOL_SCHEMA_REPAIR"))
+        assertTrue(repair.feedback.contains("python.run"))
+        assertTrue(repair.feedback.contains("\"script\":\"...\""))
+        assertTrue(repair.feedback.contains("workspace.list"))
+        assertTrue(repair.feedback.contains("file.search"))
+        assertTrue(repair.feedback.contains("do not guess", ignoreCase = true))
+        assertEquals(0, repair.state.task.step)
+        assertFalse(repair.state.toolUsed)
+
+        val discovery = controller.interpret(
+            """{"tool":"file.search","args":{"query":"run_tests.py","path":"transfer_recovery_lab"}}""",
+            repair.state
+        )
+        assertTrue(discovery is ControllerInstruction.Execute)
+        discovery as ControllerInstruction.Execute
+        assertEquals("file.search", discovery.call.tool)
+        assertEquals(0, discovery.state.schemaRepairs)
+    }
+
+    @Test
+    fun inlinePythonRunSourceUsesSchemaRepairInsteadOfGenericProtocolRetry() {
+        val state = controller.initial(
+            TaskState(
+                id = "python-inline-repair",
+                projectId = null,
+                goal = "Перевір Python скрипт.",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        val repair = controller.interpret(
+            """{"tool":"python.run","args":{"script":"print('x')"}}""",
+            state
+        )
+
+        assertTrue(repair is ControllerInstruction.AskModelAgain)
+        repair as ControllerInstruction.AskModelAgain
+        assertEquals(1, repair.state.schemaRepairs)
+        assertEquals(0, repair.state.protocolRetries)
+        assertTrue(repair.feedback.contains("existing .py file", ignoreCase = true))
+    }
+
+    @Test
     fun repeatedMissingRequiredArgsDegradesPartialInsteadOfFailed() {
         val localTask = TaskState(
             id = "schema-repair-bounded",

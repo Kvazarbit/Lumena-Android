@@ -19,6 +19,33 @@ class CodeTaskAnchorTest {
         assertEquals(html.text, html.anchor)
     }
 
+
+    @Test fun bareImplementationContinuationReusesExistingCodeGoal() {
+        val goal = "Онови aquarium.html: додай Fly, interception prediction і стрибок риби"
+        for (followUp in listOf(
+            "реалізуй",
+            "реалізуй це",
+            "зроби",
+            "виконай це",
+            "implement it",
+            "do it",
+            "zaimplementuj to"
+        )) {
+            val resolved = CodeTaskAnchor.resolve(followUp, goal, "План готовий.")
+            assertTrue("Expected continuation for: $followUp", resolved.continued)
+            assertEquals(goal, resolved.text)
+            assertEquals(goal, resolved.anchor)
+        }
+    }
+
+    @Test fun acknowledgementDoesNotEraseExistingCodeAnchor() {
+        val goal = "Create HTML aquarium"
+        val ack = CodeTaskAnchor.resolve("ок", goal, "Готово.")
+        assertEquals(goal, ack.anchor)
+        assertEquals("ок", ack.text)
+        assertFalse(ack.continued)
+    }
+
     @Test fun bareStackAndYesWithoutAnchorDoNotInventTask() {
         assertEquals("html+js", CodeTaskAnchor.resolve("html+js", null, null).text)
         assertEquals("так", CodeTaskAnchor.resolve("так", null, "Створити код?").text)

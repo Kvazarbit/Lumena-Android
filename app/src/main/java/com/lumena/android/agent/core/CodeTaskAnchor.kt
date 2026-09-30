@@ -4,8 +4,15 @@ data class CodeGoalResolution(val text: String, val anchor: String?, val continu
 
 /** Goal text only. Never carries execution state, approvals or tool receipts. */
 object CodeTaskAnchor {
-    private val confirmations = setOf("так", "да", "yes", "ok", "okay", "добре", "так зроби", "tak")
+    private val confirmations = setOf("так", "да", "yes", "ok", "okay", "ок", "окей", "добре", "так зроби", "tak")
     private val stack = Regex("(?i)^(?:html|css|js|javascript|typescript|python|kotlin|java|webgl)(?:\\s*[+/,&]\\s*(?:html|css|js|javascript|typescript|python|kotlin|java|webgl))*$")
+    private val implementationContinuation = Regex(
+        "(?iu)^(?:реалізуй(?:\\s+(?:це|його|її))?|зроби(?:\\s+це)?|виконай(?:\\s+це)?|" +
+            "продовж(?:уй)?\\s+реалізацію|реализуй(?:\\s+это)?|сделай(?:\\s+это)?|" +
+            "выполни(?:\\s+это)?|implement(?:\\s+it)?|do\\s+it|execute(?:\\s+it)?|" +
+            "continue\\s+(?:the\\s+)?implementation|zaimplementuj(?:\\s+to)?|" +
+            "zrób(?:\\s+to)?|wykonaj(?:\\s+to)?)$"
+    )
     private val meta = Regex("(?iu)^(?:чому|почему|why|dlaczego|що\\s+(?:це|сталося|не\\s+так)|what\\s+happened)\\b")
     private val offer = Regex("(?iu)(?:створ|напис|реаліз|созда|напис|create|write|implement|utworz|napisz)")
     private val code = Regex("(?iu)(?:код|скрипт|code|script|html|javascript|python|kotlin|програм)")
@@ -25,9 +32,14 @@ object CodeTaskAnchor {
         val normalized = value.lowercase().trimEnd('.', '!', '?', '…').trim()
         val confirmsOffer = normalized in confirmations && lastAssistant != null &&
             lastAssistant.contains('?') && offer.containsMatchIn(lastAssistant) && code.containsMatchIn(lastAssistant)
-        if (!anchor.isNullOrBlank() && (stack.matches(normalized) || confirmsOffer)) {
-            val goal = if (confirmsOffer) anchor else
-                anchor.take(7_500) + "\nUser clarification: " + value.take(500)
+        val continuesImplementation =
+            !anchor.isNullOrBlank() &&
+                implementationContinuation.matches(normalized)
+        if (!anchor.isNullOrBlank() && (stack.matches(normalized) || confirmsOffer || continuesImplementation)) {
+            val goal = when {
+                confirmsOffer || continuesImplementation -> anchor
+                else -> anchor.take(7_500) + "\nUser clarification: " + value.take(500)
+            }
             return CodeGoalResolution(goal, goal, continued = true)
         }
         if (meta.containsMatchIn(value)) return CodeGoalResolution(value, anchor)
