@@ -269,6 +269,36 @@ class LumenaDiagnosticReportTest {
     }
 
     @Test
+    fun reportIncludesPredictionActualDeltaTelemetryWithoutClaimingAuthority() {
+        val report =
+            LumenaDiagnosticFormatter.render(
+                input().copy(
+                    predictionDelta =
+                        DiagnosticPredictionDeltaView(
+                            expectations = 11,
+                            deltas = 11,
+                            matches = 7,
+                            unexpectedFailures = 2,
+                            unexpectedSuccesses = 0,
+                            schemaMismatches = 1,
+                            outcomeUnknown = 1,
+                            verificationMissing = 0
+                        )
+                )
+            )
+
+        assertTrue(report.contains("[PREDICTION_DELTA]"))
+        assertTrue(report.contains("expectations_total=11"))
+        assertTrue(report.contains("deltas_total=11"))
+        assertTrue(report.contains("matches=7"))
+        assertTrue(report.contains("unexpected_failures=2"))
+        assertTrue(report.contains("schema_mismatches=1"))
+        assertTrue(report.contains("outcome_unknown=1"))
+        assertTrue(report.contains("authority=advisory_only"))
+        assertTrue(report.contains("model_prose_is_evidence=false"))
+    }
+
+    @Test
     fun reportIncludesFractalExperienceAndImmuneShadowTelemetry() {
         val report =
             LumenaDiagnosticFormatter.render(
