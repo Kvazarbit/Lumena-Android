@@ -710,34 +710,63 @@ same-target verifier не створює independent evidence, target verificati
 
 ## Phase 3 — Verified Cause Ladder
 
-**Статус:** частково реалізовано через structured ToolResult metadata.
+**Статус:** LADDER POLICY + BASE TELEMETRY IMPLEMENTED IN BRANCH → CI PENDING · live probe persistence/wiring pending.
 
 ### Мета
 
 Перейти від `WHY_FAILED=UNKNOWN` до перевірюваної причинності без вигадування пояснень.
 
-### Реалізація
+### Реалізовано
 
-1. Deterministic mapping:
-   `failureClass/errorCode/dependency → structured cause family`.
-2. Окремий `CauseHypothesis` для неперевірених пояснень.
-3. Probe має посилання:
-   `hypothesis → probe action → evidence → result`.
-4. `VERIFIED_CAUSE` дозволений лише після supporting evidence.
-5. Якщо probe суперечить hypothesis — причина стає CONTESTED/REJECTED.
+1. Existing deterministic base:
+   `failureClass/errorCode/dependency → STRUCTURED_TOOL_FAILURE`;
+   без structured metadata причина лишається `UNKNOWN_NOT_CAPTURED`.
+2. Додано explicit `CauseLadderStage`:
+   `UNKNOWN / STRUCTURED / HYPOTHESIS / PROBED / VERIFIED / CONTESTED / REJECTED`.
+3. Додано `CauseHypothesis`:
+   model explanation зберігається лише як hash + provenance model id; raw model prose не стає evidence.
+4. Додано `CauseProbeEvidence`:
+   `hypothesisId + evidenceId + registered tool + target + verdict`.
+5. Promotion policy:
+   - no conclusive probe → `HYPOTHESIS`;
+   - один supporting probe → `PROBED`;
+   - два незалежні supporting tool/target signatures → `VERIFIED`;
+   - support + reject → `CONTESTED`;
+   - reject без support → `REJECTED`.
+6. Duplicate probe signature не може імітувати independent verification.
+7. Foreign hypothesis id або незареєстрований tool не підвищує cause.
+8. Fractal causal diagnostics тепер мають base counts:
+   `cause_unknown / cause_structured / cause_hypothesis / cause_probed / cause_verified / cause_contested / cause_rejected`
+   та invariant `cause_model_prose_is_evidence=false`.
+
+### Що ще не підключено live
+
+Pure ladder policy вже є, але app ще не має persistent runtime store для
+`CauseHypothesis/CauseProbeEvidence`. Тому live records зараз можуть реально
+показувати лише base stages `UNKNOWN` або `STRUCTURED`; higher stages не
+вигадуються і залишаються 0 до появи перевірених probe records.
 
 ### Tests
 
-- semantic model explanation alone не підвищує cause;
-- structured ToolResult може дати STRUCTURED_TOOL_FAILURE;
-- probe can promote/reject hypothesis;
-- conflicting probes remain contested;
-- no raw stderr injection into system prompt.
+- semantic model explanation alone → лише `HYPOTHESIS`;
+- structured ToolResult → `STRUCTURED`;
+- one support → `PROBED`, не VERIFIED;
+- two independent supports → `VERIFIED`;
+- duplicate signature не дає VERIFIED;
+- rejecting probe → `REJECTED`;
+- conflicting probes → `CONTESTED`;
+- invalid/foreign probe не підвищує hypothesis;
+- causal diagnostics не називають model prose evidence.
 
-### Gate
+### Наступний gate
 
-Causal packet явно розрізняє:
-`UNKNOWN / STRUCTURED / HYPOTHESIS / PROBED / VERIFIED`.
+1. exact-head CI green;
+2. persistent bounded Cause Probe store;
+3. runtime wiring:
+   `failure → hypothesis → explicit probe tool → evidence id → assessment`;
+4. phone test SUPPORT path;
+5. phone test REJECT/CONTESTED path;
+6. no new execution authority.
 
 ---
 
