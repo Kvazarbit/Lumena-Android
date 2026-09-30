@@ -419,7 +419,9 @@ fun WorkflowChatScreen(
         if (storedHistory != history) history = storedHistory
 
         val storedPending = restoredPendingFrom(stored.pending)
-        if (storedPending?.plan?.request != pending?.plan?.request) pending = storedPending
+        if (storedPending?.plan != pending?.plan) {
+            pending = storedPending
+        }
         val storedThread = stored.researchThread
             ?: stored.researchGoal?.let { legacy ->
                 ResearchThreadState(rootGoal = legacy)
