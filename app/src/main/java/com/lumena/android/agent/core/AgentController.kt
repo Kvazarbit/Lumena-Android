@@ -338,6 +338,16 @@ class AgentController(
 
         val canonical = decision.copy(tool = validation.canonicalTool)
 
+        validateCauseProbeAnnotation(
+            call = canonical,
+            state = state
+        )?.let { problem ->
+            return protocolRetry(
+                state,
+                problem
+            )
+        }
+
         val pendingRequired =
             state.requiredTools - state.completedRequiredTools
         val pendingResearchEvidence =
@@ -1594,6 +1604,62 @@ class AgentController(
         } else {
             budget.maxSemanticRecoveries
         }
+
+    private fun validateCauseProbeAnnotation(
+        call: AgentDecision.ToolCall,
+        state: AgentControlState
+    ): String? {
+        val hypothesis = call.causeHypothesis
+        val success = call.causeProbeOnSuccess
+        val failure = call.causeProbeOnFailure
+        val anyProbeMetadata =
+            hypothesis != null ||
+                success != null ||
+                failure != null
+
+        if (!anyProbeMetadata) return null
+
+        val priorFailure =
+            state.task.kernel.evidence
+                .any { !it.ok }
+        if (!priorFailure) {
+            return "CAUSE_PROBE_REJECTED: causal probe annotations require a prior failed TOOL_RESULT in the current task. No tool was executed."
+        }
+
+        if (hypothesis.isNullOrBlank()) {
+            return "CAUSE_PROBE_REJECTED: cause_hypothesis is required when cause probe mappings are present. No tool was executed."
+        }
+
+        if ((success == null) != (failure == null)) {
+            return "CAUSE_PROBE_REJECTED: provide both cause_probe_on_success and cause_probe_on_failure, or omit both. No tool was executed."
+        }
+
+        val allowed =
+            setOf(
+                "SUPPORTS",
+                "REJECTS",
+                "INCONCLUSIVE"
+            )
+        if (
+            success != null &&
+            (
+                success !in allowed ||
+                    failure !in allowed
+                )
+        ) {
+            return "CAUSE_PROBE_REJECTED: probe verdicts must be SUPPORTS, REJECTS, or INCONCLUSIVE. No tool was executed."
+        }
+
+        if (
+            success != null &&
+            success == "INCONCLUSIVE" &&
+            failure == "INCONCLUSIVE"
+        ) {
+            return "CAUSE_PROBE_REJECTED: a falsifiable probe needs at least one conclusive outcome mapping. No tool was executed."
+        }
+
+        return null
+    }
 
     private fun requiresToolEvidence(intent: TaskIntent): Boolean =
         intent in setOf(
