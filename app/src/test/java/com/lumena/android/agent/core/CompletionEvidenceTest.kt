@@ -19,6 +19,29 @@ class CompletionEvidenceTest {
         return state
     }
 
+    @Test fun codeWorkCannotFinishWithDoneBeforeAnyToolEvidence() {
+        val state = controller.initial(
+            TaskState(
+                id = "code-zero-tools",
+                projectId = "demo",
+                goal = "Онови aquarium.html і реалізуй Fly hunter",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        val result = controller.interpret(
+            """{"done":true,"summary":"Task complete."}""",
+            state
+        )
+
+        assertTrue(result is ControllerInstruction.AskModelAgain)
+        result as ControllerInstruction.AskModelAgain
+        assertEquals(TaskStatus.WAITING_MODEL, result.state.task.status)
+        assertEquals(0, result.state.task.step)
+        assertFalse(result.state.toolUsed)
+        assertTrue(result.feedback.contains("real TOOL_RESULT"))
+    }
+
     @Test fun doneCannotDenyRecordedToolExecution() {
         val result = controller.interpret("""{"done":true,"summary":"Не виконано: інструмент workspace.list не був викликаний у попередніх кроках."}""", executed())
         assertTrue(result is ControllerInstruction.AskModelAgain)
