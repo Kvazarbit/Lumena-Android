@@ -254,7 +254,13 @@ class ContextBuilder(
         appendLine(ConstitutionCapsule.prompt())
         appendLine()
         appendLine("TASK STATE")
-        appendLine("goal=${sanitize(task.goal).take(320)}")
+        appendLine(
+            "goal=" +
+                GoalContext.clip(
+                    task.goal,
+                    900
+                )
+        )
         appendLine("status=${task.status}")
         appendLine("step=${task.step}/${task.maxSteps}")
         if (task.step >= task.maxSteps) {
