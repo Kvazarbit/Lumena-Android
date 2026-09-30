@@ -32,10 +32,10 @@ data class PersistedPendingTool(
     val args: Map<String, String> = emptyMap(),
     val requestId: String? = null,
     val reason: String = "",
-    val causeProbeIntent: CauseProbeExecutionIntent? = null,
     val control: AgentControlState? = null,
     val history: List<PersistedHistoryMessage> = emptyList(),
-    val images: List<PersistedChatImage> = emptyList()
+    val images: List<PersistedChatImage> = emptyList(),
+    val causeProbeIntent: CauseProbeExecutionIntent? = null
 )
 
 data class LocalSessionSnapshot(
