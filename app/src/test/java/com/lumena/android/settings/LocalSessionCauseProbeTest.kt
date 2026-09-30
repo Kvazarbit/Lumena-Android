@@ -72,6 +72,36 @@ class LocalSessionCauseProbeTest {
     }
 
     @Test
+    fun legacySessionJsonWithoutWorkThreadsDefaultsSafely() {
+        val legacy =
+            """
+            {
+              "chat":[],
+              "history":[],
+              "task":null,
+              "pending":null,
+              "inputDraft":"",
+              "codeGoal":"Create HTML aquarium"
+            }
+            """.trimIndent()
+
+        val decoded =
+            requireNotNull(
+                adapter.fromJson(legacy)
+            )
+
+        assertTrue(
+            decoded.workThreads
+                .anchors
+                .isEmpty()
+        )
+        assertEquals(
+            "Create HTML aquarium",
+            decoded.codeGoal
+        )
+    }
+
+    @Test
     fun legacyPendingJsonWithoutCauseIntentDefaultsToNull() {
         val legacy =
             """
