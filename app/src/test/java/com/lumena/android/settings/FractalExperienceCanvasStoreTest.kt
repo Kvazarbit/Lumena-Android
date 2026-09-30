@@ -94,7 +94,7 @@ class FractalExperienceCanvasStoreTest {
         val state = FractalExperienceCanvasState(version = 1)
         val json = FractalExperienceCanvasCodec
             .encode(state)
-            .replace("\\"version\\":1", "\\"version\\":99")
+            .replace("\"version\":1", "\"version\":99")
 
         assertThrows(IllegalArgumentException::class.java) {
             FractalExperienceCanvasCodec.decode(json)
