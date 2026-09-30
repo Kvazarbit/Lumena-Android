@@ -357,7 +357,7 @@ revalidation у кількох незалежних source tasks із суміс
 
 ## Phase 1 — Prediction / Actual / Delta Ledger
 
-**Статус:** IMPLEMENTED IN BRANCH → EXACT-HEAD CI / PHONE GATE PENDING.
+**Статус:** CORE PHONE VERIFIED ✅ · unknown-effect transport safety remains CI-covered.
 
 ### Мета
 
@@ -456,17 +456,69 @@ authority=advisory_only
 model_prose_is_evidence=false
 ```
 
-### Acceptance gate
+### Phone acceptance
 
-1. exact-head Android CI green;
-2. owner-signed in-place canary;
-3. phone diagnostic показує `expectations_total > 0` після нового tool event;
-4. контрольний success збільшує `matches`;
-5. контрольний fail збільшує відповідний non-match delta;
-6. unknown-effect mutation не перетворюється на success/failure;
-7. старі causal/fractal counters і authority invariants не регресують.
+На owner-signed `0.12.17-ci1596` / versionCode 43 після чистого оновлення diagnostic спочатку показав:
 
-Phase 1 не закривається тільки за commit/CI. Потрібен реальний phone diagnostic.
+```text
+[PREDICTION_DELTA]
+expectations_total=0
+deltas_total=0
+matches=0
+unexpected_failures=0
+schema_mismatches=0
+outcome_unknown=0
+verification_missing=0
+```
+
+Це підтвердило, що legacy Coordinator events не отримали вигадані predictions заднім числом.
+
+Потім виконано три нові post-upgrade events:
+
+```text
+workspace.list[ok]
+file.write[ok] target=path=prediction_delta_failure_probe.py
+python.run[failed] target=script=prediction_delta_failure_probe.py exit=9
+```
+
+Наступний phone diagnostic показав:
+
+```text
+expectations_total=3
+deltas_total=3
+matches=2
+unexpected_failures=1
+unexpected_successes=0
+schema_mismatches=0
+outcome_unknown=0
+verification_missing=0
+authority=advisory_only
+model_prose_is_evidence=false
+```
+
+Це прямо підтверджує живий тракт:
+
+```text
+registered tool intention
+→ deterministic EXPECTED
+→ real ToolResult ACTUAL
+→ structural DELTA
+```
+
+Runtime exit=9 коректно став `UNEXPECTED_FAILURE`, а не `SCHEMA_MISMATCH`.
+
+### Gate result
+
+1. exact-head Android CI green ✅
+2. owner-signed in-place canary ✅
+3. fresh phone events створюють `expectations_total > 0` ✅
+4. success events збільшують `matches` ✅
+5. runtime failure збільшує `unexpected_failures` ✅
+6. legacy events не backfill-яться фальшивими predictions ✅
+7. causal/fractal counters і authority invariants не регресували ✅
+8. unknown-effect mutation safety покрита deterministic unit/CI test; окремий навмисний phone transport-loss mutation не форсується, бо це небезпечний acceptance probe.
+
+**Core Phase 1 закрито на телефоні. Наступний пріоритет: Phase 2 — Goal Contract і незалежні Verifiers.**
 
 ---
 
