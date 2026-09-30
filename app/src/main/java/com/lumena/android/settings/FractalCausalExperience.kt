@@ -40,7 +40,14 @@ data class FractalCausalStats(
     val unresolved: Int,
     val liveLinks: Int,
     val legacyLinks: Int,
-    val revalidatedPatterns: Int
+    val revalidatedPatterns: Int,
+    val causeUnknown: Int = 0,
+    val causeStructured: Int = 0,
+    val causeHypothesis: Int = 0,
+    val causeProbed: Int = 0,
+    val causeVerified: Int = 0,
+    val causeContested: Int = 0,
+    val causeRejected: Int = 0
 )
 
 /**
@@ -102,7 +109,15 @@ object FractalCausalExperiencePolicy {
             legacyLinks = links.count {
                 it.origin == FractalExperienceOrigin.LEGACY_BACKFILL
             },
-            revalidatedPatterns = revalidated
+            revalidatedPatterns = revalidated,
+            causeUnknown = links.count {
+                VerifiedCauseLadderPolicy.baseStage(it) ==
+                    CauseLadderStage.UNKNOWN
+            },
+            causeStructured = links.count {
+                VerifiedCauseLadderPolicy.baseStage(it) ==
+                    CauseLadderStage.STRUCTURED
+            }
         )
     }
 
