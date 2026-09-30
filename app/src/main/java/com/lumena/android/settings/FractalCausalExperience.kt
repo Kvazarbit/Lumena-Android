@@ -126,6 +126,12 @@ object FractalCausalExperiencePolicy {
                         append(link.recoveryTools.joinToString(" "))
                         append(' ')
                         append(link.targetHints.joinToString(" "))
+                        append(' ')
+                        append(link.causeFailureClass.orEmpty())
+                        append(' ')
+                        append(link.causeErrorCode.orEmpty())
+                        append(' ')
+                        append(link.causeDependency.orEmpty())
                     }
                 )
                 val overlap = searchable.count { it in queryTokens }
