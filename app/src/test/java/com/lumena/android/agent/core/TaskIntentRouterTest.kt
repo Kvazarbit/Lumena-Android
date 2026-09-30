@@ -32,6 +32,16 @@ class TaskIntentRouterTest {
     }
 
     @Test
+    fun updateHtmlArtifactRoutesToCodeWork() {
+        val profile = TaskIntentRouter.route(
+            "Онови aquarium.html: зроби реалістичний 3D акваріум з рибками."
+        )
+
+        assertEquals(TaskIntent.CODE_WORK, profile.intent)
+        assertEquals("context.snapshot", profile.preflight?.tool)
+    }
+
+    @Test
     fun codeWorkGetsOptionalContextSnapshot() {
         val profile = TaskIntentRouter.route(
             "виправ bug у Python script і перевір тестами"
