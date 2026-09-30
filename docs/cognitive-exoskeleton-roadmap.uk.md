@@ -799,6 +799,51 @@ cause_model_prose_is_evidence=false
 This phone-verifies backward-safe baseline behavior: historic causal records are
 not retroactively rewritten into runtime failure anchors, hypotheses, or probes.
 
+### Live phone PROBED evidence
+
+Controlled task on CI1741:
+
+```text
+file.read cause_ladder_missing_1741.txt -> FAILED
+cause hypothesis:
+"Помилка специфічна для цільового шляху, а не для всього workspace/bridge."
+workspace.list cause probe:
+on_success=SUPPORTS
+on_failure=REJECTS
+```
+
+Kernel evidence:
+
+```text
+e2 OBSERVE file.read ok=false target=cause_ladder_missing_1741.txt
+e3 OBSERVE workspace.list ok=true
+```
+
+Diagnostic after exactly one cause probe:
+
+```text
+cause_hypothesis=0
+cause_probed=1
+cause_verified=0
+cause_contested=0
+cause_rejected=0
+cause_runtime_failures=1
+cause_runtime_hypotheses_total=1
+cause_runtime_probes_total=1
+cause_model_prose_is_evidence=false
+```
+
+This phone-verifies the live transition
+`FAILED TOOL_RESULT → failure anchor → model hypothesis → predeclared probe mapping → real probe TOOL_RESULT → PROBED`.
+One supporting probe does not promote the hypothesis to VERIFIED.
+
+The same phone run also exposed an unrelated deterministic routing regression:
+the phrase "Контрольований тест ..." plus a later "виконай workspace.list"
+was globally combined into CODE_WORK, producing a spurious
+`code-action-evidence` Goal Contract criterion. The router is now patched in
+branch so generic test + execution-verb matching is clause-local; explicit
+software-test phrases remain CODE_WORK.
+
 ### Tests
 
 - semantic model explanation alone → лише `HYPOTHESIS`;
@@ -816,9 +861,9 @@ not retroactively rewritten into runtime failure anchors, hypotheses, or probes.
 1. exact-head CI green ✅
 2. owner-signed in-place canary ✅
 3. baseline upgrade не backfill-ить synthetic hypotheses/probes ✅
-4. phone task створює real failure anchor ⏳
+4. phone task створює real failure anchor ✅
 5. model hypothesis без probe evidence лишається `HYPOTHESIS` ⏳
-6. один falsifiable supporting probe дає `PROBED`, не VERIFIED ⏳
+6. один falsifiable supporting probe дає `PROBED`, не VERIFIED ✅
 7. другий independent supporting signature може дати `VERIFIED` ⏳
 8. rejecting/conflicting probe дає `REJECTED/CONTESTED` ⏳
 9. no new execution authority, model prose never evidence — invariant retained ✅
