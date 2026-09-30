@@ -241,6 +241,16 @@ class TaskIntentRouterTest {
     }
 
     @Test
+    fun toolProbePromptDoesNotBecomeCodeWorkAcrossSentences() {
+        val profile = TaskIntentRouter.route(
+            "Контрольований тест Cause Ladder. Спочатку через file.read прочитай файл probe_missing.txt. Потім виконай workspace.list як cause probe."
+        )
+
+        assertEquals(TaskIntent.FILE_INSPECTION, profile.intent)
+        assertTrue(profile.intent != TaskIntent.CODE_WORK)
+    }
+
+    @Test
     fun explicitRunTestsStillRoutesToCodeWork() {
         val profile = TaskIntentRouter.route("запусти тести")
 
