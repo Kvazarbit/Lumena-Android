@@ -114,7 +114,12 @@ data class DiagnosticFractalExperienceView(
     val contributorModels: Int = 0,
     val legacyBackfillVersion: Int = 0,
     val legacyBackfillRecords: Int = 0,
-    val liveRecords: Int = 0
+    val liveRecords: Int = 0,
+    val causalLinks: Int = 0,
+    val causalRecovered: Int = 0,
+    val causalUnresolved: Int = 0,
+    val causalLiveLinks: Int = 0,
+    val causalRevalidatedPatterns: Int = 0
 )
 
 data class LumenaDiagnosticInput(
@@ -501,6 +506,26 @@ object LumenaDiagnosticFormatter {
                     "live_records=" +
                         fractal.liveRecords
                 )
+                appendLine(
+                    "causal_links=" +
+                        fractal.causalLinks
+                )
+                appendLine(
+                    "causal_recovered=" +
+                        fractal.causalRecovered
+                )
+                appendLine(
+                    "causal_unresolved=" +
+                        fractal.causalUnresolved
+                )
+                appendLine(
+                    "causal_live_links=" +
+                        fractal.causalLiveLinks
+                )
+                appendLine(
+                    "causal_revalidated_patterns=" +
+                        fractal.causalRevalidatedPatterns
+                )
                 appendLine("immune_worst_peaks=" + fractal.worst)
                 appendLine(
                     "immune_contested_peaks=" +
@@ -784,7 +809,17 @@ object LumenaDiagnosticReport {
                 legacyBackfillRecords =
                     stats.legacyBackfillRecords,
                 liveRecords =
-                    stats.liveRecords
+                    stats.liveRecords,
+                causalLinks =
+                    stats.causalLinks,
+                causalRecovered =
+                    stats.causalRecovered,
+                causalUnresolved =
+                    stats.causalUnresolved,
+                causalLiveLinks =
+                    stats.causalLiveLinks,
+                causalRevalidatedPatterns =
+                    stats.causalRevalidatedPatterns
             )
         }.getOrElse { failure ->
             DiagnosticFractalExperienceView(
