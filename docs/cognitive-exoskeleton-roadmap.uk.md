@@ -524,44 +524,111 @@ Runtime exit=9 коректно став `UNEXPECTED_FAILURE`, а не `SCHEMA_M
 
 ## Phase 2 — Goal Contract і незалежні Verifiers
 
-**Статус:** PLAN.
+**Статус:** V1 IMPLEMENTED IN BRANCH → EXACT-HEAD CI / PHONE GATE PENDING.
 
 ### Мета
 
-Відрізнити «інструмент успішно спрацював» від «користувацька мета реально виконана».
+Відрізнити «інструмент успішно спрацював» від «обов'язкові типізовані критерії
+цієї operational goal реально мають evidence».
 
-### Реалізація
+v1 навмисно має `coverage=TYPED_OPERATIONAL_V1`, а не `FULL_SEMANTIC_PROOF`.
+Passing усіх критеріїв не означає автоматичну доказаність довільної
+business/visual/subjective властивості.
 
-Додати:
+### Реалізований vertical slice
+
+Додано:
 
 - `GoalContract`;
 - `AcceptanceCriterion`;
 - `CriterionEvidence`;
-- `CriterionStatus = PENDING/PASSED/FAILED/UNKNOWN`.
+- `CriterionStatus = PENDING/PASSED/FAILED/UNKNOWN`;
+- `VerificationStrength = TOOL_RESULT/INDEPENDENT_TOOL_RESULT`;
+- persisted `TaskState.goalContract` із backward-compatible default.
 
-Перші типові критерії:
+Поточні criterion kinds:
 
-- файл існує/не існує;
-- файл містить очікувану структуру;
-- syntax pass;
-- tests pass;
-- HTTP endpoint віддає актуальний artifact;
-- процес живий;
-- package/version встановлено;
-- signature/certificate збігаються;
-- browser/manual confirmation потрібна й ще відсутня.
+- `OPERATIONAL_TOOL_EVIDENCE`;
+- `REQUIRED_TOOL_SUCCESS`;
+- `VISUAL_EVIDENCE`;
+- `SOURCE_CONTENT_EVIDENCE`;
+- `FILE_CONTENT_EVIDENCE`;
+- `CODE_ACTION_EVIDENCE`;
+- `PYTHON_TARGET_VERIFIED`.
+
+### Ключові gates
+
+- PUBLIC_WEB: `web.search` сам не закриває source evidence; потрібен
+  `web.read/http.get/http.json`.
+- FILE_INSPECTION: content criterion додається лише коли goal просить прочитати
+  вміст, а не для простого listing.
+- CODE_WORK: `context.snapshot` сам не закриває task; потрібен successful
+  MUTATING або EXECUTABLE action.
+- Python mutation: successful `file.write/file.patch` створює target-specific
+  pending verification criterion.
+- `python.syntax_check/python.run` того самого target або full-project
+  `python.tests` переводить criterion у PASSED як
+  `INDEPENDENT_TOOL_RESULT`.
+- повторна зміна того самого Python target інвалідує старе verification evidence
+  і повертає criterion у PENDING.
+- plain reply і DONE не можуть обійти mandatory criteria.
+
+Старі hard completion checks не видалені.
+
+### Backward compatibility
+
+Старий TaskState/session JSON без `goalContract` читається як
+`coverage=NONE`; критерії не вигадуються заднім числом.
+
+### Diagnostics
+
+Новий блок:
+
+```text
+[GOAL_CONTRACT]
+present=
+coverage=
+criteria=
+mandatory=
+passed=
+independent_passed=
+pending=
+all_mandatory_passed=
+coverage_is_full_semantic_proof=false
+```
 
 ### Tests
 
-- `done` неможливий без mandatory criteria;
-- tool success alone не закриває goal;
-- stale evidence invalidates criterion;
-- зміна файла після test invalidates стару verification;
-- manual/visual criterion не підміняється model prose.
+Додано regression coverage для:
 
-### Gate
+- GENERAL без synthetic criteria;
+- search snippet не закриває PUBLIC_WEB;
+- content inspection вимагає `file.read`;
+- listing-only goal не отримує зайвий content criterion;
+- CODE preflight не є code-delivery proof;
+- explicit required tool потребує exact successful tool;
+- Python mutation створює pending criterion;
+- unrelated verifier не проходить target criterion;
+- same-target verifier дає independent evidence;
+- rewrite після verification інвалідує старий evidence;
+- old TaskState JSON compatibility;
+- goal criteria входять у mandatory model context;
+- diagnostic telemetry не називає contract full semantic proof.
 
-False-DONE regression corpus = 0 нових регресій.
+Деталі: [GOAL_CONTRACT_V1.uk.md](GOAL_CONTRACT_V1.uk.md).
+
+### Acceptance gate
+
+1. exact-head Android CI green;
+2. owner-signed in-place canary;
+3. phone diagnostic показує `coverage=TYPED_OPERATIONAL_V1` на operational task;
+4. preflight-only code task має pending `code-action-evidence`;
+5. Python mutation створює pending target criterion;
+6. independent verifier збільшує `independent_passed` і закриває target criterion;
+7. false-DONE regressions не з'являються;
+8. Fractal/Causal/Prediction і authority invariants не регресують.
+
+Phase 2 v1 не закривається лише за commit/CI — потрібен phone evidence.
 
 ---
 
