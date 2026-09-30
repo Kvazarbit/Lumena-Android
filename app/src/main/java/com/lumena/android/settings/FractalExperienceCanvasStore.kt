@@ -19,7 +19,12 @@ data class FractalExperienceCanvasStats(
     val contributorModels: Int,
     val legacyBackfillVersion: Int,
     val legacyBackfillRecords: Int,
-    val liveRecords: Int
+    val liveRecords: Int,
+    val causalLinks: Int = 0,
+    val causalRecovered: Int = 0,
+    val causalUnresolved: Int = 0,
+    val causalLiveLinks: Int = 0,
+    val causalRevalidatedPatterns: Int = 0
 )
 
 object FractalExperienceCanvasCodec {
@@ -235,16 +240,38 @@ object FractalExperienceCanvasStore {
         limit: Int = 6
     ): List<String> =
         synchronized(lock) {
+            val boundedLimit = limit.coerceIn(1, 32)
             val scopeHash = scopeId
                 ?.takeIf { it.isNotBlank() }
                 ?.let(CoordinatorExperiencePolicy::hash)
-            FractalExperienceCanvasPolicy.relevant(
-                state = load(context),
+            val state = load(context)
+
+            // Causal recovery chains are derived only from already-verified
+            // records. Reserve at most two prompt slots so they enrich rather
+            // than replace the existing fractal hierarchy.
+            val causal = FractalCausalExperiencePolicy.relevant(
+                records = state.records,
                 query = query,
                 scopeHash = scopeHash,
-                limit = limit
-            )
-                .map(FractalExperienceCanvasPolicy::formatForPrompt)
+                limit = minOf(2, boundedLimit)
+            ).map(FractalCausalExperiencePolicy::formatForPrompt)
+
+            val remaining = (boundedLimit - causal.size).coerceAtLeast(0)
+            val fractal =
+                if (remaining == 0) {
+                    emptyList()
+                } else {
+                    FractalExperienceCanvasPolicy.relevant(
+                        state = state,
+                        query = query,
+                        scopeHash = scopeHash,
+                        limit = remaining
+                    ).map(FractalExperienceCanvasPolicy::formatForPrompt)
+                }
+
+            (causal + fractal)
+                .distinct()
+                .take(boundedLimit)
         }
 
     fun nodes(
@@ -293,6 +320,8 @@ object FractalExperienceCanvasStore {
             val models = state.nodes
                 .flatMap { it.contributorModelIds }
                 .distinct()
+            val causal =
+                FractalCausalExperiencePolicy.stats(state.records)
             FractalExperienceCanvasStats(
                 records = state.records.size,
                 nodes = state.nodes.size,
@@ -324,7 +353,13 @@ object FractalExperienceCanvasStore {
                 },
                 liveRecords = state.records.count {
                     it.origin == FractalExperienceOrigin.LIVE
-                }
+                },
+                causalLinks = causal.links,
+                causalRecovered = causal.recovered,
+                causalUnresolved = causal.unresolved,
+                causalLiveLinks = causal.liveLinks,
+                causalRevalidatedPatterns =
+                    causal.revalidatedPatterns
             )
         }
 
