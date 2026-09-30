@@ -78,6 +78,13 @@ class AgentController(
         val profile = TaskIntentRouter.route(task.goal)
         val requiredTools =
             TaskIntentRouter.explicitRequiredTools(task.goal)
+        val goalContract =
+            GoalContractPolicy.initial(
+                intent = profile.intent,
+                requiredTools = requiredTools,
+                visualRequired =
+                    VisualGoalRouter.route(task.goal) != null
+            )
         val reserve = if (profile.preflight != null) 1 else 0
         val initialToolBudget = maxOf(
             task.maxSteps + reserve,
@@ -85,7 +92,8 @@ class AgentController(
         ).coerceAtMost(budget.maxTotalSteps)
         return AgentControlState(
             task = task.copy(
-                maxSteps = initialToolBudget
+                maxSteps = initialToolBudget,
+                goalContract = goalContract
             ),
             intent = profile.intent,
             requiredTools = requiredTools,
@@ -740,7 +748,25 @@ class AgentController(
         decision: AgentDecision.Done,
         state: AgentControlState
     ): ControllerInstruction {
-        ContextKernel.completionBlocker(state.task.kernel)?.let { return protocolRetry(state, it) }
+        ContextKernel.completionBlocker(state.task.kernel)?.let {
+            return protocolRetry(state, it)
+        }
+        val incompleteGoalCriteria =
+            GoalContractPolicy.incompleteMandatory(
+                state.task.goalContract
+            )
+        if (incompleteGoalCriteria.isNotEmpty()) {
+            return protocolRetry(
+                state,
+                "Goal contract has unverified mandatory criteria: " +
+                    incompleteGoalCriteria
+                        .take(8)
+                        .joinToString { it.id } +
+                    ". Use independent TOOL_RESULT evidence where required, " +
+                    "or return partial. Passing typed criteria still does not " +
+                    "prove arbitrary semantic/business properties."
+            )
+        }
         val missingRequired =
             state.requiredTools - state.completedRequiredTools
         if (missingRequired.isNotEmpty()) {
@@ -842,11 +868,36 @@ class AgentController(
             )
         }
 
-        // Plain replies must not bypass interruption or same-target verification,
-        // including the existing verified-image completion shortcut.
-        val blocker = ContextKernel.completionBlocker(state.task.kernel)
-            ?: if (state.verificationRequired) state.verificationReason ?: "Verification is required." else null
-        if (blocker != null) return recoverPlainReply(state, trimmed, blocker)
+        // Plain replies must not bypass interruption, typed goal criteria,
+        // or same-target verification, including the verified-image shortcut.
+        val pendingGoalCriteria =
+            GoalContractPolicy.incompleteMandatory(
+                state.task.goalContract
+            )
+        val blocker =
+            ContextKernel.completionBlocker(
+                state.task.kernel
+            )
+                ?: pendingGoalCriteria
+                    .takeIf { it.isNotEmpty() }
+                    ?.joinToString(
+                        prefix =
+                            "Goal contract still needs verified criteria: ",
+                        separator = ","
+                    ) { it.id }
+                ?: if (state.verificationRequired) {
+                    state.verificationReason
+                        ?: "Verification is required."
+                } else {
+                    null
+                }
+        if (blocker != null) {
+            return recoverPlainReply(
+                state,
+                trimmed,
+                blocker
+            )
+        }
 
         summaryConsistency(trimmed, state)?.let { return it }
 
@@ -943,6 +994,13 @@ class AgentController(
             return false
         }
         if (ContextKernel.completionBlocker(state.task.kernel) != null) {
+            return false
+        }
+        if (
+            !GoalContractPolicy.allMandatoryPassed(
+                state.task.goalContract
+            )
+        ) {
             return false
         }
 
@@ -1169,13 +1227,32 @@ class AgentController(
             state.task.maxSteps
         }
 
+        val nextKernel =
+            ContextKernel.record(
+                state.task.kernel,
+                call,
+                ok,
+                resultText
+            ).copy(
+                pendingVerification =
+                    pendingPythonPaths
+            )
+        val nextGoalContract =
+            GoalContractPolicy.afterTool(
+                contract = state.task.goalContract,
+                call = call,
+                ok = ok,
+                kernel = nextKernel
+            )
+
         val nextTask = state.task.copy(
             status = TaskStatus.WAITING_MODEL,
             step = nextStep,
             maxSteps = recoveryMaxSteps,
             lastTool = call.tool,
             lastResult = resultText,
-            kernel = ContextKernel.record(state.task.kernel, call, ok, resultText).copy(pendingVerification = pendingPythonPaths),
+            kernel = nextKernel,
+            goalContract = nextGoalContract,
             errors = if (ok) state.task.errors else (state.task.errors + resultText).takeLast(8)
         )
 
