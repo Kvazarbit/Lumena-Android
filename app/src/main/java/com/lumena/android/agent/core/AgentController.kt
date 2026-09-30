@@ -296,7 +296,13 @@ class AgentController(
             val knownTool = validation.canonicalTool
             if (
                 knownTool != null &&
-                problem.startsWith("Missing required args:")
+                (
+                    problem.startsWith("Missing required args:") ||
+                        (
+                            knownTool in setOf("python.run", "python.syntax_check") &&
+                                problem.startsWith("python script arg must be")
+                        )
+                    )
             ) {
                 return toolSchemaRepair(
                     state = state,
@@ -567,19 +573,38 @@ class AgentController(
         problem: String
     ): ControllerInstruction {
         val repairs = state.schemaRepairs + 1
+        val schemaTools =
+            if (tool in setOf("python.run", "python.syntax_check")) {
+                // A missing script path cannot be repaired safely by inventing
+                // one. Expose bounded read-only discovery fallbacks instead.
+                setOf(tool, "file.search", "workspace.list")
+            } else {
+                setOf(tool)
+            }
         val schema = ToolRegistry.renderForPrompt(
-            allowed = setOf(tool),
+            allowed = schemaTools,
             compact = false
         )
         val toolSpecific =
-            if (tool == "inspect.batch") {
-                """
-                For inspect.batch, args.requests must be ONE string containing a JSON array.
-                Example value for requests:
-                [{"tool":"file.search","args":{"query":"bitcoin","path":"@shared"}}]
-                """.trimIndent()
-            } else {
-                ""
+            when (tool) {
+                "inspect.batch" -> {
+                    """
+                    For inspect.batch, args.requests must be ONE string containing a JSON array.
+                    Example value for requests:
+                    [{"tool":"file.search","args":{"query":"bitcoin","path":"@shared"}}]
+                    """.trimIndent()
+                }
+
+                "python.run", "python.syntax_check" -> {
+                    """
+                    For $tool, args.script must be the relative path of an EXISTING .py file.
+                    Never place inline Python source in args.script.
+                    If the exact script path is not already grounded in the active task or verified tool results,
+                    do not guess it: use workspace.list or file.search first, then retry $tool with the verified path.
+                    """.trimIndent()
+                }
+
+                else -> ""
             }
 
         if (repairs > 2) {
@@ -616,7 +641,9 @@ class AgentController(
                 appendLine(toolSpecific)
             }
             appendLine(
-                "Return exactly one corrected JSON tool object using the required args. " +
+                "Return exactly one valid JSON tool object from the schemas above. " +
+                    "Prefer correcting the requested tool when its required values are already grounded. " +
+                    "If a required value is unknown, use only a listed read-only discovery tool first. " +
                     "Do not repeat the malformed call and do not invent TOOL_RESULT."
             )
         }.take(2_400)
