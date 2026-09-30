@@ -146,6 +146,37 @@ class FractalExperienceCanvasPolicyTest {
     }
 
     @Test
+    fun canonicalLanguageIntentSeparatesCodeContinuationFromResearchApply() {
+        assertEquals(
+            "CONTINUE_CODE",
+            FractalLanguageIntentPolicy.canonicalIntent(
+                codeContinued = true,
+                researchFollowUpKind =
+                    com.lumena.android.agent.core.ResearchFollowUpKind.APPLY,
+                resolvedGoal = "Онови aquarium.html"
+            )
+        )
+        assertEquals(
+            "RESEARCH_APPLY",
+            FractalLanguageIntentPolicy.canonicalIntent(
+                codeContinued = false,
+                researchFollowUpKind =
+                    com.lumena.android.agent.core.ResearchFollowUpKind.APPLY,
+                resolvedGoal = "реалізуй це"
+            )
+        )
+        assertEquals(
+            "CODE_WORK",
+            FractalLanguageIntentPolicy.canonicalIntent(
+                codeContinued = false,
+                researchFollowUpKind =
+                    com.lumena.android.agent.core.ResearchFollowUpKind.NONE,
+                resolvedGoal = "Створи Python script"
+            )
+        )
+    }
+
+    @Test
     fun languageCueMovesUnknownToTransferredShadowAndConflictBackToContested() {
         var state = FractalExperienceCanvasState()
         state = FractalExperienceCanvasPolicy.observeLanguage(
