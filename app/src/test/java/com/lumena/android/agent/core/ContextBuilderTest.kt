@@ -177,6 +177,60 @@ class ContextBuilderTest {
     }
 
     @Test
+    fun typedGoalContractObligationsStayInMandatoryContext() {
+        val contract = GoalContract(
+            coverage = GoalContractCoverage.TYPED_OPERATIONAL_V1,
+            criteria = listOf(
+                AcceptanceCriterion(
+                    id = "operational-tool-evidence",
+                    kind = CriterionKind.OPERATIONAL_TOOL_EVIDENCE,
+                    status = CriterionStatus.PASSED
+                ),
+                AcceptanceCriterion(
+                    id = "source-content-evidence",
+                    kind = CriterionKind.SOURCE_CONTENT_EVIDENCE,
+                    status = CriterionStatus.PENDING
+                )
+            )
+        )
+        val context = ContextBuilder(
+            maxChars = ConstitutionCapsule.MIN_CONTEXT_CHARS
+        ).build(
+            task = TaskState(
+                id = "goal-contract-context",
+                projectId = null,
+                goal = "Find and verify current source evidence",
+                status = TaskStatus.WAITING_MODEL,
+                goalContract = contract
+            ),
+            project = null,
+            relevantMemory = List(12) {
+                "optional memory " + "x".repeat(500)
+            }
+        )
+
+        assertTrue(
+            context.contains(
+                "GOAL CONTRACT (typed operational coverage; not full semantic proof)"
+            )
+        )
+        assertTrue(
+            context.contains(
+                "pending=source-content-evidence"
+            )
+        )
+        assertTrue(
+            context.contains(
+                "- source-content-evidence"
+            )
+        )
+        assertTrue(
+            context.length <=
+                ConstitutionCapsule.MIN_CONTEXT_CHARS
+        )
+    }
+
+    @Test
     fun verifiedMemoryIsSanitizedAndBoundedWhenBudgetAllows() {
         val context = ContextBuilder(
             maxMemoryItems = 2,
