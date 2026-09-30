@@ -329,6 +329,20 @@ object VerifiedCauseLadderStore {
                 }
             }
 
+            val retainedHypothesisIds =
+                hypotheses
+                    .map {
+                        it.hypothesis.id
+                    }
+                    .toSet()
+            probes =
+                probes
+                    .filter {
+                        it.probe.hypothesisId in
+                            retainedHypothesisIds
+                    }
+                    .takeLast(MAX_PROBES)
+
             val next =
                 VerifiedCauseLadderState(
                     version = 1,
