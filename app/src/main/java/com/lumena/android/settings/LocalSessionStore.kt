@@ -4,6 +4,7 @@ import android.content.Context
 import com.lumena.android.agent.core.AgentControlState
 import com.lumena.android.agent.core.ResearchThreadState
 import com.lumena.android.agent.core.TaskState
+import com.lumena.android.agent.local.CauseProbeExecutionIntent
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 
@@ -31,6 +32,7 @@ data class PersistedPendingTool(
     val args: Map<String, String> = emptyMap(),
     val requestId: String? = null,
     val reason: String = "",
+    val causeProbeIntent: CauseProbeExecutionIntent? = null,
     val control: AgentControlState? = null,
     val history: List<PersistedHistoryMessage> = emptyList(),
     val images: List<PersistedChatImage> = emptyList()
@@ -95,6 +97,21 @@ object LocalSessionStore {
                 .map { it.copy(content = it.content.take(MAX_MESSAGE_CHARS)) },
             pending = snapshot.pending?.copy(
                 requestId = snapshot.pending.requestId?.take(220),
+                causeProbeIntent =
+                    snapshot.pending.causeProbeIntent?.copy(
+                        hypothesisHash =
+                            snapshot.pending.causeProbeIntent
+                                .hypothesisHash
+                                .take(24),
+                        onSuccess =
+                            snapshot.pending.causeProbeIntent
+                                .onSuccess
+                                ?.take(24),
+                        onFailure =
+                            snapshot.pending.causeProbeIntent
+                                .onFailure
+                                ?.take(24)
+                    ),
                 control = snapshot.pending.control?.copy(
                     plan = snapshot.pending.control.plan.take(6).map { it.take(180) },
                     task = snapshot.pending.control.task.copy(
