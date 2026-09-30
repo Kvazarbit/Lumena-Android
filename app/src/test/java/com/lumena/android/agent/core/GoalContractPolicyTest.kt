@@ -112,6 +112,29 @@ class GoalContractPolicyTest {
     }
 
     @Test
+    fun directoryListingGoalDoesNotInventFileContentCriterion() {
+        val contract = GoalContractPolicy.initial(
+            intent = TaskIntent.FILE_INSPECTION,
+            requiredTools = emptySet(),
+            visualRequired = false,
+            goal = "покажи список файлів у папці"
+        )
+
+        assertTrue(
+            contract.criteria.none {
+                it.kind ==
+                    CriterionKind.FILE_CONTENT_EVIDENCE
+            }
+        )
+        assertTrue(
+            contract.criteria.any {
+                it.kind ==
+                    CriterionKind.OPERATIONAL_TOOL_EVIDENCE
+            }
+        )
+    }
+
+    @Test
     fun fileInspectionNeedsRealFileRead() {
         var contract = GoalContractPolicy.initial(
             intent = TaskIntent.FILE_INSPECTION,
