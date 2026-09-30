@@ -371,11 +371,15 @@ object TaskIntentRouter {
     }
 
     private fun isCodeWork(lower: String): Boolean {
-        val codeTerms = listOf(
+        // "test/тест" is deliberately NOT a strong code subject. Natural
+        // conversation often asks whether a medical/scientific claim was
+        // "перевірено тестами"; treating that phrase as software work starts a
+        // context.snapshot preflight and poisons an otherwise conversational turn.
+        val strongCodeTerms = listOf(
             "python", ".py", "kotlin", ".kt", "java", ".java", "gradle",
             "html", ".html", "css", ".css", "javascript", "typescript", "js", "webgl",
             "скрипт", "script", "код", "code", "compile", "компіля",
-            "test", "тест", "bug", "баг", "debug", "fix(", "repo", "repository",
+            "bug", "баг", "debug", "fix(", "repo", "repository",
             "github", "git "
         )
         val actionTerms = listOf(
@@ -383,14 +387,55 @@ object TaskIntentRouter {
             "виправ", "fix", "редаг", "edit", "patch", "перевір", "test",
             "запуст", "run", "debug", "build", "збір", "commit"
         )
-        if (!codeTerms.any { containsTerm(lower, it) }) return false
-        if (actionTerms.any { containsTerm(lower, it) }) return true
+
+        val hasStrongCodeSubject =
+            strongCodeTerms.any { containsTerm(lower, it) }
+        if (hasStrongCodeSubject && actionTerms.any { containsTerm(lower, it) }) {
+            return true
+        }
+
+        if (isExplicitSoftwareTestOperation(lower)) return true
+
+        if (!hasStrongCodeSubject) return false
+
         // Tolerate one mistyped letter in a leading creation imperative, only
         // when an explicit code subject is present. This grants no tool authority.
         val leading = Regex("^\\p{L}+").find(lower)?.value ?: return false
         return listOf("створи", "створити", "напиши", "create", "write", "implement").any { verb ->
             leading.length == verb.length && leading.zip(verb).count { (a, b) -> a != b } <= 1
         }
+    }
+
+    private fun isExplicitSoftwareTestOperation(lower: String): Boolean {
+        if (listOf(
+                "python.tests",
+                "pytest",
+                "unit test",
+                "unit tests",
+                "integration test",
+                "integration tests",
+                "тести коду",
+                "тест коду",
+                "тести скрипта",
+                "тест скрипта",
+                "тести проєкту",
+                "тести проекту"
+            ).any { containsTerm(lower, it) }
+        ) {
+            return true
+        }
+
+        val testObject = Regex(
+            "(?iu)\\b(?:тест(?:и|ів|ами|ах)?|tests?)\\b"
+        ).containsMatchIn(lower)
+        if (!testObject) return false
+
+        // Require an execution verb. In particular, "перевірено тестами" is a
+        // factual/scientific question, not an instruction to run software tests.
+        return Regex(
+            "(?iu)\\b(?:запусти|запустити|запускай|прожени|прогнати|виконай|виконати|" +
+                "run|execute|rerun|uruchom|wykonaj)\\b"
+        ).containsMatchIn(lower)
     }
 
     private fun isFileInspection(lower: String): Boolean {
