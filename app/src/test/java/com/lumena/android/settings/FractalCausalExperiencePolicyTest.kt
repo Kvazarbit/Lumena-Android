@@ -226,6 +226,42 @@ class FractalCausalExperiencePolicyTest {
     }
 
     @Test
+    fun causeStatsExposeOnlyEvidenceLevelsActuallyPresent() {
+        val unknown = record(
+            id = "cause-level-unknown",
+            kind = CoordinatorExampleKind.RECOVERY,
+            task = "task-unknown",
+            outcomes = listOf(false, true, true)
+        )
+        val structured = record(
+            id = "cause-level-structured",
+            kind = CoordinatorExampleKind.RECOVERY,
+            task = "task-structured",
+            outcomes = listOf(false, true, true)
+        ).copy(
+            failureClasses =
+                listOf("INVALID_INPUT", null, null),
+            errorCodes =
+                listOf("PYTHON_SCRIPT_REQUIRED", null, null),
+            dependencies =
+                listOf("tool-schema", null, null)
+        )
+
+        val stats =
+            FractalCausalExperiencePolicy.stats(
+                listOf(unknown, structured)
+            )
+
+        assertEquals(1, stats.causeUnknown)
+        assertEquals(1, stats.causeStructured)
+        assertEquals(0, stats.causeHypothesis)
+        assertEquals(0, stats.causeProbed)
+        assertEquals(0, stats.causeVerified)
+        assertEquals(0, stats.causeContested)
+        assertEquals(0, stats.causeRejected)
+    }
+
+    @Test
     fun structuredToolFailureBecomesEvidenceGroundedWhyFailed() {
         val source = record(
             id = "structured-cause",
