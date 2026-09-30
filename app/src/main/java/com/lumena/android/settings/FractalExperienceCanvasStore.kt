@@ -62,6 +62,31 @@ object FractalExperienceCanvasCodec {
             require(record.targets.size <= 16)
             require(record.targets.all { it.length <= 240 })
             require(record.outcomes.size == record.tools.size)
+            require(
+                record.failureClasses.isEmpty() ||
+                    record.failureClasses.size == record.tools.size
+            )
+            require(
+                record.errorCodes.isEmpty() ||
+                    record.errorCodes.size == record.tools.size
+            )
+            require(
+                record.retryableFlags.isEmpty() ||
+                    record.retryableFlags.size == record.tools.size
+            )
+            require(
+                record.dependencies.isEmpty() ||
+                    record.dependencies.size == record.tools.size
+            )
+            require(
+                record.failureClasses.filterNotNull().all { it.length <= 120 }
+            )
+            require(
+                record.errorCodes.filterNotNull().all { it.length <= 120 }
+            )
+            require(
+                record.dependencies.filterNotNull().all { it.length <= 160 }
+            )
             require(record.evidenceIds.size <= 64)
             require(record.contributorModelIds.size <= 16)
             require(record.updatedAt > 0)
