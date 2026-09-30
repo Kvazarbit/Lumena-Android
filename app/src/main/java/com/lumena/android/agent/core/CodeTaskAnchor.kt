@@ -4,7 +4,7 @@ data class CodeGoalResolution(val text: String, val anchor: String?, val continu
 
 /** Goal text only. Never carries execution state, approvals or tool receipts. */
 object CodeTaskAnchor {
-    private val confirmations = setOf("так", "да", "yes", "ok", "okay", "добре", "так зроби", "tak")
+    private val confirmations = setOf("так", "да", "yes", "ok", "okay", "ок", "окей", "добре", "так зроби", "tak")
     private val stack = Regex("(?i)^(?:html|css|js|javascript|typescript|python|kotlin|java|webgl)(?:\\s*[+/,&]\\s*(?:html|css|js|javascript|typescript|python|kotlin|java|webgl))*$")
     private val implementationContinuation = Regex(
         "(?iu)^(?:реалізуй(?:\\s+(?:це|його|її))?|зроби(?:\\s+це)?|виконай(?:\\s+це)?|" +
