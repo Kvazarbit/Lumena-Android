@@ -177,6 +177,87 @@ class GoalContractPolicyTest {
     }
 
     @Test
+    fun mutationGoalCannotBeSatisfiedByOnlyRunningExistingCode() {
+        var contract = GoalContractPolicy.initial(
+            intent = TaskIntent.CODE_WORK,
+            requiredTools = emptySet(),
+            visualRequired = false,
+            goal = "виправ bug у Python script"
+        )
+        var kernel = ContextKernelState()
+
+        val run = AgentDecision.ToolCall(
+            tool = "python.run",
+            args = mapOf("script" to "existing.py")
+        )
+        val runResult = recorded(
+            contract,
+            run,
+            true,
+            kernel
+        )
+        contract = runResult.first
+        kernel = runResult.second
+
+        val action = contract.criteria
+            .first { it.id == "code-action-evidence" }
+        assertEquals("mutating", action.subject)
+        assertEquals(
+            CriterionStatus.PENDING,
+            action.status
+        )
+
+        val patch = AgentDecision.ToolCall(
+            tool = "file.patch",
+            args = mapOf(
+                "path" to "existing.py",
+                "old" to "bad",
+                "new" to "good"
+            )
+        )
+        contract = recorded(
+            contract,
+            patch,
+            true,
+            kernel
+        ).first
+
+        assertEquals(
+            CriterionStatus.PASSED,
+            contract.criteria
+                .first { it.id == "code-action-evidence" }
+                .status
+        )
+    }
+
+    @Test
+    fun executionGoalCanBeSatisfiedByExecutableToolWithoutMutation() {
+        val initial = GoalContractPolicy.initial(
+            intent = TaskIntent.CODE_WORK,
+            requiredTools = emptySet(),
+            visualRequired = false,
+            goal = "запусти тести Python"
+        )
+        val tests = AgentDecision.ToolCall(
+            tool = "python.tests",
+            args = mapOf("cwd" to ".")
+        )
+        val result = recorded(
+            initial,
+            tests,
+            true
+        ).first
+
+        val action = result.criteria
+            .first { it.id == "code-action-evidence" }
+        assertEquals("executable", action.subject)
+        assertEquals(
+            CriterionStatus.PASSED,
+            action.status
+        )
+    }
+
+    @Test
     fun readOnlyCodeReviewDoesNotInventMutationCriterion() {
         val contract = GoalContractPolicy.initial(
             intent = TaskIntent.CODE_WORK,
