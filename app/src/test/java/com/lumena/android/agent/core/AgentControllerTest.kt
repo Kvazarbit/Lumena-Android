@@ -619,7 +619,14 @@ class AgentControllerTest {
 
     @Test
     fun fullProjectPytestCanCloseAllPendingVerificationButSelectedPytestCannot() {
-        val base = controller.initial(task()).copy(
+        val base = controller.initial(
+            TaskState(
+                id = "pytest-scope",
+                projectId = "e2e_step87",
+                goal = "запусти тести Python проекту",
+                status = TaskStatus.WAITING_MODEL
+            )
+        ).copy(
             toolUsed = true,
             verificationRequired = true,
             pendingPythonPaths = setOf(
