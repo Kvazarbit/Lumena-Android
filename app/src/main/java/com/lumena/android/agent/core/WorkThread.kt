@@ -62,9 +62,10 @@ object WorkThreadMemory {
     }
 
     fun restore(
-        turns: List<Pair<String, String>>
+        turns: List<Pair<String, String>>,
+        seedState: WorkThreadState = WorkThreadState()
     ): WorkThreadState {
-        var state = WorkThreadState()
+        var state = normalize(seedState)
         turns.takeLast(80).forEach { (role, text) ->
             if (role == "user") {
                 state = resolve(
@@ -125,11 +126,17 @@ object WorkThreadMemory {
         val matched =
             explicitMatch
                 ?: activeMatch
+        val namedSubjectMatch =
+            explicitMatch != null &&
+                keys.any {
+                    it in explicitMatch.subjectKeys
+                }
 
         val shouldContinue =
             matched != null &&
                 (
                     continuation ||
+                        namedSubjectMatch ||
                         intent == TaskIntent.CODE_WORK ||
                         intent == TaskIntent.FILE_INSPECTION
                     )
