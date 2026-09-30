@@ -117,6 +117,7 @@ import com.lumena.android.settings.ReflexExperienceRanker
 import com.lumena.android.settings.TinyJevAssetLoader
 import com.lumena.android.settings.TinyJevCalibrationStore
 import com.lumena.android.settings.LayaShadowStore
+import com.lumena.android.settings.VerifiedCauseLadderStore
 import com.lumena.android.settings.GenomeCapsule
 import com.lumena.android.settings.GenomeUnpackedUnit
 import com.lumena.android.settings.LumenaPreferences
@@ -290,7 +291,19 @@ fun WorkflowChatScreen(
     }
 
     fun restoredPendingFrom(saved: PersistedPendingTool?): PendingWorkflowTool? = saved?.let {
-        val planned = ToolGate.plan(PlannerDecision(request = ToolRequest(it.tool, it.args, it.requestId), reason = it.reason))
+        val planned = ToolGate.plan(
+            PlannerDecision(
+                request = ToolRequest(
+                    it.tool,
+                    it.args,
+                    it.requestId
+                ),
+                reason = it.reason
+            )
+        ).copy(
+            causeProbeIntent =
+                it.causeProbeIntent
+        )
         val control = it.control ?: currentTask?.let { task -> AgentControlState(task = task) } ?: return@let null
         if (planned.allowed) {
             PendingWorkflowTool(
@@ -336,6 +349,8 @@ fun WorkflowChatScreen(
                 args = active.plan.request.args,
                 requestId = active.plan.request.requestId,
                 reason = active.plan.reason,
+                causeProbeIntent =
+                    active.plan.causeProbeIntent,
                 control = active.control,
                 history = active.history.filterNot { it.role == "system" }
                     .map { PersistedHistoryMessage(it.role, it.content) },
@@ -1035,6 +1050,23 @@ fun WorkflowChatScreen(
 
                 coordinatorFailure?.let { throw it }
                 verifiedProjectionFailure?.let { throw it }
+            },
+            onCauseProbeExperience = {
+                    task,
+                    request,
+                    result,
+                    intent,
+                    _ ->
+                VerifiedCauseLadderStore
+                    .observeToolResult(
+                        context = context,
+                        taskId = task.id,
+                        modelId =
+                            constitutionContributorModelId,
+                        request = request,
+                        result = result,
+                        intent = intent
+                    )
             })
     }
 
