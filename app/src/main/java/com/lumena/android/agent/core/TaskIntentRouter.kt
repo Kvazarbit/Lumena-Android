@@ -425,16 +425,20 @@ object TaskIntentRouter {
             return true
         }
 
-        val testObject = Regex(
-            "(?iu)\\b(?:тест(?:и|ів|ами|ах)?|tests?)\\b"
-        ).containsMatchIn(lower)
-        if (!testObject) return false
+        val testPattern =
+            "(?:тест(?:и|ів|ами|ах)?|tests?)"
+        val executionPattern =
+            "(?:запусти|запустити|запускай|прожени|прогнати|виконай|виконати|" +
+                "run|execute|rerun|uruchom|wykonaj)"
 
-        // Require an execution verb. In particular, "перевірено тестами" is a
-        // factual/scientific question, not an instruction to run software tests.
+        // A generic "test" and an execution verb must belong to the same
+        // local clause. This keeps "запусти тести" as software work, but avoids
+        // cross-sentence collisions such as:
+        // "Контрольований тест Cause Ladder. Потім виконай workspace.list".
+        // Explicit software phrases above remain high-confidence regardless.
         return Regex(
-            "(?iu)\\b(?:запусти|запустити|запускай|прожени|прогнати|виконай|виконати|" +
-                "run|execute|rerun|uruchom|wykonaj)\\b"
+            "(?iu)(?:\\b$executionPattern\\b[^.!?;\\n]{0,48}\\b$testPattern\\b|" +
+                "\\b$testPattern\\b[^.!?;\\n]{0,48}\\b$executionPattern\\b)"
         ).containsMatchIn(lower)
     }
 
