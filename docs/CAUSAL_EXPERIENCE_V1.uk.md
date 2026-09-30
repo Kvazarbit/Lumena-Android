@@ -6,9 +6,9 @@
 
 BAD_PATH -> WHY_FAILED -> RECOVERY -> RESULT
 
-v1 навмисно не вигадує семантичну причину помилки. Поточний CoordinatorExperienceStore зберігає перевірені tool outcome та порядок кроків, але не зберігає перевірений root-cause label. Тому WHY_FAILED у v1 має значення UNKNOWN_NOT_CAPTURED.
+v1 навмисно не вигадує семантичну причину помилки. CoordinatorExperienceStore зберігає перевірені tool outcome, порядок кроків і, коли Bridge/ToolResult реально їх повернув, структуровані failure metadata: `failureClass`, `errorCode`, `retryable`, `dependency`. У такому випадку WHY_FAILED має тип `STRUCTURED_TOOL_FAILURE` і переносить тільки ці перевірені поля. Якщо структурованих metadata немає, WHY_FAILED залишається `UNKNOWN_NOT_CAPTURED`.
 
-Це краще за постфактум пояснення моделі, яке могло б бути правдоподібним, але неперевіреним.
+Правдоподібне постфактум пояснення моделі саме по собі не підвищує cause status і не стає verified evidence.
 
 ## Джерело істини
 
@@ -37,7 +37,7 @@ FractalExperienceCanvasStore.relevant резервує максимум два �
 
 Приклад advisory packet:
 
-CAUSAL VERIFIED RECOVERY · BAD_PATH=python.run[failed] · WHY_FAILED=UNKNOWN_NOT_CAPTURED · RECOVERY=file.read[ok] -> python.run[ok] · RESULT=RECOVERED · origin=LIVE · advisory only; revalidate current state
+CAUSAL VERIFIED RECOVERY · BAD_PATH=python.run[failed] · WHY_FAILED=STRUCTURED_TOOL_FAILURE class=INVALID_INPUT code=PYTHON_SCRIPT_REQUIRED retryable=true dependency=tool-schema · RECOVERY=file.read[ok] -> python.run[ok] · RESULT=RECOVERED · origin=LIVE · advisory only; revalidate current state
 
 ## Authority invariants
 
@@ -62,3 +62,8 @@ Causal Experience:
 - causal_revalidated_patterns
 
 Це дозволяє бачити не тільки обсяг пам'яті, а й те, чи старі recovery-патерни реально отримують незалежне LIVE підтвердження.
+
+
+## Наступний шар
+
+Детальна послідовність розвитку від causal recovery до `STATE -> EXPECTED -> ACTION -> ACTUAL -> DELTA -> CAUSE -> RECOVERY -> VERIFIED -> UTILITY`, а також portable social experience і глобальна модель когнітивного екзоскелета описані в [cognitive-exoskeleton-roadmap.uk.md](cognitive-exoskeleton-roadmap.uk.md).
