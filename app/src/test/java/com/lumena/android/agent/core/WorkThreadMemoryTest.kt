@@ -81,6 +81,38 @@ class WorkThreadMemoryTest {
     }
 
     @Test
+    fun analysisTurnDoesNotEraseOriginalAquariumGoalBeforeBareContinue() {
+        val root =
+            "Онови aquarium.html: зроби реалістичний 3D акваріум з рибками."
+        val started =
+            WorkThreadMemory.resolve(
+                text = root,
+                state = WorkThreadState()
+            )
+        val analysis =
+            WorkThreadMemory.resolve(
+                text = "знайди файл aquarium.html і проаналізуй його",
+                state = started.state
+            )
+        val continued =
+            WorkThreadMemory.resolve(
+                text = "продовж",
+                state = analysis.state
+            )
+
+        assertTrue(analysis.continued)
+        assertTrue(continued.continued)
+        assertTrue(
+            continued.goal.contains(root)
+        )
+        assertTrue(
+            continued.goal.contains(
+                "знайди файл aquarium.html"
+            )
+        )
+    }
+
+    @Test
     fun unrelatedGeneralConversationDoesNotEraseWorkAnchor() {
         val root =
             "Create HTML aquarium simulator with fish"
