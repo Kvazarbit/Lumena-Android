@@ -59,7 +59,7 @@ Listing-only goal не отримує штучної вимоги `file.read`.
 
 ### CODE_WORK
 
-Для goal, що реально просить створити/змінити/запустити/зібрати/тестувати код, одного `context.snapshot` недостатньо. `CODE_ACTION_EVIDENCE` вимагає успішний MUTATING або EXECUTABLE tool result. Read-only code review не отримує штучної вимоги mutation.
+Для goal, що реально просить створити/змінити код, одного `context.snapshot` недостатньо: `CODE_ACTION_EVIDENCE` вимагає успішний MUTATING tool result. Для run/test/build goal потрібен EXECUTABLE result. Read-only code review не отримує штучної mutation-вимоги, але потребує `file.read` content evidence, тому один `context.snapshot` також не може закрити review.
 
 Якщо успішний `file.write/file.patch` змінює `.py`, створюється
 `PYTHON_TARGET_VERIFIED` для конкретного normalized target. Його може
