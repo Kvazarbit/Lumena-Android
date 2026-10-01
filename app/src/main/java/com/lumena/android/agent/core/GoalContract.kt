@@ -124,7 +124,12 @@ object GoalContractPolicy {
                 if (goal.isBlank()) {
                     "mutating-or-executable"
                 } else {
-                    codeActionRequirement(goal)
+                    codeActionRequirement(
+                        TaskIntentRouter
+                            .withoutNegatedExplicitToolMentions(
+                                goal
+                            )
+                    )
                 }
             if (requirement != null) {
                 criteria += AcceptanceCriterion(
