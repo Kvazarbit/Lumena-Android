@@ -81,6 +81,7 @@ import com.lumena.android.llama.EmbeddedLlamaClient
 import com.lumena.android.llama.EmbeddedLlamaRuntime
 import com.lumena.android.llama.LlamaHardwareProfile
 import com.lumena.android.ollama.ChatModelClient
+import com.lumena.android.ollama.ExecutionEpochHistory
 import com.lumena.android.ollama.LocalWorkflowAgent
 import com.lumena.android.ollama.ModelContextUsage
 import com.lumena.android.ollama.OllamaClient
@@ -1299,6 +1300,15 @@ fun WorkflowChatScreen(
                 }
             }
         }
+        val epochHistory =
+            ExecutionEpochHistory.rebuild(
+                systemMessage = systemMessage,
+                visibleTurns =
+                    bubbles.map {
+                        it.role to it.text
+                    }
+            )
+
         taskApprovals.clear()
         currentTask = task
         bubbles += ChatBubble("user", text)
@@ -1327,7 +1337,7 @@ fun WorkflowChatScreen(
             ?.let { listOf(OllamaMessage("user", it)) }
             .orEmpty()
         val turnHistory =
-            history +
+            epochHistory +
                 previousContext +
                 workContext +
                 researchContext +
