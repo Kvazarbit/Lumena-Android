@@ -206,10 +206,17 @@ object WorkThreadMemory {
             )
         }
 
-        if (
-            intent == TaskIntent.CODE_WORK &&
-            keys.isNotEmpty()
-        ) {
+        val shouldCreateAnchor =
+            keys.isNotEmpty() &&
+                (
+                    intent == TaskIntent.CODE_WORK ||
+                        (
+                            intent == TaskIntent.FILE_INSPECTION &&
+                                continuation
+                            )
+                    )
+
+        if (shouldCreateAnchor) {
             val anchor =
                 WorkThreadAnchor(
                     rootGoal =
