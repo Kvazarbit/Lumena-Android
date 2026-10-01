@@ -45,37 +45,51 @@ object TaskIntentRouter {
         "python.run"
     )
 
+    private val explicitToolAlternation =
+        explicitObligationTools
+            .sortedByDescending(String::length)
+            .joinToString("|") {
+                Regex.escape(it)
+            }
+
+    private val negatedExplicitToolList =
+        Regex(
+            "(?iu)(?:не\\s+(?:використовуй|використовуйте|запускай|запускайте|виконуй|виконуйте|роби|робіть)|" +
+                "не\\s+используй(?:те)?|не\\s+запускай(?:те)?|do\\s+not\\s+(?:use|run)|don't\\s+(?:use|run)|" +
+                "never\\s+(?:use|run)|nie\\s+(?:używaj|uzywaj|uruchamiaj)|без)\\s+" +
+                "(?:$explicitToolAlternation)" +
+                "(?:\\s*(?:,|або|чи|і|та|or|and|lub)\\s*(?:$explicitToolAlternation))*"
+        )
+
+    /**
+     * Remove only tool names that occur inside an explicit negative tool list.
+     * A later positive mention outside that list remains visible.
+     */
+    internal fun withoutNegatedExplicitToolMentions(
+        goal: String
+    ): String =
+        negatedExplicitToolList.replace(goal) { match ->
+            Regex(
+                "(?iu)(?<![a-z0-9_])(?:$explicitToolAlternation)(?![a-z0-9_])"
+            ).replace(
+                match.value,
+                " "
+            )
+        }
+
     fun explicitRequiredTools(goal: String): Set<String> {
-        val lower = goal.lowercase()
+        val lower =
+            withoutNegatedExplicitToolMentions(goal)
+                .lowercase()
+
         return explicitObligationTools
             .asSequence()
             .filter { tool ->
-                val index = lower.indexOf(tool)
-                if (index < 0) return@filter false
-
-                val prefix = lower
-                    .substring(
-                        maxOf(0, index - 48),
-                        index
-                    )
-                    .trimEnd()
-
-                val negated = listOf(
-                    "не використовуй",
-                    "не запускай",
-                    "не виконуй",
-                    "не роби",
-                    "do not use",
-                    "do not run",
-                    "don't use",
-                    "don't run",
-                    "nie używaj",
-                    "nie uzywaj",
-                    "nie uruchamiaj",
-                    "без "
-                ).any { prefix.endsWith(it) }
-
-                !negated
+                Regex(
+                    "(?<![a-z0-9_])" +
+                        Regex.escape(tool) +
+                        "(?![a-z0-9_])"
+                ).containsMatchIn(lower)
             }
             .map(ToolRegistry::canonicalize)
             .filter { ToolRegistry.get(it) != null }
@@ -83,7 +97,8 @@ object TaskIntentRouter {
     }
 
     fun route(goal: String): TaskIntentProfile {
-        val normalized = goal
+        val normalized =
+            withoutNegatedExplicitToolMentions(goal)
             .replace(Regex("[\\r\\n\\t]+"), " ")
             .replace(Regex("\\s{2,}"), " ")
             .trim()
@@ -386,7 +401,7 @@ object TaskIntentRouter {
             "створ", "create", "write", "напис", "реаліз", "implement",
             "виправ", "fix", "редаг", "edit", "patch", "перевір", "test",
             "запуст", "run", "debug", "build", "збір", "commit",
-            "онов", "update", "зроб", "modify", "покращ", "improve"
+            "онов", "update", "зроби", "зробіть", "зробити", "modify", "покращ", "improve"
         )
 
         val hasStrongCodeSubject =
@@ -446,7 +461,8 @@ object TaskIntentRouter {
     private fun isFileInspection(lower: String): Boolean {
         val fileTerms = listOf(
             "файл", "file", "папк", "folder", "директор", "directory",
-            "readme", "лог", "log", "репозитор", "repository", "repo"
+            "readme", "лог", "log", "репозитор", "repository", "repo",
+            ".html", ".py", ".kt", ".js", ".json", ".md"
         )
         val actionTerms = listOf(
             "знайд", "find", "покаж", "show", "прочит", "read", "відкрий",
