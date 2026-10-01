@@ -212,7 +212,9 @@ object WorkThreadMemory {
                     intent == TaskIntent.CODE_WORK ||
                         (
                             intent == TaskIntent.FILE_INSPECTION &&
-                                continuation
+                                isDurableContinuationCue(
+                                    clean
+                                )
                             )
                     )
 
@@ -506,6 +508,16 @@ object WorkThreadMemory {
             token.startsWith(stem)
         }
     }
+
+    private fun isDurableContinuationCue(
+        text: String
+    ): Boolean =
+        Regex(
+            "(?iu)\\b(?:продовж(?:уй|ити)?|віднов(?:и|ити)?|поверн(?:и|імося|утися)?|" +
+                "вдосконал(?:ь|ити)?|покращ(?:и|ити)?|" +
+                "continue|resume|return\\s+to|go\\s+back\\s+to|improve|" +
+                "kontynuuj|wznów|wznow|wróć|wroc)\\b"
+        ).containsMatchIn(text)
 
     private fun isContinuationCue(
         text: String
