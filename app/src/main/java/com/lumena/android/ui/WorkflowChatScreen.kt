@@ -1221,6 +1221,20 @@ fun WorkflowChatScreen(
     fun send() {
         val text = input.trim()
         if (text.isBlank() || busy) return
+        if (
+            ExecutionEpochHistory
+                .isTransportOnlyTurn(text)
+        ) {
+            input = ""
+            bubbles += ChatBubble(
+                "error",
+                "LUMENA_TOOL is Companion transport, not a Local work goal. " +
+                    "No task or tool was started."
+            )
+            scrollRequest++
+            persistSession()
+            return
+        }
         if (inferenceBackend == "embedded" && ggufPath.isBlank()) {
             showSettings = true
             ggufPickerStatus = "Choose a GGUF model first."
