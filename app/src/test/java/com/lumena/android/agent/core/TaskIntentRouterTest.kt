@@ -268,4 +268,40 @@ class TaskIntentRouterTest {
         assertEquals("context.snapshot", profile.preflight?.tool)
     }
 
+    @Test
+    fun negatedToolListDoesNotCreateRequiredToolsOrCodeWork() {
+        val goal = """
+            Продовж розробку aquarium.html з поточної відновленої v3-версії.
+            На цьому кроці тільки знайди і прочитай поточний aquarium.html.
+            Нічого не змінюй і не використовуй file.write, file.patch або python.run.
+        """.trimIndent()
+
+        assertTrue(
+            TaskIntentRouter.explicitRequiredTools(goal).isEmpty()
+        )
+
+        val profile = TaskIntentRouter.route(goal)
+        assertEquals(
+            TaskIntent.FILE_INSPECTION,
+            profile.intent
+        )
+        assertEquals(
+            "workspace.list",
+            profile.preflight?.tool
+        )
+    }
+
+    @Test
+    fun rozrobkuDoesNotCollideWithZrobyMutationVerb() {
+        val profile = TaskIntentRouter.route(
+            "Продовж розробку aquarium.html, але тільки прочитай поточний файл і нічого не змінюй."
+        )
+
+        assertEquals(
+            TaskIntent.FILE_INSPECTION,
+            profile.intent
+        )
+    }
+
+
 }
