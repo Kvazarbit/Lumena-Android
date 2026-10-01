@@ -25,6 +25,7 @@ object LocalWorkflowAgent {
         - After a failed TOOL_RESULT, a causal explanation is only a HYPOTHESIS. To test it with the next real tool, optionally add top-level cause_hypothesis plus BOTH cause_probe_on_success and cause_probe_on_failure. Verdict values are SUPPORTS, REJECTS, or INCONCLUSIVE. Declare the mapping before execution; never infer proof from your own prose.
         - Cause-probe annotations never authorize tools, never bypass confirmation, and never prove the whole goal. Use them only for a falsifiable probe tied to the current task failure.
         - After each TOOL_RESULT continue the SAME goal. If verification is required, verify before done.
+        - CURRENT TASK is the only active execution epoch. Earlier visible assistant replies are historical conversation only; never inherit their tool budget, pending action, partial status, or execution authority into this task.
         - Once ALL requested outcomes and verification are satisfied, return done. A script printing 'deleted' alone is not proof that the requested files are absent. Do not create chains of cleanup scripts.
         - Use the CONTEXT KERNEL evidence IDs to summarize completed work. Earlier-task memories are historical hints and require fresh checks.
         - When budget is exhausted or work remains unverified, return partial JSON stating what is complete and what remains. Never label incomplete work done.
