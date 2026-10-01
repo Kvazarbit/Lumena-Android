@@ -564,4 +564,50 @@ class GoalContractPolicyTest {
         )
         assertTrue(decoded.goalContract.criteria.isEmpty())
     }
+    @Test
+    fun readOnlyAquariumGoalDoesNotInventForbiddenMutationCriteria() {
+        val goal = """
+            Продовж розробку aquarium.html з поточної відновленої v3-версії.
+            На цьому кроці тільки знайди і прочитай поточний aquarium.html.
+            Нічого не змінюй і не використовуй file.write, file.patch або python.run.
+        """.trimIndent()
+        val profile =
+            TaskIntentRouter.route(goal)
+        val required =
+            TaskIntentRouter.explicitRequiredTools(goal)
+        val contract =
+            GoalContractPolicy.initial(
+                intent = profile.intent,
+                requiredTools = required,
+                visualRequired = false,
+                goal = goal
+            )
+
+        assertEquals(
+            TaskIntent.FILE_INSPECTION,
+            profile.intent
+        )
+        assertTrue(required.isEmpty())
+        assertTrue(
+            contract.criteria.none {
+                it.kind ==
+                    CriterionKind.CODE_ACTION_EVIDENCE
+            }
+        )
+        assertTrue(
+            contract.criteria.none {
+                it.id.startsWith(
+                    "required-tool:"
+                )
+            }
+        )
+        assertTrue(
+            contract.criteria.any {
+                it.kind ==
+                    CriterionKind.FILE_CONTENT_EVIDENCE
+            }
+        )
+    }
+
+
 }
