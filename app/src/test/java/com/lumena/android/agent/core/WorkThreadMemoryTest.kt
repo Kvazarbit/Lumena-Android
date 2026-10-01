@@ -329,4 +329,60 @@ class WorkThreadMemoryTest {
         )
     }
 
+    @Test
+    fun readOnlyContinuationCanCreateDurableAquariumAnchor() {
+        val goal = """
+            Продовж розробку aquarium.html з поточної відновленої v3-версії.
+            На цьому кроці тільки знайди і прочитай поточний aquarium.html.
+            Нічого не змінюй і не використовуй file.write, file.patch або python.run.
+        """.trimIndent()
+
+        val resolved =
+            WorkThreadMemory.resolve(
+                text = goal,
+                state = WorkThreadState()
+            )
+
+        assertEquals(
+            TaskIntent.FILE_INSPECTION,
+            TaskIntentRouter.route(goal).intent
+        )
+        assertEquals(
+            1,
+            resolved.state.anchors.size
+        )
+        assertTrue(
+            resolved.state.anchors.single()
+                .rootGoal
+                .contains("aquarium.html")
+        )
+        assertTrue(
+            resolved.state.activeKey != null
+        )
+    }
+
+    @Test
+    fun oneOffFileInspectionDoesNotCreateWorkAnchor() {
+        val resolved =
+            WorkThreadMemory.resolve(
+                text = "знайди файл README і прочитай його",
+                state = WorkThreadState()
+            )
+
+        assertEquals(
+            TaskIntent.FILE_INSPECTION,
+            TaskIntentRouter.route(
+                "знайди файл README і прочитай його"
+            ).intent
+        )
+        assertTrue(
+            resolved.state.anchors.isEmpty()
+        )
+        assertEquals(
+            null,
+            resolved.state.activeKey
+        )
+    }
+
+
 }
