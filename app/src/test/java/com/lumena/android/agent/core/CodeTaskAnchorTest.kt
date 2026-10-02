@@ -59,6 +59,23 @@ class CodeTaskAnchorTest {
         assertFalse(CodeTaskAnchor.resolve("так", old, "Видалити файл?").continued)
     }
 
+    @Test fun scientificTestQuestionClearsStaleCodeAnchor() {
+        val old = "Онови aquarium.html і перевір поведінку риб"
+
+        val resolved = CodeTaskAnchor.resolve(
+            "це перевірено тестами на 100%, і які є методи стимуляції?",
+            old,
+            "Попередня відповідь про нейропластичність."
+        )
+
+        assertEquals(
+            "це перевірено тестами на 100%, і які є методи стимуляції?",
+            resolved.text
+        )
+        assertNull(resolved.anchor)
+        assertFalse(resolved.continued)
+    }
+
     @Test fun oldChatCanRestoreGoalAfterUpgradeWithoutRestoringActions() {
         val goal = CodeTaskAnchor.restore(listOf(
             "user" to "Create HTML aquarium",

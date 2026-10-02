@@ -4,6 +4,9 @@ import android.content.Context
 import com.lumena.android.agent.core.AgentControlState
 import com.lumena.android.agent.core.ResearchThreadState
 import com.lumena.android.agent.core.TaskState
+import com.lumena.android.agent.core.WorkThreadMemory
+import com.lumena.android.agent.core.WorkThreadState
+import com.lumena.android.agent.local.CauseProbeExecutionIntent
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 
@@ -33,7 +36,8 @@ data class PersistedPendingTool(
     val reason: String = "",
     val control: AgentControlState? = null,
     val history: List<PersistedHistoryMessage> = emptyList(),
-    val images: List<PersistedChatImage> = emptyList()
+    val images: List<PersistedChatImage> = emptyList(),
+    val causeProbeIntent: CauseProbeExecutionIntent? = null
 )
 
 data class LocalSessionSnapshot(
@@ -46,7 +50,8 @@ data class LocalSessionSnapshot(
     // bounded researchThread and mirrors rootGoal here for safe migration.
     val researchGoal: String? = null,
     val researchThread: ResearchThreadState? = null,
-    val codeGoal: String? = null
+    val codeGoal: String? = null,
+    val workThreads: WorkThreadState = WorkThreadState()
 )
 
 /**
@@ -95,6 +100,21 @@ object LocalSessionStore {
                 .map { it.copy(content = it.content.take(MAX_MESSAGE_CHARS)) },
             pending = snapshot.pending?.copy(
                 requestId = snapshot.pending.requestId?.take(220),
+                causeProbeIntent =
+                    snapshot.pending.causeProbeIntent?.copy(
+                        hypothesisHash =
+                            snapshot.pending.causeProbeIntent
+                                .hypothesisHash
+                                .take(24),
+                        onSuccess =
+                            snapshot.pending.causeProbeIntent
+                                .onSuccess
+                                ?.take(24),
+                        onFailure =
+                            snapshot.pending.causeProbeIntent
+                                .onFailure
+                                ?.take(24)
+                    ),
                 control = snapshot.pending.control?.copy(
                     plan = snapshot.pending.control.plan.take(6).map { it.take(180) },
                     task = snapshot.pending.control.task.copy(
@@ -132,7 +152,11 @@ object LocalSessionStore {
                     .map { it.take(2_000) }
                     .distinct()
                     .takeLast(16)
-            )
+            ),
+            workThreads =
+                WorkThreadMemory.normalize(
+                    snapshot.workThreads
+                )
         )
         prefs(context).edit().putString(KEY_SNAPSHOT, adapter.toJson(bounded)).apply()
         // History mirrors only bounded, app-private context. Workspace files are never copied/rolled back.

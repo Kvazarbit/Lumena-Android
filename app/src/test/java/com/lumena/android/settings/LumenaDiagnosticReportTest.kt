@@ -150,6 +150,33 @@ class LumenaDiagnosticReportTest {
     }
 
     @Test
+    fun reportIncludesDurableWorkThreadTelemetry() {
+        val report =
+            LumenaDiagnosticFormatter.render(
+                input().copy(
+                    workThreadAnchors = 2,
+                    workThreadSubjects =
+                        listOf(
+                            "aquarium",
+                            "рибками",
+                            "snake"
+                        )
+                )
+            )
+
+        assertTrue(
+            report.contains(
+                "work_thread_anchors=2"
+            )
+        )
+        assertTrue(
+            report.contains(
+                "work_thread_subjects=aquarium,рибками,snake"
+            )
+        )
+    }
+
+    @Test
     fun activeGeneIsReportedWithoutTreatingModelSelfCheckAsProof() {
         val report =
             LumenaDiagnosticFormatter.render(
@@ -269,6 +296,87 @@ class LumenaDiagnosticReportTest {
     }
 
     @Test
+    fun reportIncludesTypedGoalContractWithoutCallingItFullSemanticProof() {
+        val report =
+            LumenaDiagnosticFormatter.render(
+                input().copy(
+                    task = requireNotNull(input().task).copy(
+                        goalContractCoverage =
+                            "TYPED_OPERATIONAL_V1",
+                        goalContractCriteria = 3,
+                        goalContractMandatory = 3,
+                        goalContractPassed = 2,
+                        goalContractIndependentPassed = 1,
+                        goalContractPending =
+                            listOf(
+                                "python-verified:abc123"
+                            )
+                    )
+                )
+            )
+
+        assertTrue(report.contains("[GOAL_CONTRACT]"))
+        assertTrue(
+            report.contains(
+                "coverage=TYPED_OPERATIONAL_V1"
+            )
+        )
+        assertTrue(report.contains("criteria=3"))
+        assertTrue(report.contains("mandatory=3"))
+        assertTrue(report.contains("passed=2"))
+        assertTrue(
+            report.contains(
+                "independent_passed=1"
+            )
+        )
+        assertTrue(
+            report.contains(
+                "pending=python-verified:abc123"
+            )
+        )
+        assertTrue(
+            report.contains(
+                "all_mandatory_passed=false"
+            )
+        )
+        assertTrue(
+            report.contains(
+                "coverage_is_full_semantic_proof=false"
+            )
+        )
+    }
+
+    @Test
+    fun reportIncludesPredictionActualDeltaTelemetryWithoutClaimingAuthority() {
+        val report =
+            LumenaDiagnosticFormatter.render(
+                input().copy(
+                    predictionDelta =
+                        DiagnosticPredictionDeltaView(
+                            expectations = 11,
+                            deltas = 11,
+                            matches = 7,
+                            unexpectedFailures = 2,
+                            unexpectedSuccesses = 0,
+                            schemaMismatches = 1,
+                            outcomeUnknown = 1,
+                            verificationMissing = 0
+                        )
+                )
+            )
+
+        assertTrue(report.contains("[PREDICTION_DELTA]"))
+        assertTrue(report.contains("expectations_total=11"))
+        assertTrue(report.contains("deltas_total=11"))
+        assertTrue(report.contains("matches=7"))
+        assertTrue(report.contains("unexpected_failures=2"))
+        assertTrue(report.contains("schema_mismatches=1"))
+        assertTrue(report.contains("outcome_unknown=1"))
+        assertTrue(report.contains("authority=advisory_only"))
+        assertTrue(report.contains("model_prose_is_evidence=false"))
+    }
+
+    @Test
     fun reportIncludesFractalExperienceAndImmuneShadowTelemetry() {
         val report =
             LumenaDiagnosticFormatter.render(
@@ -287,7 +395,19 @@ class LumenaDiagnosticReportTest {
                             contributorModels = 3,
                             legacyBackfillVersion = 1,
                             legacyBackfillRecords = 10,
-                            liveRecords = 2
+                            liveRecords = 2,
+                            causalLinks = 6,
+                            causalRecovered = 4,
+                            causalUnresolved = 2,
+                            causalLiveLinks = 1,
+                            causalRevalidatedPatterns = 1,
+                            causeUnknown = 4,
+                            causeStructured = 2,
+                            causeHypothesis = 0,
+                            causeProbed = 0,
+                            causeVerified = 0,
+                            causeContested = 0,
+                            causeRejected = 0
                         )
                 )
             )
@@ -304,6 +424,23 @@ class LumenaDiagnosticReportTest {
         assertTrue(report.contains("legacy_backfill_version=1"))
         assertTrue(report.contains("legacy_backfill_records=10"))
         assertTrue(report.contains("live_records=2"))
+        assertTrue(report.contains("causal_links=6"))
+        assertTrue(report.contains("causal_recovered=4"))
+        assertTrue(report.contains("causal_unresolved=2"))
+        assertTrue(report.contains("causal_live_links=1"))
+        assertTrue(report.contains("causal_revalidated_patterns=1"))
+        assertTrue(report.contains("cause_unknown=4"))
+        assertTrue(report.contains("cause_structured=2"))
+        assertTrue(report.contains("cause_hypothesis=0"))
+        assertTrue(report.contains("cause_probed=0"))
+        assertTrue(report.contains("cause_verified=0"))
+        assertTrue(report.contains("cause_contested=0"))
+        assertTrue(report.contains("cause_rejected=0"))
+        assertTrue(
+            report.contains(
+                "cause_model_prose_is_evidence=false"
+            )
+        )
         assertTrue(report.contains("immune_worst_peaks=4"))
         assertTrue(report.contains("immune_contested_peaks=2"))
         assertTrue(report.contains("constitution_activation=false"))

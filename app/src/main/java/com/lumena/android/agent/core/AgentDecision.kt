@@ -7,7 +7,12 @@ sealed interface AgentDecision {
         val tool: String,
         val args: Map<String, String> = emptyMap(),
         val reason: String = "",
-        val plan: List<String> = emptyList()
+        val plan: List<String> = emptyList(),
+        // Model prose remains a hypothesis only. WorkflowRunner hashes this
+        // before any pending approval/session persistence.
+        val causeHypothesis: String? = null,
+        val causeProbeOnSuccess: String? = null,
+        val causeProbeOnFailure: String? = null
     ) : AgentDecision
 
     data class Done(val summary: String) : AgentDecision
@@ -39,7 +44,8 @@ data class TaskState(
     val createdFiles: List<String> = emptyList(),
     val modifiedFiles: List<String> = emptyList(),
     val errors: List<String> = emptyList(),
-    val kernel: ContextKernelState = ContextKernelState()
+    val kernel: ContextKernelState = ContextKernelState(),
+    val goalContract: GoalContract = GoalContract()
 ) {
     /**
      * maxSteps limits tool executions, not the final model conclusion.

@@ -24,7 +24,14 @@ data class CoordinatorEpisodeEvent(
     val surprise: Double,
     val modelId: String? = null,
     val scopeHash: String? = null,
-    val outcomeKnown: Boolean = true
+    val outcomeKnown: Boolean = true,
+    val failureClass: String? = null,
+    val errorCode: String? = null,
+    val retryable: Boolean? = null,
+    val dependency: String? = null,
+    val expectedOutcome: ExpectedOutcome? = null,
+    val observedOutcome: ObservedOutcome? = null,
+    val outcomeDelta: OutcomeDelta? = null
 )
 
 data class CoordinatorEpisodeState(
@@ -51,7 +58,11 @@ data class CoordinatorExecutionExample(
     val text: String,
     val contributorModelIds: List<String> = emptyList(),
     val scopeHash: String? = null,
-    val outcomes: List<Boolean> = emptyList()
+    val outcomes: List<Boolean> = emptyList(),
+    val failureClasses: List<String?> = emptyList(),
+    val errorCodes: List<String?> = emptyList(),
+    val retryableFlags: List<Boolean?> = emptyList(),
+    val dependencies: List<String?> = emptyList()
 )
 
 /**
@@ -296,6 +307,10 @@ object CoordinatorExperiencePolicy {
             text = text,
             scopeHash = first.scopeHash,
             outcomes = segment.map { it.ok },
+            failureClasses = segment.map { it.failureClass },
+            errorCodes = segment.map { it.errorCode },
+            retryableFlags = segment.map { it.retryable },
+            dependencies = segment.map { it.dependency },
             contributorModelIds = segment
                 .mapNotNull { it.modelId }
                 .distinct()
@@ -385,6 +400,25 @@ object CoordinatorExperienceStore {
             ?.let(::stableId)
         val state = load(context)
         val target = targetOf(request)
+        val expectedOutcome =
+            ExperienceOutcomeDeltaPolicy.expected(
+                tool = canonicalTool,
+                target = target
+            )
+        val observedOutcome =
+            ExperienceOutcomeDeltaPolicy.observed(
+                tool = canonicalTool,
+                target = target,
+                result = result,
+                verifiedOk = verifiedOk
+            )
+        val outcomeDelta =
+            expectedOutcome?.let {
+                ExperienceOutcomeDeltaPolicy.compare(
+                    expected = it,
+                    observed = observedOutcome
+                )
+            }
         val surprise = CoordinatorExperiencePolicy.surprise(
             state = state,
             sessionId = safeSessionId,
@@ -414,7 +448,23 @@ object CoordinatorExperienceStore {
             surprise = surprise,
             modelId = safeModelId,
             scopeHash = scopeId?.let(CoordinatorExperiencePolicy::hash),
-            outcomeKnown = !result.outcomeUnknown
+            outcomeKnown = !result.outcomeUnknown,
+            failureClass = result.failureClass
+                ?.replace(Regex("[\\r\\n\\t]+"), " ")
+                ?.trim()
+                ?.take(120),
+            errorCode = result.errorCode
+                ?.replace(Regex("[\\r\\n\\t]+"), " ")
+                ?.trim()
+                ?.take(120),
+            retryable = result.retryable,
+            dependency = result.dependency
+                ?.replace(Regex("[\\r\\n\\t]+"), " ")
+                ?.trim()
+                ?.take(160),
+            expectedOutcome = expectedOutcome,
+            observedOutcome = observedOutcome,
+            outcomeDelta = outcomeDelta
         )
         val next = CoordinatorExperiencePolicy.record(state, event)
         save(context, next)

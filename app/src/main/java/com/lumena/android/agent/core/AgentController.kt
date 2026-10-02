@@ -78,6 +78,14 @@ class AgentController(
         val profile = TaskIntentRouter.route(task.goal)
         val requiredTools =
             TaskIntentRouter.explicitRequiredTools(task.goal)
+        val goalContract =
+            GoalContractPolicy.initial(
+                intent = profile.intent,
+                requiredTools = requiredTools,
+                visualRequired =
+                    VisualGoalRouter.route(task.goal) != null,
+                goal = task.goal
+            )
         val reserve = if (profile.preflight != null) 1 else 0
         val initialToolBudget = maxOf(
             task.maxSteps + reserve,
@@ -85,7 +93,8 @@ class AgentController(
         ).coerceAtMost(budget.maxTotalSteps)
         return AgentControlState(
             task = task.copy(
-                maxSteps = initialToolBudget
+                maxSteps = initialToolBudget,
+                goalContract = goalContract
             ),
             intent = profile.intent,
             requiredTools = requiredTools,
@@ -328,6 +337,16 @@ class AgentController(
         }
 
         val canonical = decision.copy(tool = validation.canonicalTool)
+
+        validateCauseProbeAnnotation(
+            call = canonical,
+            state = state
+        )?.let { problem ->
+            return protocolRetry(
+                state,
+                problem
+            )
+        }
 
         val pendingRequired =
             state.requiredTools - state.completedRequiredTools
@@ -740,7 +759,9 @@ class AgentController(
         decision: AgentDecision.Done,
         state: AgentControlState
     ): ControllerInstruction {
-        ContextKernel.completionBlocker(state.task.kernel)?.let { return protocolRetry(state, it) }
+        ContextKernel.completionBlocker(state.task.kernel)?.let {
+            return protocolRetry(state, it)
+        }
         val missingRequired =
             state.requiredTools - state.completedRequiredTools
         if (missingRequired.isNotEmpty()) {
@@ -769,6 +790,23 @@ class AgentController(
             return protocolRetry(
                 state,
                 "Task cannot be marked done yet. ${state.verificationReason ?: "Verification is required."}"
+            )
+        }
+
+        val incompleteGoalCriteria =
+            GoalContractPolicy.incompleteMandatory(
+                state.task.goalContract
+            )
+        if (incompleteGoalCriteria.isNotEmpty()) {
+            return protocolRetry(
+                state,
+                "Goal contract has unverified mandatory criteria: " +
+                    incompleteGoalCriteria
+                        .take(8)
+                        .joinToString { it.id } +
+                    ". Use independent TOOL_RESULT evidence where required, " +
+                    "or return partial. Passing typed criteria still does not " +
+                    "prove arbitrary semantic/business properties."
             )
         }
 
@@ -842,11 +880,36 @@ class AgentController(
             )
         }
 
-        // Plain replies must not bypass interruption or same-target verification,
-        // including the existing verified-image completion shortcut.
-        val blocker = ContextKernel.completionBlocker(state.task.kernel)
-            ?: if (state.verificationRequired) state.verificationReason ?: "Verification is required." else null
-        if (blocker != null) return recoverPlainReply(state, trimmed, blocker)
+        // Plain replies must not bypass interruption, typed goal criteria,
+        // or same-target verification, including the verified-image shortcut.
+        val pendingGoalCriteria =
+            GoalContractPolicy.incompleteMandatory(
+                state.task.goalContract
+            )
+        val blocker =
+            ContextKernel.completionBlocker(
+                state.task.kernel
+            )
+                ?: pendingGoalCriteria
+                    .takeIf { it.isNotEmpty() }
+                    ?.joinToString(
+                        prefix =
+                            "Goal contract still needs verified criteria: ",
+                        separator = ","
+                    ) { it.id }
+                ?: if (state.verificationRequired) {
+                    state.verificationReason
+                        ?: "Verification is required."
+                } else {
+                    null
+                }
+        if (blocker != null) {
+            return recoverPlainReply(
+                state,
+                trimmed,
+                blocker
+            )
+        }
 
         summaryConsistency(trimmed, state)?.let { return it }
 
@@ -854,7 +917,7 @@ class AgentController(
             return interpretDone(AgentDecision.Done(trimmed), state)
         }
 
-        if (canFinishPublicWebPlainReply(state)) {
+        if (canFinishVerifiedReadOnlyPlainReply(state)) {
             val finished = state.copy(
                 protocolRetries = 0,
                 schemaRepairs = 0,
@@ -927,27 +990,45 @@ class AgentController(
         )
     }
 
-    private fun canFinishPublicWebPlainReply(
+    private fun canFinishVerifiedReadOnlyPlainReply(
         state: AgentControlState
     ): Boolean {
         if (!state.toolUsed) return false
         if (state.verificationRequired) return false
-        if (state.intent in setOf(
-                TaskIntent.CODE_WORK,
-                TaskIntent.OLLAMA_OPERATION
+        if (
+            state.intent !in setOf(
+                TaskIntent.PUBLIC_WEB,
+                TaskIntent.FILE_INSPECTION
             )
         ) {
             return false
         }
-        if (state.requiredTools - state.completedRequiredTools != emptySet<String>()) {
+        if (
+            state.requiredTools -
+                state.completedRequiredTools !=
+                emptySet<String>()
+        ) {
             return false
         }
-        if (ContextKernel.completionBlocker(state.task.kernel) != null) {
+        if (
+            ContextKernel.completionBlocker(
+                state.task.kernel
+            ) != null
+        ) {
+            return false
+        }
+        if (
+            !GoalContractPolicy.allMandatoryPassed(
+                state.task.goalContract
+            )
+        ) {
             return false
         }
 
-        val evidence = state.task.kernel.evidence
-        if (evidence.any {
+        val evidence =
+            state.task.kernel.evidence
+        if (
+            evidence.any {
                 it.phase == CognitivePhase.ACT ||
                     it.phase == CognitivePhase.VERIFY
             }
@@ -955,15 +1036,36 @@ class AgentController(
             return false
         }
 
-        val sourceTools = setOf(
-            "web.read",
-            "http.get",
-            "http.json"
-        )
+        val acceptedObserveTools =
+            when (state.intent) {
+                TaskIntent.PUBLIC_WEB ->
+                    setOf(
+                        "web.read",
+                        "http.get",
+                        "http.json"
+                    )
+
+                TaskIntent.FILE_INSPECTION ->
+                    setOf(
+                        "workspace.list",
+                        "file.list",
+                        "file.search",
+                        "file.read",
+                        "git.status",
+                        "git.diff",
+                        "git.log"
+                    )
+
+                else ->
+                    emptySet()
+            }
+
         return evidence.any { event ->
             event.ok &&
-                event.phase == CognitivePhase.OBSERVE &&
-                event.tool in sourceTools
+                event.phase ==
+                    CognitivePhase.OBSERVE &&
+                event.tool in
+                    acceptedObserveTools
         }
     }
 
@@ -1169,13 +1271,32 @@ class AgentController(
             state.task.maxSteps
         }
 
+        val nextKernel =
+            ContextKernel.record(
+                state.task.kernel,
+                call,
+                ok,
+                resultText
+            ).copy(
+                pendingVerification =
+                    pendingPythonPaths
+            )
+        val nextGoalContract =
+            GoalContractPolicy.afterTool(
+                contract = state.task.goalContract,
+                call = call,
+                ok = ok,
+                kernel = nextKernel
+            )
+
         val nextTask = state.task.copy(
             status = TaskStatus.WAITING_MODEL,
             step = nextStep,
             maxSteps = recoveryMaxSteps,
             lastTool = call.tool,
             lastResult = resultText,
-            kernel = ContextKernel.record(state.task.kernel, call, ok, resultText).copy(pendingVerification = pendingPythonPaths),
+            kernel = nextKernel,
+            goalContract = nextGoalContract,
             errors = if (ok) state.task.errors else (state.task.errors + resultText).takeLast(8)
         )
 
@@ -1515,6 +1636,91 @@ class AgentController(
         } else {
             budget.maxSemanticRecoveries
         }
+
+    private fun validateCauseProbeAnnotation(
+        call: AgentDecision.ToolCall,
+        state: AgentControlState
+    ): String? {
+        val hypothesis = call.causeHypothesis
+        val success = call.causeProbeOnSuccess
+        val failure = call.causeProbeOnFailure
+        val anyProbeMetadata =
+            hypothesis != null ||
+                success != null ||
+                failure != null
+
+        val priorFailure =
+            state.task.kernel.evidence
+                .any { !it.ok }
+
+        if (
+            priorFailure &&
+            requiresExplicitCauseProbe(
+                state.task.goal
+            ) &&
+            !anyProbeMetadata
+        ) {
+            return "CAUSE_PROBE_REQUIRED: this goal explicitly requires a causal probe after failure. The next probe tool call must include top-level cause_hypothesis, cause_probe_on_success, and cause_probe_on_failure. No tool was executed."
+        }
+
+        if (!anyProbeMetadata) return null
+
+        if (!priorFailure) {
+            return "CAUSE_PROBE_REJECTED: causal probe annotations require a prior failed TOOL_RESULT in the current task. No tool was executed."
+        }
+
+        if (hypothesis.isNullOrBlank()) {
+            return "CAUSE_PROBE_REJECTED: cause_hypothesis is required when cause probe mappings are present. No tool was executed."
+        }
+
+        if ((success == null) != (failure == null)) {
+            return "CAUSE_PROBE_REJECTED: provide both cause_probe_on_success and cause_probe_on_failure, or omit both. No tool was executed."
+        }
+
+        val allowed =
+            setOf(
+                "SUPPORTS",
+                "REJECTS",
+                "INCONCLUSIVE"
+            )
+        if (
+            success != null &&
+            (
+                failure == null ||
+                    success !in allowed ||
+                    failure !in allowed
+                )
+        ) {
+            return "CAUSE_PROBE_REJECTED: probe verdicts must be SUPPORTS, REJECTS, or INCONCLUSIVE. No tool was executed."
+        }
+
+        if (
+            success != null &&
+            success == "INCONCLUSIVE" &&
+            failure == "INCONCLUSIVE"
+        ) {
+            return "CAUSE_PROBE_REJECTED: a falsifiable probe needs at least one conclusive outcome mapping. No tool was executed."
+        }
+
+        return null
+    }
+
+    private fun requiresExplicitCauseProbe(
+        goal: String
+    ): Boolean {
+        val lower =
+            goal.lowercase()
+        return listOf(
+            "cause probe",
+            "cause_hypothesis",
+            "cause_probe_on_success",
+            "cause_probe_on_failure",
+            "causal hypothesis",
+            "причинну гіпотез",
+            "причинної гіпотез",
+            "причинна гіпотез"
+        ).any(lower::contains)
+    }
 
     private fun requiresToolEvidence(intent: TaskIntent): Boolean =
         intent in setOf(

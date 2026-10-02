@@ -39,7 +39,11 @@ data class FractalExampleRecord(
     val scopeHash: String?,
     val updatedAt: Long,
     val summary: String,
-    val origin: FractalExperienceOrigin = FractalExperienceOrigin.LIVE
+    val origin: FractalExperienceOrigin = FractalExperienceOrigin.LIVE,
+    val failureClasses: List<String?> = emptyList(),
+    val errorCodes: List<String?> = emptyList(),
+    val retryableFlags: List<Boolean?> = emptyList(),
+    val dependencies: List<String?> = emptyList()
 )
 
 data class FractalExperienceNode(
@@ -513,7 +517,19 @@ object FractalExperienceCanvasPolicy {
                 ?.take(64),
             updatedAt = example.updatedAt,
             summary = CoordinatorExperiencePolicy.formatForPrompt(example),
-            origin = origin
+            origin = origin,
+            failureClasses = List(tools.take(16).size) { index ->
+                sanitizeOutcomeMetadata(example.failureClasses.getOrNull(index), 120)
+            },
+            errorCodes = List(tools.take(16).size) { index ->
+                sanitizeOutcomeMetadata(example.errorCodes.getOrNull(index), 120)
+            },
+            retryableFlags = List(tools.take(16).size) { index ->
+                example.retryableFlags.getOrNull(index)
+            },
+            dependencies = List(tools.take(16).size) { index ->
+                sanitizeOutcomeMetadata(example.dependencies.getOrNull(index), 160)
+            }
         )
     }
 
@@ -700,6 +716,17 @@ object FractalExperienceCanvasPolicy {
             .replace(Regex("\\s{2,}"), " ")
             .trim()
             .take(240)
+
+    private fun sanitizeOutcomeMetadata(
+        value: String?,
+        maxChars: Int
+    ): String? =
+        value
+            ?.replace(Regex("[\\r\\n\\t]+"), " ")
+            ?.replace(Regex("\\s{2,}"), " ")
+            ?.trim()
+            ?.takeIf(String::isNotBlank)
+            ?.take(maxChars)
 
     private fun normalizeCue(raw: String): String? {
         val trimmed = raw

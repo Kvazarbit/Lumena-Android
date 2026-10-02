@@ -192,4 +192,66 @@ class FractalExperienceCanvasStoreTest {
         )
     }
 
+
+    @Test
+    fun structuredFailureMetadataRoundTripsAndLegacyJsonDefaultsSafely() {
+        val structured = example(id = "structured-store").copy(
+            outcomes = listOf(false, true),
+            failureClasses = listOf("INVALID_INPUT", null),
+            errorCodes = listOf("PYTHON_SCRIPT_REQUIRED", null),
+            retryableFlags = listOf(true, null),
+            dependencies = listOf("tool-schema", null)
+        )
+        val state = FractalExperienceCanvasPolicy.ingest(
+            FractalExperienceCanvasState(),
+            listOf(structured)
+        )
+        val encoded = FractalExperienceCanvasCodec.encode(state)
+        val decoded = FractalExperienceCanvasCodec.decode(encoded)
+        val record = decoded.records.single()
+
+        assertEquals(listOf("INVALID_INPUT", null), record.failureClasses)
+        assertEquals(listOf("PYTHON_SCRIPT_REQUIRED", null), record.errorCodes)
+        assertEquals(listOf(true, null), record.retryableFlags)
+        assertEquals(listOf("tool-schema", null), record.dependencies)
+
+        val legacyJson = encoded
+            .replace(",\"failureClasses\":[\"INVALID_INPUT\",null]", "")
+            .replace(",\"errorCodes\":[\"PYTHON_SCRIPT_REQUIRED\",null]", "")
+            .replace(",\"retryableFlags\":[true,null]", "")
+            .replace(",\"dependencies\":[\"tool-schema\",null]", "")
+        val legacyDecoded = FractalExperienceCanvasCodec.decode(legacyJson)
+        val legacyRecord = legacyDecoded.records.single()
+
+        assertTrue(legacyRecord.failureClasses.isEmpty())
+        assertTrue(legacyRecord.errorCodes.isEmpty())
+        assertTrue(legacyRecord.retryableFlags.isEmpty())
+        assertTrue(legacyRecord.dependencies.isEmpty())
+    }
+
+
+    @Test
+    fun structuredFailureMetadataIsSanitizedAndBoundedBeforeCausalUse() {
+        val structured = example(id = "structured-bounds").copy(
+            outcomes = listOf(false, true),
+            failureClasses = listOf("INVALID\nINPUT\tCLASS", null),
+            errorCodes = listOf("E".repeat(240), null),
+            retryableFlags = listOf(false, null),
+            dependencies = listOf(("dependency-" + "x".repeat(240)), null)
+        )
+
+        val state = FractalExperienceCanvasPolicy.ingest(
+            FractalExperienceCanvasState(),
+            listOf(structured)
+        )
+        val record = state.records.single()
+
+        assertEquals("INVALID INPUT CLASS", record.failureClasses[0])
+        assertEquals(120, record.errorCodes[0]?.length)
+        assertEquals(false, record.retryableFlags[0])
+        assertEquals(160, record.dependencies[0]?.length)
+        assertFalse(record.failureClasses[0].orEmpty().contains("\n"))
+        assertFalse(record.failureClasses[0].orEmpty().contains("\t"))
+    }
+
 }

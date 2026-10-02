@@ -42,6 +42,99 @@ class CompletionEvidenceTest {
         assertTrue(result.feedback.contains("real TOOL_RESULT"))
     }
 
+    @Test fun codePreflightAloneCannotSatisfyGoalContract() {
+        val initial = controller.initial(
+            TaskState(
+                id = "code-contract",
+                projectId = "demo",
+                goal = "Онови aquarium.html і реалізуй Fly hunter",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        val contextCall = AgentDecision.ToolCall(
+            tool = "context.snapshot"
+        )
+        val afterContext = controller.afterTool(
+            state = initial,
+            call = contextCall,
+            ok = true,
+            stdout = "workspace=ok",
+            stderr = "",
+            error = null
+        ).state
+
+        assertEquals(
+            CriterionStatus.PENDING,
+            afterContext.task.goalContract.criteria
+                .first { it.id == "code-action-evidence" }
+                .status
+        )
+
+        val done = controller.interpret(
+            """{"done":true,"summary":"Implemented."}""",
+            afterContext
+        )
+
+        assertTrue(done is ControllerInstruction.AskModelAgain)
+        done as ControllerInstruction.AskModelAgain
+        assertTrue(
+            done.feedback.contains(
+                "Goal contract has unverified mandatory criteria"
+            )
+        )
+        assertTrue(done.feedback.contains("code-action-evidence"))
+    }
+
+    @Test fun publicWebSearchSnippetAloneCannotSatisfyGoalContract() {
+        val initial = controller.initial(
+            TaskState(
+                id = "web-contract",
+                projectId = null,
+                goal = "Знайди в інтернеті актуальні дані про Kotlin",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        val searched = controller.afterTool(
+            state = initial,
+            call = AgentDecision.ToolCall(
+                tool = "web.search",
+                args = mapOf("query" to "Kotlin")
+            ),
+            ok = true,
+            stdout = "https://kotlinlang.org/",
+            stderr = "",
+            error = null
+        ).state
+
+        val doneAfterSearch = controller.interpret(
+            """{"done":true,"summary":"Kotlin is current."}""",
+            searched
+        )
+        assertTrue(
+            doneAfterSearch is ControllerInstruction.AskModelAgain
+        )
+
+        val read = controller.afterTool(
+            state = searched,
+            call = AgentDecision.ToolCall(
+                tool = "web.read",
+                args = mapOf(
+                    "url" to "https://kotlinlang.org/"
+                )
+            ),
+            ok = true,
+            stdout = "Kotlin documentation",
+            stderr = "",
+            error = null
+        ).state
+
+        assertTrue(
+            GoalContractPolicy.allMandatoryPassed(
+                read.task.goalContract
+            )
+        )
+    }
+
     @Test fun doneCannotDenyRecordedToolExecution() {
         val result = controller.interpret("""{"done":true,"summary":"Не виконано: інструмент workspace.list не був викликаний у попередніх кроках."}""", executed())
         assertTrue(result is ControllerInstruction.AskModelAgain)

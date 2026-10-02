@@ -30,7 +30,13 @@ data class DiagnosticTaskView(
     val kernelObserved: Int,
     val worldRevision: Int,
     val inFlight: String,
-    val evidence: List<String>
+    val evidence: List<String>,
+    val goalContractCoverage: String = "NONE",
+    val goalContractCriteria: Int = 0,
+    val goalContractMandatory: Int = 0,
+    val goalContractPassed: Int = 0,
+    val goalContractIndependentPassed: Int = 0,
+    val goalContractPending: List<String> = emptyList()
 )
 
 data class DiagnosticEvidenceView(
@@ -100,6 +106,18 @@ data class DiagnosticLayaShadowView(
     val lastErrorCode: String = ""
 )
 
+data class DiagnosticPredictionDeltaView(
+    val error: String = "",
+    val expectations: Int = 0,
+    val deltas: Int = 0,
+    val matches: Int = 0,
+    val unexpectedFailures: Int = 0,
+    val unexpectedSuccesses: Int = 0,
+    val schemaMismatches: Int = 0,
+    val outcomeUnknown: Int = 0,
+    val verificationMissing: Int = 0
+)
+
 data class DiagnosticFractalExperienceView(
     val error: String = "",
     val records: Int = 0,
@@ -114,7 +132,22 @@ data class DiagnosticFractalExperienceView(
     val contributorModels: Int = 0,
     val legacyBackfillVersion: Int = 0,
     val legacyBackfillRecords: Int = 0,
-    val liveRecords: Int = 0
+    val liveRecords: Int = 0,
+    val causalLinks: Int = 0,
+    val causalRecovered: Int = 0,
+    val causalUnresolved: Int = 0,
+    val causalLiveLinks: Int = 0,
+    val causalRevalidatedPatterns: Int = 0,
+    val causeUnknown: Int = 0,
+    val causeStructured: Int = 0,
+    val causeHypothesis: Int = 0,
+    val causeProbed: Int = 0,
+    val causeVerified: Int = 0,
+    val causeContested: Int = 0,
+    val causeRejected: Int = 0,
+    val causeRuntimeFailures: Int = 0,
+    val causeRuntimeHypotheses: Int = 0,
+    val causeRuntimeProbes: Int = 0
 )
 
 data class LumenaDiagnosticInput(
@@ -156,8 +189,12 @@ data class LumenaDiagnosticInput(
     val layaShadow: DiagnosticLayaShadowView =
         DiagnosticLayaShadowView(),
     val cognitiveRegression: CognitiveRegressionReport? = null,
+    val predictionDelta: DiagnosticPredictionDeltaView =
+        DiagnosticPredictionDeltaView(),
     val fractalExperience: DiagnosticFractalExperienceView =
-        DiagnosticFractalExperienceView()
+        DiagnosticFractalExperienceView(),
+    val workThreadAnchors: Int = 0,
+    val workThreadSubjects: List<String> = emptyList()
 )
 
 object LumenaDiagnosticFormatter {
@@ -197,6 +234,18 @@ object LumenaDiagnosticFormatter {
             appendLine("history_messages=${input.historyMessages}")
             appendLine("pending_approval=${input.pendingApproval}")
             appendLine("research_thread_present=${input.researchThreadPresent}")
+            appendLine(
+                "work_thread_anchors=" +
+                    input.workThreadAnchors
+            )
+            appendLine(
+                "work_thread_subjects=" +
+                    input.workThreadSubjects
+                        .take(12)
+                        .joinToString(",") {
+                            clean(it, 80)
+                        }
+            )
             appendLine(
                 "partial_outcome_capsule_present=" +
                     input.partialOutcomeCapsulePresent
@@ -241,6 +290,55 @@ object LumenaDiagnosticFormatter {
                         appendLine("- " + clean(it, 900))
                     }
                 }
+            }
+            appendLine()
+
+            appendLine("[GOAL_CONTRACT]")
+            if (task == null) {
+                appendLine("present=false")
+            } else {
+                appendLine("present=true")
+                appendLine(
+                    "coverage=" +
+                        clean(
+                            task.goalContractCoverage,
+                            120
+                        )
+                )
+                appendLine(
+                    "criteria=" +
+                        task.goalContractCriteria
+                )
+                appendLine(
+                    "mandatory=" +
+                        task.goalContractMandatory
+                )
+                appendLine(
+                    "passed=" +
+                        task.goalContractPassed
+                )
+                appendLine(
+                    "independent_passed=" +
+                        task.goalContractIndependentPassed
+                )
+                appendLine(
+                    "pending=" +
+                        task.goalContractPending
+                            .take(12)
+                            .joinToString(",") {
+                                clean(it, 220)
+                            }
+                )
+                appendLine(
+                    "all_mandatory_passed=" +
+                        (
+                            task.goalContractMandatory ==
+                                task.goalContractPassed
+                            )
+                )
+                appendLine(
+                    "coverage_is_full_semantic_proof=false"
+                )
             }
             appendLine()
 
@@ -463,6 +561,42 @@ object LumenaDiagnosticFormatter {
             appendLine("scope=memory_control_regression_not_model_intelligence")
             appendLine()
 
+            appendLine("[PREDICTION_DELTA]")
+            val prediction = input.predictionDelta
+            if (prediction.error.isNotBlank()) {
+                appendLine(
+                    "error=" +
+                        clean(prediction.error, 1200)
+                )
+            } else {
+                appendLine("expectations_total=" + prediction.expectations)
+                appendLine("deltas_total=" + prediction.deltas)
+                appendLine("matches=" + prediction.matches)
+                appendLine(
+                    "unexpected_failures=" +
+                        prediction.unexpectedFailures
+                )
+                appendLine(
+                    "unexpected_successes=" +
+                        prediction.unexpectedSuccesses
+                )
+                appendLine(
+                    "schema_mismatches=" +
+                        prediction.schemaMismatches
+                )
+                appendLine(
+                    "outcome_unknown=" +
+                        prediction.outcomeUnknown
+                )
+                appendLine(
+                    "verification_missing=" +
+                        prediction.verificationMissing
+                )
+                appendLine("authority=advisory_only")
+                appendLine("model_prose_is_evidence=false")
+            }
+            appendLine()
+
             appendLine("[FRACTAL_EXPERIENCE_CANVAS]")
             appendLine("mode=SHADOW")
             appendLine("authority=advisory_only")
@@ -501,6 +635,67 @@ object LumenaDiagnosticFormatter {
                     "live_records=" +
                         fractal.liveRecords
                 )
+                appendLine(
+                    "causal_links=" +
+                        fractal.causalLinks
+                )
+                appendLine(
+                    "causal_recovered=" +
+                        fractal.causalRecovered
+                )
+                appendLine(
+                    "causal_unresolved=" +
+                        fractal.causalUnresolved
+                )
+                appendLine(
+                    "causal_live_links=" +
+                        fractal.causalLiveLinks
+                )
+                appendLine(
+                    "causal_revalidated_patterns=" +
+                        fractal.causalRevalidatedPatterns
+                )
+                appendLine(
+                    "cause_unknown=" +
+                        fractal.causeUnknown
+                )
+                appendLine(
+                    "cause_structured=" +
+                        fractal.causeStructured
+                )
+                appendLine(
+                    "cause_hypothesis=" +
+                        fractal.causeHypothesis
+                )
+                appendLine(
+                    "cause_probed=" +
+                        fractal.causeProbed
+                )
+                appendLine(
+                    "cause_verified=" +
+                        fractal.causeVerified
+                )
+                appendLine(
+                    "cause_contested=" +
+                        fractal.causeContested
+                )
+                appendLine(
+                    "cause_rejected=" +
+                        fractal.causeRejected
+                )
+                appendLine(
+                    "cause_runtime_failures=" +
+                        fractal.causeRuntimeFailures
+                )
+                appendLine(
+                    "cause_runtime_hypotheses_total=" +
+                        fractal.causeRuntimeHypotheses
+                )
+                appendLine(
+                    "cause_runtime_probes_total=" +
+                        fractal.causeRuntimeProbes
+                )
+                appendLine("cause_model_prose_is_evidence=false")
                 appendLine("immune_worst_peaks=" + fractal.worst)
                 appendLine(
                     "immune_contested_peaks=" +
@@ -652,6 +847,8 @@ object LumenaDiagnosticReport {
             layaShadowView(app)
         val fractalExperience =
             fractalExperienceView(app)
+        val predictionDelta =
+            predictionDeltaView(app)
 
         val input = LumenaDiagnosticInput(
             generatedAtMs = now,
@@ -751,7 +948,17 @@ object LumenaDiagnosticReport {
                 val state = CoordinatorExperienceStore.load(app)
                 CognitiveRegressionSuite.replay(CognitiveRegressionSuite.corpus(state.learnedExamples))
             }.getOrNull(),
-            fractalExperience = fractalExperience
+            predictionDelta = predictionDelta,
+            fractalExperience = fractalExperience,
+            workThreadAnchors =
+                session.workThreads.anchors.size,
+            workThreadSubjects =
+                session.workThreads.anchors
+                    .takeLast(4)
+                    .flatMap {
+                        it.subjectKeys.take(3)
+                    }
+                    .distinct()
         )
 
         return LumenaDiagnosticFormatter.render(
@@ -759,12 +966,41 @@ object LumenaDiagnosticReport {
         )
     }
 
+    private fun predictionDeltaView(
+        context: Context
+    ): DiagnosticPredictionDeltaView =
+        runCatching {
+            val stats =
+                ExperienceOutcomeDeltaPolicy.stats(
+                    CoordinatorExperienceStore.load(context)
+                )
+            DiagnosticPredictionDeltaView(
+                expectations = stats.expectations,
+                deltas = stats.deltas,
+                matches = stats.matches,
+                unexpectedFailures = stats.unexpectedFailures,
+                unexpectedSuccesses = stats.unexpectedSuccesses,
+                schemaMismatches = stats.schemaMismatches,
+                outcomeUnknown = stats.outcomeUnknown,
+                verificationMissing = stats.verificationMissing
+            )
+        }.getOrElse { failure ->
+            DiagnosticPredictionDeltaView(
+                error =
+                    failure.message
+                        ?: failure::class.simpleName
+                        ?: "prediction delta unavailable"
+            )
+        }
+
     private fun fractalExperienceView(
         context: Context
     ): DiagnosticFractalExperienceView =
         runCatching {
             val stats =
                 FractalExperienceCanvasStore.stats(context)
+            val causeRuntime =
+                VerifiedCauseLadderStore.stats(context)
             DiagnosticFractalExperienceView(
                 records = stats.records,
                 nodes = stats.nodes,
@@ -784,7 +1020,37 @@ object LumenaDiagnosticReport {
                 legacyBackfillRecords =
                     stats.legacyBackfillRecords,
                 liveRecords =
-                    stats.liveRecords
+                    stats.liveRecords,
+                causalLinks =
+                    stats.causalLinks,
+                causalRecovered =
+                    stats.causalRecovered,
+                causalUnresolved =
+                    stats.causalUnresolved,
+                causalLiveLinks =
+                    stats.causalLiveLinks,
+                causalRevalidatedPatterns =
+                    stats.causalRevalidatedPatterns,
+                causeUnknown =
+                    stats.causeUnknown,
+                causeStructured =
+                    stats.causeStructured,
+                causeHypothesis =
+                    causeRuntime.hypothesisStage,
+                causeProbed =
+                    causeRuntime.probedStage,
+                causeVerified =
+                    causeRuntime.verifiedStage,
+                causeContested =
+                    causeRuntime.contestedStage,
+                causeRejected =
+                    causeRuntime.rejectedStage,
+                causeRuntimeFailures =
+                    causeRuntime.failures,
+                causeRuntimeHypotheses =
+                    causeRuntime.hypotheses,
+                causeRuntimeProbes =
+                    causeRuntime.probes
             )
         }.getOrElse { failure ->
             DiagnosticFractalExperienceView(
@@ -952,7 +1218,37 @@ object LumenaDiagnosticReport {
                             "ok=${it.ok}|target=${it.target}|" +
                             "rev=${it.revision}|" +
                             it.excerpt
-                    }
+                    },
+            goalContractCoverage =
+                task.goalContract.coverage.name,
+            goalContractCriteria =
+                task.goalContract.criteria.size,
+            goalContractMandatory =
+                task.goalContract.criteria.count {
+                    it.required
+                },
+            goalContractPassed =
+                task.goalContract.criteria.count {
+                    it.required &&
+                        it.status ==
+                            com.lumena.android.agent.core.CriterionStatus.PASSED
+                },
+            goalContractIndependentPassed =
+                task.goalContract.criteria.count { criterion ->
+                    criterion.required &&
+                        criterion.status ==
+                            com.lumena.android.agent.core.CriterionStatus.PASSED &&
+                        criterion.evidence.any {
+                            it.strength ==
+                                com.lumena.android.agent.core.VerificationStrength.INDEPENDENT_TOOL_RESULT
+                        }
+                },
+            goalContractPending =
+                com.lumena.android.agent.core.GoalContractPolicy
+                    .incompleteMandatory(
+                        task.goalContract
+                    )
+                    .map { it.id }
         )
 
     private fun evidenceView(

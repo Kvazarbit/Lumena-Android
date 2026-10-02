@@ -75,18 +75,25 @@ class PlainReplyRecoveryTest {
     }
 
     @Test fun verifiedReadOnlySourceAllowsPlainSynthesisWithoutExtraProtocolTurn() {
-        val evidence = ContextKernel.record(
-            ContextKernelState(),
-            AgentDecision.ToolCall(
-                "web.read",
-                mapOf("url" to "https://example.org/news")
+        val state = controller.afterTool(
+            state = controller.initial(
+                TaskState(
+                    "web-verified",
+                    null,
+                    "Знайди новини в інтернеті"
+                )
             ),
-            true,
-            "Read article"
-        )
-        val state = webState().let {
-            it.copy(task = it.task.copy(kernel = evidence))
-        }
+            call = AgentDecision.ToolCall(
+                "web.read",
+                mapOf(
+                    "url" to "https://example.org/news"
+                )
+            ),
+            ok = true,
+            stdout = "Read article",
+            stderr = "",
+            error = null
+        ).state
 
         val result = controller.interpret(
             "Перевірений підсумок",

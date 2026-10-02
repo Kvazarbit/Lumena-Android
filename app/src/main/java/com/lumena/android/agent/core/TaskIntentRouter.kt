@@ -45,37 +45,51 @@ object TaskIntentRouter {
         "python.run"
     )
 
+    private val explicitToolAlternation =
+        explicitObligationTools
+            .sortedByDescending(String::length)
+            .joinToString("|") {
+                Regex.escape(it)
+            }
+
+    private val negatedExplicitToolList =
+        Regex(
+            "(?iu)(?:не\\s+(?:використовуй|використовуйте|запускай|запускайте|виконуй|виконуйте|роби|робіть)|" +
+                "не\\s+используй(?:те)?|не\\s+запускай(?:те)?|do\\s+not\\s+(?:use|run)|don't\\s+(?:use|run)|" +
+                "never\\s+(?:use|run)|nie\\s+(?:używaj|uzywaj|uruchamiaj)|без)\\s+" +
+                "(?:$explicitToolAlternation)" +
+                "(?:\\s*(?:,|або|чи|і|та|or|and|lub)\\s*(?:$explicitToolAlternation))*"
+        )
+
+    /**
+     * Remove only tool names that occur inside an explicit negative tool list.
+     * A later positive mention outside that list remains visible.
+     */
+    internal fun withoutNegatedExplicitToolMentions(
+        goal: String
+    ): String =
+        negatedExplicitToolList.replace(goal) { match ->
+            Regex(
+                "(?iu)(?<![a-z0-9_])(?:$explicitToolAlternation)(?![a-z0-9_])"
+            ).replace(
+                match.value,
+                " "
+            )
+        }
+
     fun explicitRequiredTools(goal: String): Set<String> {
-        val lower = goal.lowercase()
+        val lower =
+            withoutNegatedExplicitToolMentions(goal)
+                .lowercase()
+
         return explicitObligationTools
             .asSequence()
             .filter { tool ->
-                val index = lower.indexOf(tool)
-                if (index < 0) return@filter false
-
-                val prefix = lower
-                    .substring(
-                        maxOf(0, index - 48),
-                        index
-                    )
-                    .trimEnd()
-
-                val negated = listOf(
-                    "не використовуй",
-                    "не запускай",
-                    "не виконуй",
-                    "не роби",
-                    "do not use",
-                    "do not run",
-                    "don't use",
-                    "don't run",
-                    "nie używaj",
-                    "nie uzywaj",
-                    "nie uruchamiaj",
-                    "без "
-                ).any { prefix.endsWith(it) }
-
-                !negated
+                Regex(
+                    "(?<![a-z0-9_])" +
+                        Regex.escape(tool) +
+                        "(?![a-z0-9_])"
+                ).containsMatchIn(lower)
             }
             .map(ToolRegistry::canonicalize)
             .filter { ToolRegistry.get(it) != null }
@@ -83,7 +97,8 @@ object TaskIntentRouter {
     }
 
     fun route(goal: String): TaskIntentProfile {
-        val normalized = goal
+        val normalized =
+            withoutNegatedExplicitToolMentions(goal)
             .replace(Regex("[\\r\\n\\t]+"), " ")
             .replace(Regex("\\s{2,}"), " ")
             .trim()
@@ -371,20 +386,34 @@ object TaskIntentRouter {
     }
 
     private fun isCodeWork(lower: String): Boolean {
-        val codeTerms = listOf(
+        // "test/тест" is deliberately NOT a strong code subject. Natural
+        // conversation often asks whether a medical/scientific claim was
+        // "перевірено тестами"; treating that phrase as software work starts a
+        // context.snapshot preflight and poisons an otherwise conversational turn.
+        val strongCodeTerms = listOf(
             "python", ".py", "kotlin", ".kt", "java", ".java", "gradle",
             "html", ".html", "css", ".css", "javascript", "typescript", "js", "webgl",
             "скрипт", "script", "код", "code", "compile", "компіля",
-            "test", "тест", "bug", "баг", "debug", "fix(", "repo", "repository",
+            "bug", "баг", "debug", "fix(", "repo", "repository",
             "github", "git "
         )
         val actionTerms = listOf(
             "створ", "create", "write", "напис", "реаліз", "implement",
             "виправ", "fix", "редаг", "edit", "patch", "перевір", "test",
-            "запуст", "run", "debug", "build", "збір", "commit"
+            "запуст", "run", "debug", "build", "збір", "commit",
+            "онов", "update", "зроби", "зробіть", "зробити", "modify", "покращ", "improve"
         )
-        if (!codeTerms.any { containsTerm(lower, it) }) return false
-        if (actionTerms.any { containsTerm(lower, it) }) return true
+
+        val hasStrongCodeSubject =
+            strongCodeTerms.any { containsTerm(lower, it) }
+        if (hasStrongCodeSubject && actionTerms.any { containsTerm(lower, it) }) {
+            return true
+        }
+
+        if (isExplicitSoftwareTestOperation(lower)) return true
+
+        if (!hasStrongCodeSubject) return false
+
         // Tolerate one mistyped letter in a leading creation imperative, only
         // when an explicit code subject is present. This grants no tool authority.
         val leading = Regex("^\\p{L}+").find(lower)?.value ?: return false
@@ -393,10 +422,47 @@ object TaskIntentRouter {
         }
     }
 
+    private fun isExplicitSoftwareTestOperation(lower: String): Boolean {
+        if (listOf(
+                "python.tests",
+                "pytest",
+                "unit test",
+                "unit tests",
+                "integration test",
+                "integration tests",
+                "тести коду",
+                "тест коду",
+                "тести скрипта",
+                "тест скрипта",
+                "тести проєкту",
+                "тести проекту"
+            ).any { containsTerm(lower, it) }
+        ) {
+            return true
+        }
+
+        val testPattern =
+            "(?:тест(?:и|ів|ами|ах)?|tests?)"
+        val executionPattern =
+            "(?:запусти|запустити|запускай|прожени|прогнати|виконай|виконати|" +
+                "run|execute|rerun|uruchom|wykonaj)"
+
+        // A generic "test" and an execution verb must belong to the same
+        // local clause. This keeps "запусти тести" as software work, but avoids
+        // cross-sentence collisions such as:
+        // "Контрольований тест Cause Ladder. Потім виконай workspace.list".
+        // Explicit software phrases above remain high-confidence regardless.
+        return Regex(
+            "(?iu)(?:\\b$executionPattern\\b[^.!?;\\n]{0,48}\\b$testPattern\\b|" +
+                "\\b$testPattern\\b[^.!?;\\n]{0,48}\\b$executionPattern\\b)"
+        ).containsMatchIn(lower)
+    }
+
     private fun isFileInspection(lower: String): Boolean {
         val fileTerms = listOf(
             "файл", "file", "папк", "folder", "директор", "directory",
-            "readme", "лог", "log", "репозитор", "repository", "repo"
+            "readme", "лог", "log", "репозитор", "repository", "repo",
+            ".html", ".py", ".kt", ".js", ".json", ".md"
         )
         val actionTerms = listOf(
             "знайд", "find", "покаж", "show", "прочит", "read", "відкрий",

@@ -71,12 +71,32 @@ class AgentResponseParser {
             .mapNotNull { it?.toString()?.trim()?.takeIf(String::isNotBlank) }
             .take(6)
             .map { it.take(180) }
+        val causeHypothesis = obj["cause_hypothesis"]
+            ?.toString()
+            ?.trim()
+            ?.takeIf(String::isNotBlank)
+            ?.take(600)
+        val causeProbeOnSuccess = obj["cause_probe_on_success"]
+            ?.toString()
+            ?.trim()
+            ?.uppercase()
+            ?.takeIf(String::isNotBlank)
+            ?.take(24)
+        val causeProbeOnFailure = obj["cause_probe_on_failure"]
+            ?.toString()
+            ?.trim()
+            ?.uppercase()
+            ?.takeIf(String::isNotBlank)
+            ?.take(24)
 
         return AgentDecision.ToolCall(
             tool = tool,
             args = args,
             reason = reason,
-            plan = plan
+            plan = plan,
+            causeHypothesis = causeHypothesis,
+            causeProbeOnSuccess = causeProbeOnSuccess,
+            causeProbeOnFailure = causeProbeOnFailure
         )
     }
 

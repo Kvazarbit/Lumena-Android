@@ -21,7 +21,15 @@ object TaskExecutionRecap {
                 if (excerptBudget > 0) appendLine("${e.id} excerpt=" + quote(e.excerpt.take(excerptBudget)))
             }
             if (events.map { it.tool }.distinct().size > latest.size) appendLine("More receipts retained in task state; list is bounded.")
-            appendLine("Goal: " + quote(state.task.goal.take(120)))
+            appendLine(
+                "Goal: " +
+                    quote(
+                        GoalContext.clip(
+                            state.task.goal,
+                            420
+                        )
+                    )
+            )
             appendLine("Pending tools: " + (state.requiredTools - state.completedRequiredTools).sorted().joinToString(",").ifBlank { "none" })
             append("Continue this task. Use recorded results; do not rerun tools solely to reconstruct the report.")
         }
