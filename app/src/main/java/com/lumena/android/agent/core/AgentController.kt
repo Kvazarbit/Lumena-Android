@@ -917,7 +917,7 @@ class AgentController(
             return interpretDone(AgentDecision.Done(trimmed), state)
         }
 
-        if (canFinishPublicWebPlainReply(state)) {
+        if (canFinishVerifiedReadOnlyPlainReply(state)) {
             val finished = state.copy(
                 protocolRetries = 0,
                 schemaRepairs = 0,
@@ -990,22 +990,31 @@ class AgentController(
         )
     }
 
-    private fun canFinishPublicWebPlainReply(
+    private fun canFinishVerifiedReadOnlyPlainReply(
         state: AgentControlState
     ): Boolean {
         if (!state.toolUsed) return false
         if (state.verificationRequired) return false
-        if (state.intent in setOf(
-                TaskIntent.CODE_WORK,
-                TaskIntent.OLLAMA_OPERATION
+        if (
+            state.intent !in setOf(
+                TaskIntent.PUBLIC_WEB,
+                TaskIntent.FILE_INSPECTION
             )
         ) {
             return false
         }
-        if (state.requiredTools - state.completedRequiredTools != emptySet<String>()) {
+        if (
+            state.requiredTools -
+                state.completedRequiredTools !=
+                emptySet<String>()
+        ) {
             return false
         }
-        if (ContextKernel.completionBlocker(state.task.kernel) != null) {
+        if (
+            ContextKernel.completionBlocker(
+                state.task.kernel
+            ) != null
+        ) {
             return false
         }
         if (
@@ -1016,8 +1025,10 @@ class AgentController(
             return false
         }
 
-        val evidence = state.task.kernel.evidence
-        if (evidence.any {
+        val evidence =
+            state.task.kernel.evidence
+        if (
+            evidence.any {
                 it.phase == CognitivePhase.ACT ||
                     it.phase == CognitivePhase.VERIFY
             }
@@ -1025,15 +1036,36 @@ class AgentController(
             return false
         }
 
-        val sourceTools = setOf(
-            "web.read",
-            "http.get",
-            "http.json"
-        )
+        val acceptedObserveTools =
+            when (state.intent) {
+                TaskIntent.PUBLIC_WEB ->
+                    setOf(
+                        "web.read",
+                        "http.get",
+                        "http.json"
+                    )
+
+                TaskIntent.FILE_INSPECTION ->
+                    setOf(
+                        "workspace.list",
+                        "file.list",
+                        "file.search",
+                        "file.read",
+                        "git.status",
+                        "git.diff",
+                        "git.log"
+                    )
+
+                else ->
+                    emptySet()
+            }
+
         return evidence.any { event ->
             event.ok &&
-                event.phase == CognitivePhase.OBSERVE &&
-                event.tool in sourceTools
+                event.phase ==
+                    CognitivePhase.OBSERVE &&
+                event.tool in
+                    acceptedObserveTools
         }
     }
 
