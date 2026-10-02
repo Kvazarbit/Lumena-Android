@@ -1275,6 +1275,133 @@ class AgentControllerTest {
     }
 
     @Test
+    fun fileInspectionPlainReplyFinishesAfterVerifiedRead() {
+        val localTask = TaskState(
+            id = "file-plain-finish",
+            projectId = null,
+            goal =
+                "Продовж роботу над aquarium.html, але на цьому кроці тільки прочитай поточний файл і скажи наступний безпечний крок. Нічого не змінюй.",
+            status = TaskStatus.WAITING_MODEL,
+            maxSteps = 5
+        )
+        var state =
+            controller.initial(localTask)
+
+        assertEquals(
+            TaskIntent.FILE_INSPECTION,
+            state.intent
+        )
+
+        val read =
+            AgentDecision.ToolCall(
+                tool = "file.read",
+                args =
+                    mapOf(
+                        "path" to
+                            "aquarium.html"
+                    )
+            )
+        state =
+            controller.afterTool(
+                state = state,
+                call = read,
+                ok = true,
+                stdout =
+                    "const WATER_Y=8.2; const FLY_GRAVITY=18.0;",
+                stderr = "",
+                error = null
+            ).state
+
+        assertTrue(
+            GoalContractPolicy
+                .allMandatoryPassed(
+                    state.task.goalContract
+                )
+        )
+
+        val reply =
+            controller.interpret(
+                "Файл прочитано. Наступний безпечний крок — продовжити read-only аналіз JS-логіки без змін.",
+                state
+            )
+
+        assertTrue(
+            reply is
+                ControllerInstruction.Finish
+        )
+        reply as ControllerInstruction.Finish
+        assertEquals(
+            TaskStatus.DONE,
+            reply.state.task.status
+        )
+        assertEquals(
+            0,
+            reply.state.protocolRetries
+        )
+        assertTrue(
+            reply.text.contains(
+                "безпечний крок"
+            )
+        )
+    }
+
+    @Test
+    fun fileInspectionPlainReplyCannotBypassPendingFileRead() {
+        val localTask = TaskState(
+            id = "file-plain-pending",
+            projectId = null,
+            goal =
+                "Знайди aquarium.html і прочитай його.",
+            status = TaskStatus.WAITING_MODEL,
+            maxSteps = 5
+        )
+        var state =
+            controller.initial(localTask)
+
+        val list =
+            AgentDecision.ToolCall(
+                tool = "workspace.list"
+            )
+        state =
+            controller.afterTool(
+                state = state,
+                call = list,
+                ok = true,
+                stdout = "aquarium.html",
+                stderr = "",
+                error = null
+            ).state
+
+        assertFalse(
+            GoalContractPolicy
+                .allMandatoryPassed(
+                    state.task.goalContract
+                )
+        )
+
+        val reply =
+            controller.interpret(
+                "Файл знайдено, все готово.",
+                state
+            )
+
+        assertTrue(
+            reply is
+                ControllerInstruction.AskModelAgain
+        )
+        reply as ControllerInstruction.AskModelAgain
+        assertTrue(
+            reply.feedback.contains(
+                "file-content-evidence"
+            )
+        )
+        assertTrue(
+            reply.state.task.status !=
+                TaskStatus.DONE
+        )
+    }
+
+    @Test
     fun webSearchSnippetAloneDoesNotAuthorizePlainReplyFinish() {
         val webTask = TaskState(
             id = "web-snippet-only",
