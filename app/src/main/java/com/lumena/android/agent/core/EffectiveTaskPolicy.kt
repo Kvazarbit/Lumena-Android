@@ -791,7 +791,7 @@ object EffectiveTaskPolicyCompiler {
         val chars = value.toCharArray()
         val patterns =
             listOf(
-                Regex(""[^"\\n]*""),
+                Regex("\\\"[^\\\"\\n]*\\\""),
                 Regex("'[^'\\n]*'"),
                 Regex("«[^»\\n]*»"),
                 Regex("\\x60[^\\x60\\n]*\\x60")
