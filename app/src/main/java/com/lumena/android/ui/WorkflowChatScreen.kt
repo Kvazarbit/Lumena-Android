@@ -68,6 +68,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.core.AgentControlState
+import com.lumena.android.agent.core.EffectiveTaskPolicyCompiler
 import com.lumena.android.agent.core.HistoricalSessionMemory
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
@@ -345,6 +346,15 @@ fun WorkflowChatScreen(
     }
 
     fun restoredPendingFrom(saved: PersistedPendingTool?): PendingWorkflowTool? = saved?.let {
+        val control =
+            it.control
+                ?: currentTask?.let {
+                    task ->
+                    AgentControlState(
+                        task = task
+                    )
+                }
+                ?: return@let null
         val planned = ToolGate.plan(
             PlannerDecision(
                 request = ToolRequest(
@@ -353,12 +363,14 @@ fun WorkflowChatScreen(
                     it.requestId
                 ),
                 reason = it.reason
-            )
+            ),
+            taskPolicy =
+                control.task
+                    .effectivePolicy
         ).copy(
             causeProbeIntent =
                 it.causeProbeIntent
         )
-        val control = it.control ?: currentTask?.let { task -> AgentControlState(task = task) } ?: return@let null
         if (planned.allowed) {
             PendingWorkflowTool(
                 plan = planned,
@@ -456,6 +468,13 @@ fun WorkflowChatScreen(
             control.task.kernel !=
                 previousKernel
         ) {
+            historicalFacts =
+                HistoricalSessionMemory.reconcile(
+                    records =
+                        historicalFacts,
+                    verificationTask =
+                        control.task
+                )
             historicalFacts =
                 HistoricalSessionMemory.record(
                     existing =
@@ -1362,10 +1381,41 @@ fun WorkflowChatScreen(
                     "NONE" ||
                     workResolution.continued
         ) ?: workResolution.projectId
+        val selectedHistorical =
+            HistoricalSessionMemory.select(
+                records =
+                    historicalFacts,
+                branchId =
+                    currentBranchId(),
+                projectId =
+                    projectId,
+                subjectKeys =
+                    WorkThreadMemory.subjectKeys(
+                        resolvedGoal
+                    )
+            )
+        val effectivePolicy =
+            EffectiveTaskPolicyCompiler.compile(
+                rootGoal =
+                    resolvedGoal,
+                currentInstruction =
+                    text,
+                unresolvedEffects =
+                    HistoricalSessionMemory
+                        .unresolvedForPolicy(
+                            selectedHistorical
+                        ),
+                scopeRef =
+                    projectId
+                        ?: currentBranchId()
+            )
         val task = TaskState(
             id = UUID.randomUUID().toString(),
             projectId = projectId,
             goal = resolvedGoal,
+            currentInstruction = text,
+            effectivePolicy =
+                effectivePolicy,
             status = TaskStatus.WAITING_MODEL
         )
         val languageIntent = FractalLanguageIntentPolicy.canonicalIntent(
@@ -1387,18 +1437,7 @@ fun WorkflowChatScreen(
         }
         val historicalContext =
             HistoricalSessionMemory.render(
-                HistoricalSessionMemory.select(
-                    records =
-                        historicalFacts,
-                    branchId =
-                        currentBranchId(),
-                    projectId =
-                        projectId,
-                    subjectKeys =
-                        WorkThreadMemory.subjectKeys(
-                            resolvedGoal
-                        )
-                )
+                selectedHistorical
             )
         val epochHistory =
             ExecutionEpochHistory.rebuild(
