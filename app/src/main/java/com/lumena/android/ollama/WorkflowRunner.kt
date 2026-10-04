@@ -12,6 +12,7 @@ import com.lumena.android.agent.core.ReflexKernel
 import com.lumena.android.agent.core.ReflexRuntimeAdvice
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
+import com.lumena.android.agent.core.EffectiveTaskPolicyCompiler
 import com.lumena.android.agent.core.ToolRegistry
 import com.lumena.android.agent.core.ToolRisk
 import com.lumena.android.agent.core.TaskIntentRouter
@@ -106,13 +107,51 @@ class WorkflowRunner(
         var protocolTurns = 0
         publish(state, onState)
 
-        val intentProfile = TaskIntentRouter.route(state.task.goal)
+        val intentProfile =
+            TaskIntentRouter.route(
+                state.task.effectivePolicy
+            )
         if (!state.preflightCompleted && state.task.step == 0) {
             onProgress(
                 "INTENT · ${intentProfile.intent} · confidence=${intentProfile.confidence}"
             )
 
-            val preflight = intentProfile.preflight
+            val preflightCandidate =
+                intentProfile.preflight
+            val preflightDecision =
+                preflightCandidate?.let {
+                    EffectiveTaskPolicyCompiler
+                        .validateTool(
+                            state.task
+                                .effectivePolicy,
+                            AgentDecision.ToolCall(
+                                tool = it.tool,
+                                args = it.args,
+                                reason =
+                                    it.reason
+                            )
+                        )
+                }
+            val preflight =
+                preflightCandidate
+                    ?.takeIf {
+                        preflightDecision
+                            ?.allowed != false
+                    }
+            if (
+                preflightCandidate != null &&
+                preflight == null
+            ) {
+                onProgress(
+                    "PREFLIGHT SKIPPED BY TASK POLICY · " +
+                        preflightCandidate.tool +
+                        " · " +
+                        preflightDecision
+                            ?.reason
+                            .orEmpty()
+                            .take(500)
+                )
+            }
             if (preflight == null) {
                 state = state.copy(preflightCompleted = true)
                 publish(state, onState)
