@@ -883,8 +883,11 @@ class AgentController(
         }
 
         if (requiresVisualEvidence(
-            state.task.effectivePolicy.currentInstruction
-                .ifBlank { state.task.goal }
+            EffectiveTaskPolicyCompiler
+                .routingText(
+                    state.task
+                        .effectivePolicy
+                )
         ) && !state.visualEvidenceReady) {
             return protocolRetry(
                 state,
@@ -1004,8 +1007,11 @@ class AgentController(
         }
 
         if (requiresVisualEvidence(
-            state.task.effectivePolicy.currentInstruction
-                .ifBlank { state.task.goal }
+            EffectiveTaskPolicyCompiler
+                .routingText(
+                    state.task
+                        .effectivePolicy
+                )
         ) && !state.visualEvidenceReady) {
             return recoverPlainReply(
                 state, trimmed,
@@ -1047,8 +1053,11 @@ class AgentController(
         summaryConsistency(trimmed, state)?.let { return it }
 
         if (requiresVisualEvidence(
-            state.task.effectivePolicy.currentInstruction
-                .ifBlank { state.task.goal }
+            EffectiveTaskPolicyCompiler
+                .routingText(
+                    state.task
+                        .effectivePolicy
+                )
         ) && state.visualEvidenceReady) {
             return interpretDone(AgentDecision.Done(trimmed), state)
         }
