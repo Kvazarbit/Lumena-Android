@@ -8,6 +8,7 @@ import android.util.AtomicFile
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
+import com.lumena.android.agent.core.HistoricalRecordOrigin
 import com.lumena.android.agent.core.HistoricalSessionMemory
 import com.lumena.android.agent.core.TaskStatus
 import com.squareup.moshi.Moshi
@@ -69,6 +70,19 @@ object StateVault {
     ) = s.copy(
         pending = null,
         task = s.task?.let { t ->
+            val importedPolicy =
+                t.effectivePolicy.copy(
+                    unresolvedEffects =
+                        t.effectivePolicy
+                            .unresolvedEffects
+                            .map {
+                                it.copy(
+                                    origin =
+                                        HistoricalRecordOrigin
+                                            .IMPORTED_ADVISORY
+                                )
+                            }
+                )
             if (
                 t.status in setOf(
                     TaskStatus.DONE,
@@ -76,9 +90,14 @@ object StateVault {
                     TaskStatus.CANCELLED
                 )
             ) {
-                t
+                t.copy(
+                    effectivePolicy =
+                        importedPolicy
+                )
             } else {
                 t.copy(
+                    effectivePolicy =
+                        importedPolicy,
                     status = TaskStatus.CANCELLED,
                     errors =
                         (
