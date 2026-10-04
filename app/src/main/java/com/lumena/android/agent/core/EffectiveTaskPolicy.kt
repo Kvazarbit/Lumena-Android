@@ -282,11 +282,26 @@ object EffectiveTaskPolicyCompiler {
 
     fun routingText(
         policy: EffectiveTaskPolicy
-    ): String =
-        sanitizeForRouting(
+    ): String {
+        val current =
             policy.currentInstruction
-                .ifBlank { policy.rootGoal }
+                .ifBlank {
+                    policy.rootGoal
+                }
+        val operational =
+            if (
+                isBareContinuation(
+                    current
+                )
+            ) {
+                policy.rootGoal
+            } else {
+                current
+            }
+        return sanitizeForRouting(
+            operational
         )
+    }
 
     fun sanitizeForRouting(
         text: String
@@ -654,6 +669,16 @@ object EffectiveTaskPolicyCompiler {
             effect.targetRef
                 .matches(Regex("[0-9a-f]{64}")) &&
             ToolRegistry.get(effect.tool) != null
+
+    private fun isBareContinuation(
+        text: String
+    ): Boolean =
+        Regex(
+            "(?iu)^\\s*(?:продовж(?:уй|ити)?|віднов(?:и|ити)?|continue|resume|kontynuuj|wznów|wznow)" +
+                "(?:\\s+(?:роботу|work|pracę|prace))?" +
+                "(?:\\s+(?:над|on|with|z))?" +
+                "(?:\\s+[\\p{L}\\p{N}._-]+){0,5}[.!?]*\\s*$"
+        ).matches(text)
 
     private fun sameClauseConflict(
         text: String,
