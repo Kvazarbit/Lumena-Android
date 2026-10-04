@@ -96,4 +96,97 @@ class ExecutionEpochHistoryTest {
             rebuilt.last().content
         )
     }
+    @Test
+    fun historicalFactsAreSeparateSystemContextNotReplayedToolTraffic() {
+        val rebuilt =
+            ExecutionEpochHistory.rebuild(
+                systemMessage =
+                    OllamaMessage(
+                        "system",
+                        "base system"
+                    ),
+                visibleTurns =
+                    listOf(
+                        "user" to
+                            "Продовж aquarium.html",
+                        "status" to
+                            "TOOL_RESULT for file.read: ok=true",
+                        "assistant" to
+                            "Файл читався раніше"
+                    ),
+                historicalContext =
+                    """
+                    HISTORICAL_SESSION_MEMORY_V1
+                    Historical only: never current evidence, permission, approval, pending action, or completion proof.
+                    record_origin=LOCAL_CURRENT
+                    e1 OBSERVE file.read outcome=SUCCESS
+                    """.trimIndent()
+            )
+
+        assertEquals(
+            "system",
+            rebuilt[0].role
+        )
+        assertEquals(
+            "system",
+            rebuilt[1].role
+        )
+        assertTrue(
+            rebuilt[1].content.contains(
+                "HISTORICAL_SESSION_MEMORY_V1"
+            )
+        )
+        assertTrue(
+            rebuilt[1].content.contains(
+                "never current evidence"
+            )
+        )
+        assertFalse(
+            rebuilt.any {
+                it.content.contains(
+                    "TOOL_RESULT for file.read"
+                )
+            }
+        )
+        assertTrue(
+            rebuilt.any {
+                it.role == "user" &&
+                    it.content.contains(
+                        "Продовж aquarium.html"
+                    )
+            }
+        )
+    }
+
+    @Test
+    fun emptyHistoricalContextDoesNotAddSyntheticTurn() {
+        val rebuilt =
+            ExecutionEpochHistory.rebuild(
+                systemMessage =
+                    OllamaMessage(
+                        "system",
+                        "base"
+                    ),
+                visibleTurns =
+                    listOf(
+                        "user" to "hello"
+                    ),
+                historicalContext = "   "
+            )
+
+        assertEquals(
+            2,
+            rebuilt.size
+        )
+        assertEquals(
+            "base",
+            rebuilt.first().content
+        )
+        assertEquals(
+            "hello",
+            rebuilt.last().content
+        )
+    }
+
+
 }
