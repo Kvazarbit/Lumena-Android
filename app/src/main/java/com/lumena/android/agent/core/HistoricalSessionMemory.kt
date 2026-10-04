@@ -45,6 +45,13 @@ object HistoricalSessionMemory {
     ): List<HistoricalTaskRecord> {
         if (!hex64.matches(sourceInstallRef)) return normalize(existing)
         if (branchId.isBlank()) return normalize(existing)
+        if (
+            task.kernel.observed <= 0 &&
+            task.kernel.inFlight == null &&
+            task.kernel.pendingVerification.isEmpty()
+        ) {
+            return normalize(existing)
+        }
 
         val snapshot = HistoricalExecutionFacts.capture(
             sourceTaskId = task.id,
