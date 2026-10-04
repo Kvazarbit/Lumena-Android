@@ -200,7 +200,7 @@ class HistoricalSessionMemoryTest {
 
         assertEquals(1, memory.size)
         assertEquals(
-            20,
+            20L,
             memory.single().capturedAtMs
         )
     }
