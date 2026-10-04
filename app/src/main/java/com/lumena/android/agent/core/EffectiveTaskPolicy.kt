@@ -56,24 +56,24 @@ object EffectiveTaskPolicyCompiler {
             )
 
     private val readOnlyCues = listOf(
-        Regex("(?iu)\\b(?:тільки|лише)\\s+(?:знайди\\s+і\\s+)?(?:прочитай|переглянь|проаналізуй|перевір)\\b"),
-        Regex("(?iu)\\bнічого\\s+не\\s+(?:змінюй|редагуй)\\b"),
-        Regex("(?iu)\\b(?:не\\s+змінюй|без\\s+змін)(?:\\s+зараз)?\\b"),
-        Regex("(?iu)\\b(?:только|лишь)\\s+(?:прочитай|посмотри|проанализируй|проверь)\\b"),
-        Regex("(?iu)\\bничего\\s+не\\s+(?:изменяй|редактируй)\\b"),
-        Regex("(?iu)\\b(?:не\\s+изменяй|без\\s+изменений)(?:\\s+сейчас)?\\b"),
-        Regex("(?iu)\\b(?:only\\s+(?:read|inspect|analyse|analyze|review)|read[- ]only)\\b"),
-        Regex("(?iu)\\b(?:do\\s+not|don't|never)\\s+(?:modify|edit|write|patch)\\b"),
-        Regex("(?iu)\\bno\\s+changes?(?:\\s+now)?\\b"),
-        Regex("(?iu)\\b(?:tylko|jedynie)\\s+(?:przeczytaj|sprawdź|sprawdz|przeanalizuj)\\b"),
-        Regex("(?iu)\\b(?:nie\\s+zmieniaj|nie\\s+modyfikuj|bez\\s+zmian)(?:\\s+teraz)?\\b")
+        Regex("(?iu)(?:тільки|лише)\\s+(?:знайди\\s+і\\s+)?(?:прочитай|переглянь|проаналізуй|перевір)"),
+        Regex("(?iu)нічого\\s+не\\s+(?:змінюй|редагуй)"),
+        Regex("(?iu)(?:не\\s+змінюй|без\\s+змін)(?:\\s+зараз)?"),
+        Regex("(?iu)(?:только|лишь)\\s+(?:прочитай|посмотри|проанализируй|проверь)"),
+        Regex("(?iu)ничего\\s+не\\s+(?:изменяй|редактируй)"),
+        Regex("(?iu)(?:не\\s+изменяй|без\\s+изменений)(?:\\s+сейчас)?"),
+        Regex("(?iu)(?:only\\s+(?:read|inspect|analyse|analyze|review)|read[- ]only)"),
+        Regex("(?iu)(?:do\\s+not|don't|never)\\s+(?:modify|edit|write|patch)"),
+        Regex("(?iu)no\\s+changes?(?:\\s+now)?"),
+        Regex("(?iu)(?:tylko|jedynie)\\s+(?:przeczytaj|sprawdź|sprawdz|przeanalizuj)"),
+        Regex("(?iu)(?:nie\\s+zmieniaj|nie\\s+modyfikuj|bez\\s+zmian)(?:\\s+teraz)?")
     )
 
     private val noExecuteCues = listOf(
-        Regex("(?iu)\\b(?:не\\s+запускай|не\\s+виконуй)\\b"),
-        Regex("(?iu)\\b(?:не\\s+запускай|не\\s+выполняй)\\b"),
-        Regex("(?iu)\\b(?:do\\s+not|don't|never)\\s+(?:run|execute)\\b"),
-        Regex("(?iu)\\b(?:nie\\s+uruchamiaj|nie\\s+wykonuj)\\b")
+        Regex("(?iu)(?:не\\s+запускай|не\\s+виконуй)"),
+        Regex("(?iu)(?:не\\s+запускай|не\\s+выполняй)"),
+        Regex("(?iu)(?:do\\s+not|don't|never)\\s+(?:run|execute)"),
+        Regex("(?iu)(?:nie\\s+uruchamiaj|nie\\s+wykonuj)")
     )
 
     private val mutationPositive = listOf(
@@ -143,7 +143,13 @@ object EffectiveTaskPolicyCompiler {
                 findPositions(
                     effectText,
                     mutationPositive
-                ) +
+                )
+                    .filterNot {
+                        isNegatedOperation(
+                            maskedCurrent,
+                            it
+                        )
+                    } +
                     currentToolDirectives
                         .filter {
                             !it.forbidden &&
@@ -159,7 +165,13 @@ object EffectiveTaskPolicyCompiler {
                 findPositions(
                     effectText,
                     executionPositive
-                ) +
+                )
+                    .filterNot {
+                        isNegatedOperation(
+                            maskedCurrent,
+                            it
+                        )
+                    } +
                     currentToolDirectives
                         .filter {
                             !it.forbidden &&
@@ -692,21 +704,23 @@ object EffectiveTaskPolicyCompiler {
             }
         }
 
+    private val sentenceBoundary =
+        Regex("[!?;\\n]|\\.(?=\\s|$)")
+
     private fun clauseIndex(
         text: String,
         position: Int
     ): Int =
-        text.take(
-            position.coerceIn(0, text.length)
-        ).count {
-            it in setOf(
-                '.',
-                '!',
-                '?',
-                ';',
-                '\n'
+        sentenceBoundary
+            .findAll(
+                text.take(
+                    position.coerceIn(
+                        0,
+                        text.length
+                    )
+                )
             )
-        }
+            .count()
 
     private fun clausePrefix(
         text: String,
@@ -715,17 +729,44 @@ object EffectiveTaskPolicyCompiler {
         val before =
             text.substring(
                 0,
-                position.coerceIn(0, text.length)
+                position.coerceIn(
+                    0,
+                    text.length
+                )
             )
-        val cut =
-            listOf(
-                before.lastIndexOf('.'),
-                before.lastIndexOf('!'),
-                before.lastIndexOf('?'),
-                before.lastIndexOf(';'),
-                before.lastIndexOf('\n')
-            ).maxOrNull() ?: -1
-        return before.substring(cut + 1)
+        val last =
+            sentenceBoundary
+                .findAll(before)
+                .lastOrNull()
+        return before.substring(
+            last?.range?.last
+                ?.plus(1)
+                ?: 0
+        )
+    }
+
+    private fun isNegatedOperation(
+        text: String,
+        position: Int
+    ): Boolean {
+        val prefix =
+            clausePrefix(
+                text,
+                position
+            )
+                .takeLast(96)
+                .trimEnd()
+        return listOf(
+            Regex("(?iu)(?:нічого\\s+)?не\\s*$"),
+            Regex("(?iu)(?:ничего\\s+)?не\\s*$"),
+            Regex("(?iu)(?:do\\s+not|don't|never)\\s*$"),
+            Regex("(?iu)nie\\s*$"),
+            Regex("(?iu)bez\\s*$")
+        ).any {
+            it.containsMatchIn(
+                prefix
+            )
+        }
     }
 
     private fun explicitToolFollows(
@@ -740,15 +781,10 @@ object EffectiveTaskPolicyCompiler {
         val tail =
             text.substring(start)
         val clauseEndRelative =
-            listOf(
-                tail.indexOf('.'),
-                tail.indexOf('!'),
-                tail.indexOf('?'),
-                tail.indexOf(';'),
-                tail.indexOf('\n')
-            )
-                .filter { it >= 0 }
-                .minOrNull()
+            sentenceBoundary
+                .find(tail)
+                ?.range
+                ?.first
                 ?: tail.length
         val clause =
             tail.take(
