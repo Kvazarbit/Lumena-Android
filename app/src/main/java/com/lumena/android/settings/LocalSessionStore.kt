@@ -54,7 +54,8 @@ data class LocalSessionSnapshot(
     val researchThread: ResearchThreadState? = null,
     val codeGoal: String? = null,
     val workThreads: WorkThreadState = WorkThreadState(),
-    val historicalFacts: List<HistoricalTaskRecord> = emptyList()
+    val historicalFacts: List<HistoricalTaskRecord> = emptyList(),
+    val historicalFactsQuarantined: Int = 0
 )
 
 /**
@@ -76,13 +77,50 @@ object LocalSessionStore {
     private val adapter = moshi.adapter(LocalSessionSnapshot::class.java)
 
     fun load(context: Context): LocalSessionSnapshot {
-        val raw = prefs(context).getString(KEY_SNAPSHOT, null) ?: return LocalSessionSnapshot()
-        return runCatching { adapter.fromJson(raw) }
-            .getOrNull()
-            ?: LocalSessionSnapshot()
+        val raw =
+            prefs(context)
+                .getString(
+                    KEY_SNAPSHOT,
+                    null
+                )
+                ?: return LocalSessionSnapshot()
+        val decoded =
+            runCatching {
+                adapter.fromJson(raw)
+            }.getOrNull()
+                ?: return LocalSessionSnapshot()
+        val normalizedFacts =
+            HistoricalSessionMemory.normalize(
+                decoded.historicalFacts
+            )
+        val dropped =
+            (
+                decoded.historicalFacts.size -
+                    normalizedFacts.size
+                ).coerceAtLeast(0)
+        return decoded.copy(
+            historicalFacts =
+                normalizedFacts,
+            historicalFactsQuarantined =
+                (
+                    decoded
+                        .historicalFactsQuarantined
+                        .coerceAtLeast(0) +
+                        dropped
+                    ).coerceAtMost(10_000)
+        )
     }
 
     fun save(context: Context, snapshot: LocalSessionSnapshot) = synchronized(StateVaultLock.monitor) {
+        val normalizedFacts =
+            HistoricalSessionMemory.normalize(
+                snapshot.historicalFacts
+            )
+        val newlyQuarantined =
+            (
+                snapshot.historicalFacts.size -
+                    normalizedFacts.size
+                ).coerceAtLeast(0)
         val bounded = snapshot.copy(
             chat = snapshot.chat.takeLast(MAX_CHAT_MESSAGES).map { message ->
                 message.copy(
@@ -161,9 +199,14 @@ object LocalSessionStore {
                     snapshot.workThreads
                 ),
             historicalFacts =
-                HistoricalSessionMemory.normalize(
-                    snapshot.historicalFacts
-                )
+                normalizedFacts,
+            historicalFactsQuarantined =
+                (
+                    snapshot
+                        .historicalFactsQuarantined
+                        .coerceAtLeast(0) +
+                        newlyQuarantined
+                    ).coerceAtMost(10_000)
         )
         prefs(context).edit().putString(KEY_SNAPSHOT, adapter.toJson(bounded)).apply()
         // History mirrors only bounded, app-private context. Workspace files are never copied/rolled back.
