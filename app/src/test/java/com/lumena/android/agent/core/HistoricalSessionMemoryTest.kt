@@ -404,6 +404,164 @@ class HistoricalSessionMemoryTest {
         assertTrue(memory.isEmpty())
     }
 
+
+    @Test
+    fun unknownWritePersistsAsReconciliationConstraintAndReadClosesIt() {
+        val unknownTask =
+            TaskState(
+                id = "unknown-write-task",
+                projectId = null,
+                goal = "Запиши demo.txt",
+                status = TaskStatus.FAILED,
+                kernel =
+                    ContextKernelState(
+                        inFlight =
+                            ActionFlight(
+                                tool = "file.write",
+                                target = "demo.txt",
+                                signature =
+                                    "d".repeat(24)
+                            )
+                    )
+            )
+
+        var memory =
+            HistoricalSessionMemory.record(
+                existing = emptyList(),
+                task = unknownTask,
+                sourceInstallRef =
+                    installRef,
+                branchId = "branch",
+                capturedAtMs = 1
+            )
+
+        val unresolved =
+            HistoricalSessionMemory
+                .unresolvedForPolicy(
+                    memory
+                )
+        assertEquals(1, unresolved.size)
+        assertEquals(
+            "file.write",
+            unresolved.single().tool
+        )
+        assertEquals(
+            HistoricalRecordOrigin
+                .LOCAL_CURRENT,
+            unresolved.single().origin
+        )
+
+        val readEvidence =
+            event(
+                tool = "file.read",
+                target = "demo.txt",
+                ok = true
+            )
+        val verificationTask =
+            TaskState(
+                id = "verify-current-file",
+                projectId = null,
+                goal = "Прочитай demo.txt",
+                status = TaskStatus.DONE,
+                kernel =
+                    ContextKernelState(
+                        evidence =
+                            listOf(
+                                readEvidence
+                            ),
+                        observed = 1,
+                        worldRevision = 0
+                    )
+            )
+
+        memory =
+            HistoricalSessionMemory
+                .reconcile(
+                    records = memory,
+                    verificationTask =
+                        verificationTask
+                )
+
+        assertTrue(
+            HistoricalSessionMemory
+                .unresolvedForPolicy(
+                    memory
+                )
+                .isEmpty()
+        )
+        assertTrue(
+            memory.single()
+                .unresolvedEffect
+                ?.reconciledByTaskRef
+                ?.matches(
+                    Regex("[0-9a-f]{64}")
+                ) == true
+        )
+    }
+
+    @Test
+    fun unrelatedReadDoesNotReconcileUnknownWrite() {
+        val unknownTask =
+            TaskState(
+                id = "unknown-write-task",
+                projectId = null,
+                goal = "Запиши demo.txt",
+                status = TaskStatus.FAILED,
+                kernel =
+                    ContextKernelState(
+                        inFlight =
+                            ActionFlight(
+                                "file.write",
+                                "demo.txt",
+                                "d".repeat(24)
+                            )
+                    )
+            )
+        val memory =
+            HistoricalSessionMemory.record(
+                emptyList(),
+                unknownTask,
+                installRef,
+                "branch",
+                capturedAtMs = 1
+            )
+        val otherRead =
+            TaskState(
+                id = "other-read",
+                projectId = null,
+                goal = "Прочитай other.txt",
+                status = TaskStatus.DONE,
+                kernel =
+                    ContextKernelState(
+                        evidence =
+                            listOf(
+                                event(
+                                    tool = "file.read",
+                                    target =
+                                        "other.txt"
+                                )
+                            ),
+                        observed = 1
+                    )
+            )
+
+        val reconciled =
+            HistoricalSessionMemory
+                .reconcile(
+                    memory,
+                    otherRead
+                )
+
+        assertEquals(
+            1,
+            HistoricalSessionMemory
+                .unresolvedForPolicy(
+                    reconciled
+                )
+                .size
+        )
+    }
+
     private fun memoryTaskKernel(
         records: List<HistoricalTaskRecord>,
         index: Int
