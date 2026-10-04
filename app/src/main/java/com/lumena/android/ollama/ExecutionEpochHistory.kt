@@ -13,7 +13,8 @@ object ExecutionEpochHistory {
 
     fun rebuild(
         systemMessage: OllamaMessage,
-        visibleTurns: List<Pair<String, String>>
+        visibleTurns: List<Pair<String, String>>,
+        historicalContext: String? = null
     ): List<OllamaMessage> {
         val conversation =
             visibleTurns
@@ -53,7 +54,24 @@ object ExecutionEpochHistory {
                     }
                 }
 
+        val historical =
+            historicalContext
+                ?.trim()
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+                ?.let {
+                    listOf(
+                        OllamaMessage(
+                            "system",
+                            it
+                        )
+                    )
+                }
+                .orEmpty()
+
         return listOf(systemMessage) +
+            historical +
             conversation
     }
 
