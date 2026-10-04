@@ -36,6 +36,9 @@ data class TaskState(
     val id: String,
     val projectId: String?,
     val goal: String,
+    val currentInstruction: String = "",
+    val effectivePolicy: EffectiveTaskPolicy =
+        EffectiveTaskPolicy(),
     val status: TaskStatus = TaskStatus.NEW,
     val step: Int = 0,
     val maxSteps: Int = 4,
