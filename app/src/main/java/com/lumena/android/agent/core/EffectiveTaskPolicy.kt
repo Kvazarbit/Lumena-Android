@@ -194,11 +194,6 @@ object EffectiveTaskPolicyCompiler {
                 else -> lastExecution > lastNoExecute
             }
 
-        val currentToolDirectives =
-            toolDirectives(maskedCurrent)
-        val rootToolDirectives =
-            toolDirectives(maskedRoot)
-
         val effectiveDirectives =
             linkedMapOf<String, ToolDirective>()
         rootToolDirectives.forEach {
