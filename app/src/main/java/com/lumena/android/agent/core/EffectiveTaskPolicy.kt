@@ -558,17 +558,26 @@ object EffectiveTaskPolicyCompiler {
                     )
                 val tail =
                     prefix.takeLast(160)
-                val lastNegative =
+                val negativeMatches =
                     negativeCue
                         .findAll(tail)
-                        .map {
+                        .toList()
+                val lastNegative =
+                    negativeMatches
+                        .maxOfOrNull {
                             it.range.first
                         }
-                        .maxOrNull()
                         ?: -1
                 val lastPositive =
                     positiveCue
                         .findAll(tail)
+                        .filter { positive ->
+                            negativeMatches
+                                .none { negative ->
+                                    positive.range.first in
+                                        negative.range
+                                }
+                        }
                         .map {
                             it.range.first
                         }
