@@ -2131,4 +2131,237 @@ class AgentControllerTest {
         assertTrue(third.state.task.status == TaskStatus.FAILED)
     }
 
+    @Test
+    fun currentReadOnlyInstructionOverridesOldMutationRootInController() {
+        val state =
+            controller.initial(
+                TaskState(
+                    id = "policy-read-only",
+                    projectId = null,
+                    goal =
+                        "Онови aquarium.html: реалізуй фізику і виправ код.",
+                    currentInstruction =
+                        "На цьому кроці тільки прочитай aquarium.html і нічого не змінюй.",
+                    status =
+                        TaskStatus.WAITING_MODEL
+                )
+            )
+
+        assertEquals(
+            TaskIntent.FILE_INSPECTION,
+            state.intent
+        )
+        assertEquals(
+            listOf(ToolRisk.READ_ONLY),
+            state.task
+                .effectivePolicy
+                .allowedRisks
+        )
+        assertTrue(
+            state.task.goalContract.criteria
+                .none {
+                    it.kind ==
+                        CriterionKind
+                            .CODE_ACTION_EVIDENCE
+                }
+        )
+
+        val denied =
+            controller.interpret(
+                """{"tool":"file.write","args":{"path":"aquarium.html","content":"bad"}}""",
+                state
+            )
+        assertTrue(
+            denied is
+                ControllerInstruction.AskModelAgain
+        )
+        denied as ControllerInstruction.AskModelAgain
+        assertEquals(
+            0,
+            denied.state.task.step
+        )
+        assertEquals(
+            1,
+            denied.state.policyDenials
+        )
+        assertTrue(
+            denied.feedback.contains(
+                "TASK_POLICY_DENIED"
+            )
+        )
+
+        val read =
+            controller.interpret(
+                """{"tool":"file.read","args":{"path":"aquarium.html"}}""",
+                state
+            )
+        assertTrue(
+            read is
+                ControllerInstruction.Execute
+        )
+        read as ControllerInstruction.Execute
+        assertEquals(
+            "file.read",
+            read.call.tool
+        )
+    }
+
+    @Test
+    fun contradictoryCurrentInstructionRequestsClarificationWithoutTool() {
+        val state =
+            controller.initial(
+                TaskState(
+                    id = "policy-ambiguous",
+                    projectId = null,
+                    goal =
+                        "Виправ demo.txt",
+                    currentInstruction =
+                        "Виправ файл, але нічого не змінюй.",
+                    status =
+                        TaskStatus.WAITING_MODEL
+                )
+            )
+
+        assertEquals(
+            TaskPolicyDisposition
+                .NEEDS_CLARIFICATION,
+            state.task
+                .effectivePolicy
+                .disposition
+        )
+
+        val result =
+            controller.interpret(
+                """{"tool":"file.write","args":{"path":"demo.txt","content":"x"}}""",
+                state
+            )
+
+        assertTrue(
+            result is
+                ControllerInstruction.Finish
+        )
+        result as ControllerInstruction.Finish
+        assertEquals(
+            TaskStatus.PARTIAL,
+            result.state.task.status
+        )
+        assertEquals(
+            0,
+            result.state.task.step
+        )
+        assertTrue(
+            result.text.contains(
+                "уточнення",
+                ignoreCase = true
+            )
+        )
+    }
+
+    @Test
+    fun successfulReadReconcilesUnknownWriteInsideSameTaskPolicy() {
+        val write =
+            AgentDecision.ToolCall(
+                tool = "file.write",
+                args =
+                    mapOf(
+                        "path" to
+                            "demo.txt",
+                        "content" to
+                            "hello"
+                    )
+            )
+        val unresolved =
+            PolicyUnresolvedEffect(
+                sourceTaskRef =
+                    "a".repeat(64),
+                tool = "file.write",
+                requestSignature =
+                    ContextKernel.signature(
+                        write
+                    ),
+                targetRef =
+                    java.security.MessageDigest
+                        .getInstance("SHA-256")
+                        .digest(
+                            "demo.txt"
+                                .toByteArray()
+                        )
+                        .joinToString("") {
+                            "%02x".format(
+                                it.toInt() and
+                                    0xff
+                            )
+                        },
+                origin =
+                    HistoricalRecordOrigin
+                        .LOCAL_CURRENT
+            )
+        var state =
+            controller.initial(
+                TaskState(
+                    id = "policy-reconcile",
+                    projectId = null,
+                    goal =
+                        "Онови demo.txt",
+                    currentInstruction =
+                        "Спочатку прочитай demo.txt, потім онови його.",
+                    effectivePolicy =
+                        EffectiveTaskPolicy(
+                            unresolvedEffects =
+                                listOf(
+                                    unresolved
+                                )
+                        ),
+                    status =
+                        TaskStatus.WAITING_MODEL
+                )
+            )
+
+        val blocked =
+            controller.interpret(
+                """{"tool":"file.write","args":{"path":"demo.txt","content":"hello"}}""",
+                state
+            )
+        assertTrue(
+            blocked is
+                ControllerInstruction.AskModelAgain
+        )
+
+        state =
+            controller.afterTool(
+                state = state,
+                call =
+                    AgentDecision.ToolCall(
+                        tool =
+                            "file.read",
+                        args =
+                            mapOf(
+                                "path" to
+                                    "demo.txt"
+                            )
+                    ),
+                ok = true,
+                stdout = "current",
+                stderr = "",
+                error = null
+            ).state
+
+        assertTrue(
+            state.task.effectivePolicy
+                .unresolvedEffects
+                .isEmpty()
+        )
+
+        val allowed =
+            controller.interpret(
+                """{"tool":"file.write","args":{"path":"demo.txt","content":"hello"}}""",
+                state
+            )
+        assertTrue(
+            allowed is
+                ControllerInstruction.Execute
+        )
+    }
+
+
 }
