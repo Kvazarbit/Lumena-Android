@@ -11,6 +11,7 @@ data class AgentControlState(
     val plan: List<String> = emptyList(),
     val toolUsed: Boolean = false,
     val protocolRetries: Int = 0,
+    val policyDenials: Int = 0,
     val schemaRepairs: Int = 0,
     val summaryRepairs: Int = 0,
     val protocolNormalizations: Int = 0,
@@ -75,16 +76,35 @@ class AgentController(
     private val budget: FailureBudget = FailureBudget()
 ) {
     fun initial(task: TaskState): AgentControlState {
-        val profile = TaskIntentRouter.route(task.goal)
+        val policy =
+            EffectiveTaskPolicyCompiler.compile(
+                rootGoal = task.goal,
+                currentInstruction =
+                    task.currentInstruction
+                        .ifBlank {
+                            task.goal
+                        },
+                unresolvedEffects =
+                    task.effectivePolicy
+                        .unresolvedEffects,
+                scopeRef =
+                    task.effectivePolicy
+                        .scopeRef
+            )
+        val profile =
+            TaskIntentRouter.route(policy)
         val requiredTools =
-            TaskIntentRouter.explicitRequiredTools(task.goal)
+            policy.requiredTools.toSet()
         val goalContract =
             GoalContractPolicy.initial(
                 intent = profile.intent,
                 requiredTools = requiredTools,
                 visualRequired =
-                    VisualGoalRouter.route(task.goal) != null,
-                goal = task.goal
+                    VisualGoalRouter.route(
+                        policy.currentInstruction
+                    ) != null,
+                goal =
+                    policy.currentInstruction
             )
         val reserve = if (profile.preflight != null) 1 else 0
         val initialToolBudget = maxOf(
@@ -93,6 +113,9 @@ class AgentController(
         ).coerceAtMost(budget.maxTotalSteps)
         return AgentControlState(
             task = task.copy(
+                currentInstruction =
+                    policy.currentInstruction,
+                effectivePolicy = policy,
                 maxSteps = initialToolBudget,
                 goalContract = goalContract
             ),
@@ -276,6 +299,82 @@ class AgentController(
         decision: AgentDecision.ToolCall,
         state: AgentControlState
     ): ControllerInstruction {
+        val policyDecision =
+            EffectiveTaskPolicyCompiler
+                .validateTool(
+                    state.task
+                        .effectivePolicy,
+                    decision
+                )
+        if (!policyDecision.allowed) {
+            val denials =
+                state.policyDenials + 1
+            val reason =
+                policyDecision.reason
+                    ?: "TASK_POLICY_DENIED"
+            if (
+                state.task
+                    .effectivePolicy
+                    .disposition ==
+                TaskPolicyDisposition
+                    .NEEDS_CLARIFICATION ||
+                denials > 2
+            ) {
+                val report =
+                    if (
+                        state.task
+                            .effectivePolicy
+                            .disposition ==
+                        TaskPolicyDisposition
+                            .NEEDS_CLARIFICATION
+                    ) {
+                        "Потрібне уточнення поточного доручення перед виконанням інструментів. " +
+                            state.task
+                                .effectivePolicy
+                                .clarificationReason
+                                .orEmpty()
+                    } else {
+                        "Частково виконано. Поточна політика задачі повторно відхилила запропоновану дію: " +
+                            reason
+                    }
+                return ControllerInstruction.Finish(
+                    report,
+                    state.copy(
+                        policyDenials = denials,
+                        task =
+                            state.task.copy(
+                                status =
+                                    TaskStatus.PARTIAL,
+                                lastResult =
+                                    report.take(4_000),
+                                errors =
+                                    (
+                                        state.task
+                                            .errors +
+                                            reason
+                                        ).takeLast(8)
+                            )
+                    )
+                )
+            }
+            return ControllerInstruction.AskModelAgain(
+                feedback =
+                    "TASK_POLICY_DENIED (valid model protocol; tool was NOT executed; tool step unchanged). " +
+                        reason +
+                        ". Follow the current user instruction and EFFECTIVE TASK POLICY. " +
+                        "Choose an allowed read-only alternative, or return partial/reply if no allowed action can satisfy the request.",
+                state =
+                    state.copy(
+                        policyDenials = denials,
+                        task =
+                            state.task.copy(
+                                status =
+                                    TaskStatus.WAITING_MODEL
+                            )
+                    )
+            )
+        }
+
         if (state.task.step >= minOf(state.task.maxSteps, budget.maxTotalSteps)) {
             // The last model turn is deliberately available at the tool limit. A
             // small local model may nevertheless propose one more cleanup/check
@@ -568,6 +667,7 @@ class AgentController(
         val next = state.copy(
             plan = nextPlan,
             protocolRetries = 0,
+            policyDenials = 0,
             schemaRepairs = 0,
             modelFailures = 0,
             lastToolSignature = signature,
@@ -851,6 +951,30 @@ class AgentController(
             return protocolRetry(
                 state,
                 "The previous output looked like a tool/protocol message but could not be parsed safely. Return exactly one valid tool/done/partial/reply JSON object. No proposed tool was executed."
+            )
+        }
+
+        if (
+            state.task.effectivePolicy
+                .disposition ==
+            TaskPolicyDisposition
+                .NEEDS_CLARIFICATION
+        ) {
+            val report =
+                trimmed.ifBlank {
+                    "Потрібне уточнення поточного доручення."
+                }
+            return ControllerInstruction.Finish(
+                report,
+                state.copy(
+                    task =
+                        state.task.copy(
+                            status =
+                                TaskStatus.PARTIAL,
+                            lastResult =
+                                report.take(4_000)
+                        )
+                )
             )
         }
 
