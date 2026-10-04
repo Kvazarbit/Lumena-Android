@@ -263,6 +263,17 @@ class ContextBuilder(
         )
         appendLine("status=${task.status}")
         appendLine("step=${task.step}/${task.maxSteps}")
+        if (
+            task.currentInstruction.isNotBlank() ||
+            task.effectivePolicy.rootGoal.isNotBlank()
+        ) {
+            appendLine()
+            appendLine(
+                EffectiveTaskPolicyCompiler.render(
+                    task.effectivePolicy
+                )
+            )
+        }
         if (task.step >= task.maxSteps) {
             appendLine(
                 "NO TOOL BUDGET. Return done only if complete; otherwise partial JSON."
