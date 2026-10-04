@@ -302,12 +302,77 @@ class AgentController(
         decision: AgentDecision.ToolCall,
         state: AgentControlState
     ): ControllerInstruction {
+        if (state.task.step >= minOf(state.task.maxSteps, budget.maxTotalSteps)) {
+            // The last model turn is deliberately available at the tool limit. A
+            // small local model may nevertheless propose one more cleanup/check
+            // even though the latest TOOL_RESULT already completed the task.
+            // Give it one constrained conclusion turn before reporting failure.
+            if (state.toolUsed && state.protocolRetries == 0) {
+                return ControllerInstruction.AskModelAgain(
+                    feedback = "Tool budget is exhausted; the proposed ${ToolRegistry.canonicalize(decision.tool)} call was not executed. " +
+                        "Use the existing verified TOOL_RESULT. If the goal is complete, return {\"done\":true,\"summary\":\"what was completed and verified\"}. " +
+                        "If anything is incomplete or unverified, return {\"partial\":true,\"summary\":\"completed work and what remains\"}. Do not request another tool.",
+                    state = state.copy(
+                        protocolRetries = 1,
+                        task = state.task.copy(status = TaskStatus.WAITING_MODEL)
+                    )
+                )
+            }
+            return ControllerInstruction.Stop(
+                "Agent step limit reached (${state.task.maxSteps}).",
+                fail(state, "Step limit reached")
+            )
+        }
+
+        val validation = ToolRegistry.validate(decision)
+        if (!validation.allowed || validation.canonicalTool == null) {
+            val problem =
+                validation.error ?: "Unknown tool ${decision.tool}"
+            val knownTool = validation.canonicalTool
+            if (
+                knownTool != null &&
+                (
+                    problem.startsWith("Missing required args:") ||
+                        (
+                            knownTool in setOf("python.run", "python.syntax_check") &&
+                                problem.startsWith("python script arg must be")
+                        )
+                    )
+            ) {
+                return toolSchemaRepair(
+                    state = state,
+                    tool = knownTool,
+                    problem = problem
+                )
+            }
+
+            val event = FailureEvents.policyDenied(
+                reason = problem,
+                actionFamily = ToolRegistry.canonicalize(decision.tool),
+                effectClass = ToolRegistry.get(decision.tool)?.risk?.let {
+                    if (it == ToolRisk.READ_ONLY) EffectClass.READ_ONLY
+                    else EffectClass.MUTATING_OR_EXECUTABLE
+                } ?: EffectClass.NONE,
+                attempt = state.protocolRetries + 1,
+                dependency = "tool-registry"
+            )
+            return protocolRetry(
+                state,
+                "${event.failureClass}: ${event.evidence}"
+            )
+        }
+
+        val canonical = decision.copy(tool = validation.canonicalTool)
+
         val policyDecision =
             EffectiveTaskPolicyCompiler
                 .validateTool(
                     state.task
                         .effectivePolicy,
-                    decision
+                    decision.copy(
+                        tool =
+                            validation.canonicalTool
+                    )
                 )
         if (!policyDecision.allowed) {
             val denials =
@@ -377,68 +442,6 @@ class AgentController(
                     )
             )
         }
-
-        if (state.task.step >= minOf(state.task.maxSteps, budget.maxTotalSteps)) {
-            // The last model turn is deliberately available at the tool limit. A
-            // small local model may nevertheless propose one more cleanup/check
-            // even though the latest TOOL_RESULT already completed the task.
-            // Give it one constrained conclusion turn before reporting failure.
-            if (state.toolUsed && state.protocolRetries == 0) {
-                return ControllerInstruction.AskModelAgain(
-                    feedback = "Tool budget is exhausted; the proposed ${ToolRegistry.canonicalize(decision.tool)} call was not executed. " +
-                        "Use the existing verified TOOL_RESULT. If the goal is complete, return {\"done\":true,\"summary\":\"what was completed and verified\"}. " +
-                        "If anything is incomplete or unverified, return {\"partial\":true,\"summary\":\"completed work and what remains\"}. Do not request another tool.",
-                    state = state.copy(
-                        protocolRetries = 1,
-                        task = state.task.copy(status = TaskStatus.WAITING_MODEL)
-                    )
-                )
-            }
-            return ControllerInstruction.Stop(
-                "Agent step limit reached (${state.task.maxSteps}).",
-                fail(state, "Step limit reached")
-            )
-        }
-
-        val validation = ToolRegistry.validate(decision)
-        if (!validation.allowed || validation.canonicalTool == null) {
-            val problem =
-                validation.error ?: "Unknown tool ${decision.tool}"
-            val knownTool = validation.canonicalTool
-            if (
-                knownTool != null &&
-                (
-                    problem.startsWith("Missing required args:") ||
-                        (
-                            knownTool in setOf("python.run", "python.syntax_check") &&
-                                problem.startsWith("python script arg must be")
-                        )
-                    )
-            ) {
-                return toolSchemaRepair(
-                    state = state,
-                    tool = knownTool,
-                    problem = problem
-                )
-            }
-
-            val event = FailureEvents.policyDenied(
-                reason = problem,
-                actionFamily = ToolRegistry.canonicalize(decision.tool),
-                effectClass = ToolRegistry.get(decision.tool)?.risk?.let {
-                    if (it == ToolRisk.READ_ONLY) EffectClass.READ_ONLY
-                    else EffectClass.MUTATING_OR_EXECUTABLE
-                } ?: EffectClass.NONE,
-                attempt = state.protocolRetries + 1,
-                dependency = "tool-registry"
-            )
-            return protocolRetry(
-                state,
-                "${event.failureClass}: ${event.evidence}"
-            )
-        }
-
-        val canonical = decision.copy(tool = validation.canonicalTool)
 
         validateCauseProbeAnnotation(
             call = canonical,
