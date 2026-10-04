@@ -129,9 +129,15 @@ object EffectiveTaskPolicyCompiler {
             )
         val noExecuteMatches =
             findPositions(
-                effectText,
+                maskedCurrent,
                 noExecuteCues
             )
+                .filterNot {
+                    explicitToolFollows(
+                        maskedCurrent,
+                        it
+                    )
+                }
         val mutationMatches =
             (
                 findPositions(
@@ -700,6 +706,50 @@ object EffectiveTaskPolicyCompiler {
                 before.lastIndexOf('\n')
             ).maxOrNull() ?: -1
         return before.substring(cut + 1)
+    }
+
+    private fun explicitToolFollows(
+        text: String,
+        position: Int
+    ): Boolean {
+        val start =
+            position.coerceIn(
+                0,
+                text.length
+            )
+        val tail =
+            text.substring(start)
+        val clauseEndRelative =
+            listOf(
+                tail.indexOf('.'),
+                tail.indexOf('!'),
+                tail.indexOf('?'),
+                tail.indexOf(';'),
+                tail.indexOf('\n')
+            )
+                .filter { it >= 0 }
+                .minOrNull()
+                ?: tail.length
+        val clause =
+            tail.take(
+                minOf(
+                    clauseEndRelative,
+                    180
+                )
+            )
+        return ToolRegistry.all()
+            .any { spec ->
+                Regex(
+                    "(?iu)(?<![a-z0-9_])" +
+                        Regex.escape(
+                            spec.name
+                        ) +
+                        "(?![a-z0-9_])"
+                )
+                    .containsMatchIn(
+                        clause
+                    )
+            }
     }
 
     private fun findPositions(
