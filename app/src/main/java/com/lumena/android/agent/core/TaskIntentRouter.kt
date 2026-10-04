@@ -33,75 +33,43 @@ data class TaskIntentProfile(
  * reduces hallucination and wasted model turns.
  */
 object TaskIntentRouter {
-    private val explicitObligationTools = setOf(
-        "web.search",
-        "web.read",
-        "http.get",
-        "http.json",
-        "file.write",
-        "file.patch",
-        "python.syntax_check",
-        "python.tests",
-        "python.run"
-    )
-
-    private val explicitToolAlternation =
-        explicitObligationTools
-            .sortedByDescending(String::length)
-            .joinToString("|") {
-                Regex.escape(it)
-            }
-
-    private val negatedExplicitToolList =
-        Regex(
-            "(?iu)(?:не\\s+(?:використовуй|використовуйте|запускай|запускайте|виконуй|виконуйте|роби|робіть)|" +
-                "не\\s+используй(?:те)?|не\\s+запускай(?:те)?|do\\s+not\\s+(?:use|run)|don't\\s+(?:use|run)|" +
-                "never\\s+(?:use|run)|nie\\s+(?:używaj|uzywaj|uruchamiaj)|без)\\s+" +
-                "(?:$explicitToolAlternation)" +
-                "(?:\\s*(?:,|або|чи|і|та|or|and|lub)\\s*(?:$explicitToolAlternation))*"
-        )
-
-    /**
-     * Remove only tool names that occur inside an explicit negative tool list.
-     * A later positive mention outside that list remains visible.
-     */
     internal fun withoutNegatedExplicitToolMentions(
         goal: String
     ): String =
-        negatedExplicitToolList.replace(goal) { match ->
-            Regex(
-                "(?iu)(?<![a-z0-9_])(?:$explicitToolAlternation)(?![a-z0-9_])"
-            ).replace(
-                match.value,
-                " "
+        EffectiveTaskPolicyCompiler
+            .sanitizeForRouting(goal)
+
+    fun explicitRequiredTools(
+        goal: String
+    ): Set<String> =
+        EffectiveTaskPolicyCompiler
+            .compile(
+                rootGoal = goal,
+                currentInstruction = goal
             )
-        }
-
-    fun explicitRequiredTools(goal: String): Set<String> {
-        val lower =
-            withoutNegatedExplicitToolMentions(goal)
-                .lowercase()
-
-        return explicitObligationTools
-            .asSequence()
-            .filter { tool ->
-                Regex(
-                    "(?<![a-z0-9_])" +
-                        Regex.escape(tool) +
-                        "(?![a-z0-9_])"
-                ).containsMatchIn(lower)
-            }
-            .map(ToolRegistry::canonicalize)
-            .filter { ToolRegistry.get(it) != null }
+            .requiredTools
             .toSortedSet()
-    }
 
-    fun route(goal: String): TaskIntentProfile {
+    fun route(
+        goal: String
+    ): TaskIntentProfile =
+        route(
+            EffectiveTaskPolicyCompiler
+                .compile(
+                    rootGoal = goal,
+                    currentInstruction = goal
+                )
+        )
+
+    fun route(
+        policy: EffectiveTaskPolicy
+    ): TaskIntentProfile {
         val normalized =
-            withoutNegatedExplicitToolMentions(goal)
-            .replace(Regex("[\\r\\n\\t]+"), " ")
-            .replace(Regex("\\s{2,}"), " ")
-            .trim()
+            EffectiveTaskPolicyCompiler
+                .routingText(policy)
+                .replace(Regex("[\\r\\n\\t]+"), " ")
+                .replace(Regex("\\s{2,}"), " ")
+                .trim()
         val lower = normalized.lowercase()
 
         VisualGoalRouter.route(normalized)?.let { visual ->
