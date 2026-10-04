@@ -36,9 +36,6 @@ data class TaskState(
     val id: String,
     val projectId: String?,
     val goal: String,
-    val currentInstruction: String = "",
-    val effectivePolicy: EffectiveTaskPolicy =
-        EffectiveTaskPolicy(),
     val status: TaskStatus = TaskStatus.NEW,
     val step: Int = 0,
     val maxSteps: Int = 4,
@@ -48,7 +45,10 @@ data class TaskState(
     val modifiedFiles: List<String> = emptyList(),
     val errors: List<String> = emptyList(),
     val kernel: ContextKernelState = ContextKernelState(),
-    val goalContract: GoalContract = GoalContract()
+    val goalContract: GoalContract = GoalContract(),
+    val currentInstruction: String = "",
+    val effectivePolicy: EffectiveTaskPolicy =
+        EffectiveTaskPolicy()
 ) {
     /**
      * maxSteps limits tool executions, not the final model conclusion.
