@@ -1413,6 +1413,16 @@ class AgentController(
                 kernel = nextKernel
             )
 
+        val nextPolicy =
+            EffectiveTaskPolicyCompiler
+                .afterTool(
+                    policy =
+                        state.task
+                            .effectivePolicy,
+                    call = call,
+                    ok = ok
+                )
+
         val nextTask = state.task.copy(
             status = TaskStatus.WAITING_MODEL,
             step = nextStep,
@@ -1421,6 +1431,8 @@ class AgentController(
             lastResult = resultText,
             kernel = nextKernel,
             goalContract = nextGoalContract,
+            effectivePolicy =
+                nextPolicy,
             errors = if (ok) state.task.errors else (state.task.errors + resultText).takeLast(8)
         )
 
