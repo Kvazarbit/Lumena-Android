@@ -133,7 +133,120 @@ class ToolGatePolicyTest {
         )
     }
 
+
     @Test
+    fun readOnlyPolicyBlocksAllMutatingAndExecutableFamilies() {
+        val policy =
+            EffectiveTaskPolicyCompiler
+                .compile(
+                    rootGoal =
+                        "Перевір проєкт",
+                    currentInstruction =
+                        "Тільки прочитай поточні файли і нічого не змінюй."
+                )
+
+        val requests =
+            listOf(
+                ToolRequest(
+                    "file.patch",
+                    mapOf(
+                        "path" to "a.txt",
+                        "old" to "a",
+                        "new" to "b"
+                    )
+                ),
+                ToolRequest(
+                    "python.run",
+                    mapOf(
+                        "script" to
+                            "probe.py"
+                    )
+                ),
+                ToolRequest(
+                    "python.tests",
+                    mapOf(
+                        "cwd" to "."
+                    )
+                ),
+                ToolRequest(
+                    "git.add",
+                    mapOf(
+                        "cwd" to ".",
+                        "paths" to
+                            "a.txt"
+                    )
+                ),
+                ToolRequest(
+                    "git.commit",
+                    mapOf(
+                        "cwd" to ".",
+                        "message" to
+                            "test"
+                    )
+                )
+            )
+
+        requests.forEach { request ->
+            val plan =
+                ToolGate.plan(
+                    PlannerDecision(
+                        request = request,
+                        reason = "probe"
+                    ),
+                    taskPolicy = policy
+                )
+            assertFalse(
+                request.tool,
+                plan.allowed
+            )
+            assertTrue(
+                request.tool,
+                plan.reason.contains(
+                    "TASK_POLICY_EFFECT_NOT_ALLOWED"
+                )
+            )
+        }
+    }
+
+    @Test
+    fun explicitAllowedMutationStillReachesConfirmationGate() {
+        val policy =
+            EffectiveTaskPolicyCompiler
+                .compile(
+                    rootGoal =
+                        "Виправ demo.txt",
+                    currentInstruction =
+                        "Виправ demo.txt через file.patch."
+                )
+        val plan =
+            ToolGate.plan(
+                PlannerDecision(
+                    request =
+                        ToolRequest(
+                            tool =
+                                "file.patch",
+                            args =
+                                mapOf(
+                                    "path" to
+                                        "demo.txt",
+                                    "old" to
+                                        "a",
+                                    "new" to
+                                        "b"
+                                )
+                        ),
+                    reason = "requested edit"
+                ),
+                taskPolicy = policy
+            )
+
+        assertTrue(plan.allowed)
+        assertTrue(
+            plan.requiresConfirmation
+        )
+    }
+
+@Test
     fun unknownLocalWriteReplayIsBlockedAtGate() {
         val writeCall =
             AgentDecision.ToolCall(
