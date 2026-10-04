@@ -879,7 +879,10 @@ class AgentController(
             )
         }
 
-        if (requiresVisualEvidence(state.task.goal) && !state.visualEvidenceReady) {
+        if (requiresVisualEvidence(
+            state.task.effectivePolicy.currentInstruction
+                .ifBlank { state.task.goal }
+        ) && !state.visualEvidenceReady) {
             return protocolRetry(
                 state,
                 "The user asked to find/show an image. Use image.search successfully before marking the task done. http.get/http.json or text links do not satisfy this goal."
@@ -997,7 +1000,10 @@ class AgentController(
             )
         }
 
-        if (requiresVisualEvidence(state.task.goal) && !state.visualEvidenceReady) {
+        if (requiresVisualEvidence(
+            state.task.effectivePolicy.currentInstruction
+                .ifBlank { state.task.goal }
+        ) && !state.visualEvidenceReady) {
             return recoverPlainReply(
                 state, trimmed,
                 "The user asked to find/show an image. Use image.search successfully before replying. A text-only answer does not satisfy this goal."
@@ -1037,7 +1043,10 @@ class AgentController(
 
         summaryConsistency(trimmed, state)?.let { return it }
 
-        if (requiresVisualEvidence(state.task.goal) && state.visualEvidenceReady) {
+        if (requiresVisualEvidence(
+            state.task.effectivePolicy.currentInstruction
+                .ifBlank { state.task.goal }
+        ) && state.visualEvidenceReady) {
             return interpretDone(AgentDecision.Done(trimmed), state)
         }
 
