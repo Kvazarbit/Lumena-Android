@@ -262,7 +262,7 @@ class EffectiveTaskPolicyTest {
             ToolRisk.MUTATING in
                 policy.allowedRisks
         )
-        assertFalse(
+        assertTrue(
             ToolRisk.EXECUTABLE in
                 policy.allowedRisks
         )
@@ -276,7 +276,25 @@ class EffectiveTaskPolicyTest {
         )
     }
 
+
     @Test
+    fun genericNoExecuteBlocksExecutableClass() {
+        val policy =
+            EffectiveTaskPolicyCompiler
+                .compile(
+                    rootGoal =
+                        "Перевір проєкт",
+                    currentInstruction =
+                        "Не запускай нічого. Тільки прочитай статус файлів."
+                )
+
+        assertFalse(
+            ToolRisk.EXECUTABLE in
+                policy.allowedRisks
+        )
+    }
+
+@Test
     fun laterPositiveToolDirectiveOverridesEarlierNegativeOne() {
         val policy =
             EffectiveTaskPolicyCompiler
