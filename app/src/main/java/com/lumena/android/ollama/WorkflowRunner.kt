@@ -418,7 +418,10 @@ class WorkflowRunner(
                             reason = instruction.call.reason.ifBlank {
                                 "Agent requested ${instruction.call.tool}"
                             }
-                        )
+                        ),
+                        taskPolicy =
+                            state.task
+                                .effectivePolicy
                     ).copy(
                         causeProbeIntent =
                             instruction.call.causeHypothesis
