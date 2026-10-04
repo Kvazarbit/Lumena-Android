@@ -1,5 +1,12 @@
 package com.lumena.android.ollama
 
+import com.lumena.android.agent.core.ActionEvidence
+import com.lumena.android.agent.core.CognitivePhase
+import com.lumena.android.agent.core.ContextKernelState
+import com.lumena.android.agent.core.HistoricalSessionMemory
+import com.lumena.android.agent.core.TaskState
+import com.lumena.android.agent.core.TaskStatus
+import com.lumena.android.agent.core.WorkThreadMemory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -185,6 +192,147 @@ class ExecutionEpochHistoryTest {
         assertEquals(
             "hello",
             rebuilt.last().content
+        )
+    }
+
+
+    @Test
+    fun taskAReceiptReturnsAfterTaskBWithoutRehydratingCurrentKernel() {
+        fun task(
+            id: String,
+            goal: String,
+            target: String
+        ): TaskState {
+            val evidence =
+                ActionEvidence(
+                    id = "e1",
+                    tool = "file.read",
+                    target = target,
+                    signature =
+                        "a".repeat(24),
+                    phase =
+                        CognitivePhase.OBSERVE,
+                    ok = true,
+                    excerpt = "verified",
+                    digest =
+                        "b".repeat(24),
+                    revision = 0
+                )
+            return TaskState(
+                id = id,
+                projectId = null,
+                goal = goal,
+                status = TaskStatus.DONE,
+                kernel =
+                    ContextKernelState(
+                        evidence =
+                            listOf(evidence),
+                        observed = 1,
+                        worldRevision = 0
+                    )
+            )
+        }
+
+        val installRef =
+            "c".repeat(64)
+        var memory =
+            HistoricalSessionMemory.record(
+                existing = emptyList(),
+                task =
+                    task(
+                        "task-a",
+                        "Продовж aquarium.html",
+                        "aquarium.html"
+                    ),
+                sourceInstallRef =
+                    installRef,
+                branchId = "main",
+                capturedAtMs = 10
+            )
+        memory =
+            HistoricalSessionMemory.record(
+                existing = memory,
+                task =
+                    task(
+                        "task-b",
+                        "Прочитай README окремо",
+                        "README.md"
+                    ),
+                sourceInstallRef =
+                    installRef,
+                branchId = "main",
+                capturedAtMs = 20
+            )
+
+        val current =
+            TaskState(
+                id = "task-a-return",
+                projectId = null,
+                goal =
+                    "продовж aquarium.html",
+                status =
+                    TaskStatus.WAITING_MODEL
+            )
+        val selected =
+            HistoricalSessionMemory.select(
+                records = memory,
+                branchId = "main",
+                projectId = null,
+                subjectKeys =
+                    WorkThreadMemory.subjectKeys(
+                        current.goal
+                    )
+            )
+        val capsule =
+            HistoricalSessionMemory.render(
+                selected
+            )
+        val rebuilt =
+            ExecutionEpochHistory.rebuild(
+                systemMessage =
+                    OllamaMessage(
+                        "system",
+                        "base"
+                    ),
+                visibleTurns =
+                    listOf(
+                        "user" to
+                            "переключись на іншу задачу",
+                        "assistant" to
+                            "Добре",
+                        "user" to
+                            current.goal
+                    ),
+                historicalContext =
+                    capsule
+            )
+
+        assertEquals(
+            1,
+            selected.size
+        )
+        assertTrue(
+            capsule.contains(
+                "file.read outcome=SUCCESS"
+            )
+        )
+        assertTrue(
+            rebuilt.any {
+                it.role == "system" &&
+                    it.content.contains(
+                        "HISTORICAL_SESSION_MEMORY_V1"
+                    )
+            }
+        )
+        assertEquals(
+            0,
+            current.kernel.observed
+        )
+        assertTrue(
+            current.kernel.evidence.isEmpty()
+        )
+        assertTrue(
+            current.kernel.inFlight == null
         )
     }
 
