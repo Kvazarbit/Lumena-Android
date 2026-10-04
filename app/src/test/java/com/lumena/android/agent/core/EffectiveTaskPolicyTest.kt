@@ -285,7 +285,7 @@ class EffectiveTaskPolicyTest {
                     rootGoal =
                         "Перевір проєкт",
                     currentInstruction =
-                        "Не запускай нічого. Тільки прочитай статус файлів."
+                        "Не запускай нічого. Покажи список файлів."
                 )
 
         assertFalse(
