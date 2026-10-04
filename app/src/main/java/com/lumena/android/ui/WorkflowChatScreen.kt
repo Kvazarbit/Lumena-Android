@@ -346,7 +346,7 @@ fun WorkflowChatScreen(
     }
 
     fun restoredPendingFrom(saved: PersistedPendingTool?): PendingWorkflowTool? = saved?.let {
-        val control =
+        val rawControl =
             it.control
                 ?: currentTask?.let {
                     task ->
@@ -355,6 +355,39 @@ fun WorkflowChatScreen(
                     )
                 }
                 ?: return@let null
+        val restoredTask =
+            rawControl.task
+        val restoredPolicy =
+            EffectiveTaskPolicyCompiler
+                .compile(
+                    rootGoal =
+                        restoredTask.goal,
+                    currentInstruction =
+                        restoredTask
+                            .currentInstruction
+                            .ifBlank {
+                                restoredTask.goal
+                            },
+                    unresolvedEffects =
+                        restoredTask
+                            .effectivePolicy
+                            .unresolvedEffects,
+                    scopeRef =
+                        restoredTask
+                            .effectivePolicy
+                            .scopeRef
+                )
+        val control =
+            rawControl.copy(
+                task =
+                    restoredTask.copy(
+                        currentInstruction =
+                            restoredPolicy
+                                .currentInstruction,
+                        effectivePolicy =
+                            restoredPolicy
+                    )
+            )
         val planned = ToolGate.plan(
             PlannerDecision(
                 request = ToolRequest(
