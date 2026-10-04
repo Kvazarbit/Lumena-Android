@@ -48,7 +48,9 @@ data class TaskState(
     val goalContract: GoalContract = GoalContract(),
     val currentInstruction: String = "",
     val effectivePolicy: EffectiveTaskPolicy =
-        EffectiveTaskPolicy()
+        EffectiveTaskPolicy(),
+    val executionOrigin: HistoricalRecordOrigin =
+        HistoricalRecordOrigin.LOCAL_CURRENT
 ) {
     /**
      * maxSteps limits tool executions, not the final model conclusion.
