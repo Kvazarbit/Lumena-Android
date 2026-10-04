@@ -112,7 +112,61 @@ class EffectiveTaskPolicyTest {
     }
 
 
+
     @Test
+    fun bareContinuationUsesRootIntentButNotOldExecutionState() {
+        val policy =
+            EffectiveTaskPolicyCompiler
+                .compile(
+                    rootGoal =
+                        "Онови aquarium.html: виправ фізику і перевір код.",
+                    currentInstruction =
+                        "продовж"
+                )
+
+        assertEquals(
+            TaskIntent.CODE_WORK,
+            TaskIntentRouter
+                .route(policy)
+                .intent
+        )
+        assertTrue(
+            EffectiveTaskPolicyCompiler
+                .routingText(policy)
+                .contains(
+                    "aquarium.html"
+                )
+        )
+        assertTrue(
+            policy.unresolvedEffects
+                .isEmpty()
+        )
+    }
+
+    @Test
+    fun explicitReadOnlyContinuationUsesCurrentIntent() {
+        val policy =
+            EffectiveTaskPolicyCompiler
+                .compile(
+                    rootGoal =
+                        "Онови aquarium.html: виправ фізику.",
+                    currentInstruction =
+                        "продовж роботу над aquarium.html, але тільки прочитай поточний файл і нічого не змінюй."
+                )
+
+        assertEquals(
+            TaskIntent.FILE_INSPECTION,
+            TaskIntentRouter
+                .route(policy)
+                .intent
+        )
+        assertEquals(
+            listOf(ToolRisk.READ_ONLY),
+            policy.allowedRisks
+        )
+    }
+
+@Test
     fun explicitToolNegationListsWorkAcrossLanguages() {
         val prompts =
             listOf(
