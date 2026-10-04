@@ -2,6 +2,8 @@ package com.lumena.android.settings
 
 import android.content.Context
 import com.lumena.android.agent.core.AgentControlState
+import com.lumena.android.agent.core.HistoricalSessionMemory
+import com.lumena.android.agent.core.HistoricalTaskRecord
 import com.lumena.android.agent.core.ResearchThreadState
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.WorkThreadMemory
@@ -51,7 +53,8 @@ data class LocalSessionSnapshot(
     val researchGoal: String? = null,
     val researchThread: ResearchThreadState? = null,
     val codeGoal: String? = null,
-    val workThreads: WorkThreadState = WorkThreadState()
+    val workThreads: WorkThreadState = WorkThreadState(),
+    val historicalFacts: List<HistoricalTaskRecord> = emptyList()
 )
 
 /**
@@ -156,6 +159,10 @@ object LocalSessionStore {
             workThreads =
                 WorkThreadMemory.normalize(
                     snapshot.workThreads
+                ),
+            historicalFacts =
+                HistoricalSessionMemory.normalize(
+                    snapshot.historicalFacts
                 )
         )
         prefs(context).edit().putString(KEY_SNAPSHOT, adapter.toJson(bounded)).apply()
