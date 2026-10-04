@@ -111,7 +111,50 @@ class EffectiveTaskPolicyTest {
         }
     }
 
+
     @Test
+    fun explicitToolNegationListsWorkAcrossLanguages() {
+        val prompts =
+            listOf(
+                "Не використовуй file.write, file.patch або python.run.",
+                "Не используй file.write, file.patch или python.run.",
+                "Do not use file.write, file.patch or python.run.",
+                "Nie używaj file.write, file.patch lub python.run."
+            )
+
+        prompts.forEach { prompt ->
+            val policy =
+                EffectiveTaskPolicyCompiler
+                    .compile(
+                        rootGoal = prompt,
+                        currentInstruction =
+                            prompt
+                    )
+            assertEquals(
+                prompt,
+                setOf(
+                    "file.write",
+                    "file.patch",
+                    "python.run"
+                ),
+                policy.forbiddenTools.toSet()
+            )
+            assertTrue(
+                prompt,
+                policy.requiredTools
+                    .none {
+                        it in
+                            setOf(
+                                "file.write",
+                                "file.patch",
+                                "python.run"
+                            )
+                    }
+            )
+        }
+    }
+
+@Test
     fun quotedConstraintTextDoesNotBecomePolicy() {
         val policy =
             EffectiveTaskPolicyCompiler
