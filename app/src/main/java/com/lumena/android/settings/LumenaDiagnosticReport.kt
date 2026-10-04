@@ -2,6 +2,7 @@ package com.lumena.android.settings
 
 import android.content.Context
 import android.os.Build
+import com.lumena.android.agent.core.HistoricalRecordOrigin
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.local.TermuxBridgeClient
 import com.lumena.android.agent.local.ToolRequest
@@ -194,7 +195,10 @@ data class LumenaDiagnosticInput(
     val fractalExperience: DiagnosticFractalExperienceView =
         DiagnosticFractalExperienceView(),
     val workThreadAnchors: Int = 0,
-    val workThreadSubjects: List<String> = emptyList()
+    val workThreadSubjects: List<String> = emptyList(),
+    val historicalTaskRecords: Int = 0,
+    val historicalImportedRecords: Int = 0,
+    val historicalQuarantinedRecords: Int = 0
 )
 
 object LumenaDiagnosticFormatter {
@@ -255,6 +259,18 @@ object LumenaDiagnosticFormatter {
             appendLine("protocol_turn_cap_seen=${input.protocolTurnCapSeen}")
             appendLine("pytest_no_tests_seen=${input.pytestNoTestsSeen}")
             appendLine("ollama_generate_count=${input.ollamaGenerateCount}")
+            appendLine(
+                "historical_task_records=" +
+                    input.historicalTaskRecords
+            )
+            appendLine(
+                "historical_imported_records=" +
+                    input.historicalImportedRecords
+            )
+            appendLine(
+                "historical_quarantined_records=" +
+                    input.historicalQuarantinedRecords
+            )
             appendLine()
 
             appendLine("[TASK]")
@@ -958,7 +974,19 @@ object LumenaDiagnosticReport {
                     .flatMap {
                         it.subjectKeys.take(3)
                     }
-                    .distinct()
+                    .distinct(),
+            historicalTaskRecords =
+                session.historicalFacts.size,
+            historicalImportedRecords =
+                session.historicalFacts.count {
+                    it.origin ==
+                        HistoricalRecordOrigin
+                            .IMPORTED_ADVISORY
+                },
+            historicalQuarantinedRecords =
+                session
+                    .historicalFactsQuarantined
+                    .coerceAtLeast(0)
         )
 
         return LumenaDiagnosticFormatter.render(
