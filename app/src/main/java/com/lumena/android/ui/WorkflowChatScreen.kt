@@ -1508,6 +1508,14 @@ fun WorkflowChatScreen(
                     it.role to it.text
                 }
             )
+        historicalFacts =
+            HistoricalSessionMemory.normalize(
+                branch.session.historicalFacts
+            )
+        historicalFactsQuarantined =
+            branch.session
+                .historicalFactsQuarantined
+                .coerceAtLeast(0)
         contextUsage = null
         history = listOf(systemMessage) + branch.session.history.map { OllamaMessage(it.role, it.content) }
         val retainedIds = branch.session.chat.map { it.id }.toSet()
@@ -1763,6 +1771,17 @@ fun WorkflowChatScreen(
                 experienceNegative = experienceStats.negative,
                 experienceUnresolved = experienceStats.unresolvedNegative,
                 experienceTotal = experienceStats.total,
+                historicalTaskRecords =
+                    historicalFacts.size,
+                historicalImportedRecords =
+                    historicalFacts.count {
+                        it.origin ==
+                            com.lumena.android.agent.core
+                                .HistoricalRecordOrigin
+                                .IMPORTED_ADVISORY
+                    },
+                historicalQuarantinedRecords =
+                    historicalFactsQuarantined,
                 genomeStats = genomeStats,
                 genomeCapsules = genomeCapsules,
                 onUnpackGenome = { id -> ContextGenomeStore.unpack(context, id) },
@@ -2308,6 +2327,9 @@ private fun ModelAndConnectionSheet(
     experienceNegative: Int,
     experienceUnresolved: Int,
     experienceTotal: Int,
+    historicalTaskRecords: Int,
+    historicalImportedRecords: Int,
+    historicalQuarantinedRecords: Int,
     genomeStats: ContextGenomeStats,
     genomeCapsules: List<GenomeCapsule>,
     onUnpackGenome: (String) -> GenomeUnpackedUnit?,
@@ -2465,6 +2487,29 @@ private fun ModelAndConnectionSheet(
         Text(
             "Total $experienceTotal · positive $experiencePositive · negative $experienceNegative · unresolved $experienceUnresolved",
             style = MaterialTheme.typography.bodySmall
+        )
+
+        HorizontalDivider()
+        Text(
+            "Historical execution receipts",
+            style =
+                MaterialTheme.typography
+                    .titleMedium
+        )
+        Text(
+            "Past app-owned execution facts only. They are not current evidence, permission, approval, or completion proof.",
+            style =
+                MaterialTheme.typography
+                    .bodySmall,
+            color =
+                MaterialTheme.colorScheme
+                    .onSurfaceVariant
+        )
+        Text(
+            "Stored $historicalTaskRecords · imported advisory $historicalImportedRecords · quarantined $historicalQuarantinedRecords",
+            style =
+                MaterialTheme.typography
+                    .bodySmall
         )
 
         HorizontalDivider()
