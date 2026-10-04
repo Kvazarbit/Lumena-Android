@@ -7,6 +7,13 @@ enum class HistoricalRecordOrigin {
     IMPORTED_ADVISORY
 }
 
+data class HistoricalUnresolvedEffect(
+    val tool: String,
+    val requestSignature: String,
+    val targetRef: String,
+    val reconciledByTaskRef: String? = null
+)
+
 data class HistoricalTaskRecord(
     val sourceTaskRef: String,
     val sourceInstallRef: String,
@@ -15,7 +22,8 @@ data class HistoricalTaskRecord(
     val subjectRefs: List<String> = emptyList(),
     val origin: HistoricalRecordOrigin = HistoricalRecordOrigin.LOCAL_CURRENT,
     val capturedAtMs: Long = 0L,
-    val snapshot: HistoricalTaskFacts
+    val snapshot: HistoricalTaskFacts,
+    val unresolvedEffect: HistoricalUnresolvedEffect? = null
 )
 
 /**
@@ -61,6 +69,25 @@ object HistoricalSessionMemory {
             return normalize(existing)
         }
 
+        val unresolved =
+            task.kernel.inFlight
+                ?.takeIf {
+                    ToolRegistry.get(it.tool)
+                        ?.risk != ToolRisk.READ_ONLY
+                }
+                ?.let {
+                    HistoricalUnresolvedEffect(
+                        tool =
+                            ToolRegistry.canonicalize(
+                                it.tool
+                            ),
+                        requestSignature =
+                            it.signature,
+                        targetRef =
+                            sha256(it.target)
+                    )
+                }
+
         val record = HistoricalTaskRecord(
             sourceTaskRef = snapshot.sourceTaskRef,
             sourceInstallRef = sourceInstallRef,
@@ -74,7 +101,8 @@ object HistoricalSessionMemory {
                 .take(MAX_SUBJECT_REFS),
             origin = origin,
             capturedAtMs = capturedAtMs.coerceAtLeast(0L),
-            snapshot = snapshot
+            snapshot = snapshot,
+            unresolvedEffect = unresolved
         )
 
         val key = keyOf(record)
@@ -177,6 +205,20 @@ object HistoricalSessionMemory {
                 record.projectRef?.let {
                     appendLine("project_ref=$it")
                 }
+                record.unresolvedEffect
+                    ?.takeIf {
+                        it.reconciledByTaskRef == null
+                    }
+                    ?.let {
+                        appendLine(
+                            "unresolved_effect_tool=" +
+                                it.tool
+                        )
+                        appendLine(
+                            "unresolved_effect_target_ref=" +
+                                it.targetRef
+                        )
+                    }
                 appendLine(inner)
             }
             val suffix = footer + (shown + 1)
@@ -188,6 +230,92 @@ object HistoricalSessionMemory {
         }
 
         return header + body + footer + shown
+    }
+
+    fun unresolvedForPolicy(
+        records: List<HistoricalTaskRecord>
+    ): List<PolicyUnresolvedEffect> =
+        normalize(records)
+            .mapNotNull { record ->
+                val effect =
+                    record.unresolvedEffect
+                        ?.takeIf {
+                            it.reconciledByTaskRef == null
+                        }
+                        ?: return@mapNotNull null
+                PolicyUnresolvedEffect(
+                    sourceTaskRef =
+                        record.sourceTaskRef,
+                    tool = effect.tool,
+                    requestSignature =
+                        effect.requestSignature,
+                    targetRef =
+                        effect.targetRef,
+                    origin = record.origin
+                )
+            }
+            .takeLast(MAX_TASKS)
+
+    /**
+     * A successful read of the same file can reconcile an uncertain prior
+     * file.write/file.patch. This does not prove the old command succeeded;
+     * it only establishes current file state so blind replay is no longer needed.
+     */
+    fun reconcile(
+        records: List<HistoricalTaskRecord>,
+        verificationTask: TaskState
+    ): List<HistoricalTaskRecord> {
+        val verifiedTargets =
+            verificationTask.kernel.evidence
+                .filter {
+                    it.ok &&
+                        it.phase ==
+                            CognitivePhase.OBSERVE &&
+                        it.tool == "file.read"
+                }
+                .map {
+                    sha256(it.target)
+                }
+                .toSet()
+        if (verifiedTargets.isEmpty()) {
+            return normalize(records)
+        }
+
+        val taskRef =
+            HistoricalExecutionFacts.capture(
+                verificationTask.id,
+                verificationTask.kernel
+            ).sourceTaskRef
+
+        return normalize(
+            records.map { record ->
+                val effect =
+                    record.unresolvedEffect
+                if (
+                    record.origin ==
+                        HistoricalRecordOrigin.LOCAL_CURRENT &&
+                    effect != null &&
+                    effect.reconciledByTaskRef == null &&
+                    effect.tool in
+                        setOf(
+                            "file.write",
+                            "file.patch"
+                        ) &&
+                    effect.targetRef in
+                        verifiedTargets
+                ) {
+                    record.copy(
+                        unresolvedEffect =
+                            effect.copy(
+                                reconciledByTaskRef =
+                                    taskRef
+                            )
+                    )
+                } else {
+                    record
+                }
+            }
+        )
     }
 
     fun markImported(
@@ -219,6 +347,14 @@ object HistoricalSessionMemory {
                 record.projectRef?.let(hex64::matches) == false ||
                 record.subjectRefs.any { !hex64.matches(it) } ||
                 record.capturedAtMs < 0L ||
+                record.unresolvedEffect?.let {
+                    ToolRegistry.get(it.tool) == null ||
+                        !Regex("[0-9a-f]{24}")
+                            .matches(it.requestSignature) ||
+                        !hex64.matches(it.targetRef) ||
+                        it.reconciledByTaskRef
+                            ?.let(hex64::matches) == false
+                } == true ||
                 !validSnapshot
             ) {
                 null
