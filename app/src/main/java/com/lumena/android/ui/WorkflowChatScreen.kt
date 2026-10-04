@@ -68,6 +68,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.core.AgentControlState
+import com.lumena.android.agent.core.HistoricalSessionMemory
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.local.PlannerDecision
@@ -92,6 +93,7 @@ import com.lumena.android.ollama.WorkflowImage
 import com.lumena.android.ollama.WorkflowRunner
 import com.lumena.android.settings.LocalSessionSnapshot
 import com.lumena.android.settings.HistoryTreeStore
+import com.lumena.android.settings.HistoricalInstallIdentity
 import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.settings.ContextCheckpointStore
 import com.lumena.android.settings.AdaptiveWebResearchStore
@@ -267,6 +269,26 @@ fun WorkflowChatScreen(
                 }
         )
     }
+    val historicalInstallRef =
+        remember {
+            HistoricalInstallIdentity.ref(
+                context
+            )
+        }
+    var historicalFacts by remember {
+        mutableStateOf(
+            HistoricalSessionMemory.normalize(
+                restored.historicalFacts
+            )
+        )
+    }
+    var historicalFactsQuarantined by remember {
+        mutableStateOf(
+            restored
+                .historicalFactsQuarantined
+                .coerceAtLeast(0)
+        )
+    }
     var busy by remember {
         mutableStateOf(
             restored.task?.status in setOf(
@@ -400,8 +422,17 @@ fun WorkflowChatScreen(
         researchGoal = researchThread?.rootGoal,
         researchThread = researchThread,
         codeGoal = codeGoal,
-        workThreads = workThreads
+        workThreads = workThreads,
+        historicalFacts = historicalFacts,
+        historicalFactsQuarantined =
+            historicalFactsQuarantined
     )
+
+    fun currentBranchId(): String =
+        HistoryTreeStore
+            .activeBranch(context)
+            ?.id
+            .orEmpty()
 
     fun persistSession() {
         LocalSessionStore.save(context, sessionSnapshot())
@@ -419,6 +450,23 @@ fun WorkflowChatScreen(
 
     fun acceptControl(taskId: String, runToken: Long, control: AgentControlState) {
         if (!coordinator.isCurrent(runToken, taskId) || !isCurrentTask(taskId)) return
+        val previousKernel =
+            currentTask?.kernel
+        if (
+            control.task.kernel !=
+                previousKernel
+        ) {
+            historicalFacts =
+                HistoricalSessionMemory.record(
+                    existing =
+                        historicalFacts,
+                    task = control.task,
+                    sourceInstallRef =
+                        historicalInstallRef,
+                    branchId =
+                        currentBranchId()
+                )
+        }
         currentTask = control.task
         persistSession()
     }
@@ -461,6 +509,14 @@ fun WorkflowChatScreen(
             }
         if (storedThread != researchThread) researchThread = storedThread
         codeGoal = stored.codeGoal
+        historicalFacts =
+            HistoricalSessionMemory.normalize(
+                stored.historicalFacts
+            )
+        historicalFactsQuarantined =
+            stored
+                .historicalFactsQuarantined
+                .coerceAtLeast(0)
 
         busy = stored.task?.status in setOf(
             TaskStatus.PLANNING, TaskStatus.WAITING_MODEL, TaskStatus.EXECUTING, TaskStatus.VERIFYING
@@ -490,6 +546,8 @@ fun WorkflowChatScreen(
         contextUsage = null
         researchThread = null
         codeGoal = null
+        historicalFacts = emptyList()
+        historicalFactsQuarantined = 0
         bubbles.clear()
         bubbles += ChatBubble("assistant", "Новий чат. Що хочеш зробити?")
         busy = false
@@ -1247,6 +1305,19 @@ fun WorkflowChatScreen(
 
         input = ""
         val previous = currentTask
+        previous?.let { completedOrInterrupted ->
+            historicalFacts =
+                HistoricalSessionMemory.record(
+                    existing =
+                        historicalFacts,
+                    task =
+                        completedOrInterrupted,
+                    sourceInstallRef =
+                        historicalInstallRef,
+                    branchId =
+                        currentBranchId()
+                )
+        }
         val workResolution =
             WorkThreadMemory.resolve(
                 text = text,
@@ -1314,13 +1385,30 @@ fun WorkflowChatScreen(
                 }
             }
         }
+        val historicalContext =
+            HistoricalSessionMemory.render(
+                HistoricalSessionMemory.select(
+                    records =
+                        historicalFacts,
+                    branchId =
+                        currentBranchId(),
+                    projectId =
+                        projectId,
+                    subjectKeys =
+                        WorkThreadMemory.subjectKeys(
+                            resolvedGoal
+                        )
+                )
+            )
         val epochHistory =
             ExecutionEpochHistory.rebuild(
                 systemMessage = systemMessage,
                 visibleTurns =
                     bubbles.map {
                         it.role to it.text
-                    }
+                    },
+                historicalContext =
+                    historicalContext
             )
 
         taskApprovals.clear()
