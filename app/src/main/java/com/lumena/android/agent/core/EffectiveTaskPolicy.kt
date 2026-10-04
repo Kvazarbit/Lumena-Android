@@ -57,13 +57,13 @@ object EffectiveTaskPolicyCompiler {
 
     private val readOnlyCues = listOf(
         Regex("(?iu)\\b(?:тільки|лише)\\s+(?:знайди\\s+і\\s+)?(?:прочитай|переглянь|проаналізуй|перевір)\\b"),
-        Regex("(?iu)\\bнічого\\s+не\\s+(?:змінюй|редагуй|запускай|виконуй)\\b"),
+        Regex("(?iu)\\bнічого\\s+не\\s+(?:змінюй|редагуй)\\b"),
         Regex("(?iu)\\b(?:не\\s+змінюй|без\\s+змін)(?:\\s+зараз)?\\b"),
         Regex("(?iu)\\b(?:только|лишь)\\s+(?:прочитай|посмотри|проанализируй|проверь)\\b"),
-        Regex("(?iu)\\bничего\\s+не\\s+(?:изменяй|редактируй|запускай|выполняй)\\b"),
+        Regex("(?iu)\\bничего\\s+не\\s+(?:изменяй|редактируй)\\b"),
         Regex("(?iu)\\b(?:не\\s+изменяй|без\\s+изменений)(?:\\s+сейчас)?\\b"),
         Regex("(?iu)\\b(?:only\\s+(?:read|inspect|analyse|analyze|review)|read[- ]only)\\b"),
-        Regex("(?iu)\\b(?:do\\s+not|don't|never)\\s+(?:modify|edit|write|patch|run|execute)\\b"),
+        Regex("(?iu)\\b(?:do\\s+not|don't|never)\\s+(?:modify|edit|write|patch)\\b"),
         Regex("(?iu)\\bno\\s+changes?(?:\\s+now)?\\b"),
         Regex("(?iu)\\b(?:tylko|jedynie)\\s+(?:przeczytaj|sprawdź|sprawdz|przeanalizuj)\\b"),
         Regex("(?iu)\\b(?:nie\\s+zmieniaj|nie\\s+modyfikuj|bez\\s+zmian)(?:\\s+teraz)?\\b")
@@ -113,14 +113,57 @@ object EffectiveTaskPolicyCompiler {
         val maskedRoot =
             maskQuoted(root)
 
+        val currentToolDirectives =
+            toolDirectives(maskedCurrent)
+        val rootToolDirectives =
+            toolDirectives(maskedRoot)
+        val effectText =
+            maskToolNames(
+                maskedCurrent
+            )
+
         val readOnlyMatches =
-            findPositions(maskedCurrent, readOnlyCues)
+            findPositions(
+                effectText,
+                readOnlyCues
+            )
         val noExecuteMatches =
-            findPositions(maskedCurrent, noExecuteCues)
+            findPositions(
+                effectText,
+                noExecuteCues
+            )
         val mutationMatches =
-            findPositions(maskedCurrent, mutationPositive)
+            (
+                findPositions(
+                    effectText,
+                    mutationPositive
+                ) +
+                    currentToolDirectives
+                        .filter {
+                            !it.forbidden &&
+                                ToolRegistry.get(
+                                    it.tool
+                                )?.risk ==
+                                ToolRisk.MUTATING
+                        }
+                        .map { it.start }
+                )
         val executionMatches =
-            findPositions(maskedCurrent, executionPositive)
+            (
+                findPositions(
+                    effectText,
+                    executionPositive
+                ) +
+                    currentToolDirectives
+                        .filter {
+                            !it.forbidden &&
+                                ToolRegistry.get(
+                                    it.tool
+                                )?.risk ==
+                                ToolRisk.EXECUTABLE
+                        }
+                        .map { it.start }
+                )
 
         val lastReadOnly = readOnlyMatches.maxOrNull()
         val lastMutation = mutationMatches.maxOrNull()
@@ -250,8 +293,22 @@ object EffectiveTaskPolicyCompiler {
         val masked = maskQuoted(text)
         val forbiddenTools =
             toolDirectives(masked)
-                .filter { it.forbidden }
-                .map { it.tool }
+                .groupBy {
+                    it.tool
+                }
+                .mapNotNull {
+                    (tool, directives) ->
+                    directives
+                        .maxByOrNull {
+                            it.order
+                        }
+                        ?.takeIf {
+                            it.forbidden
+                        }
+                        ?.let {
+                            tool
+                        }
+                }
                 .toSet()
         if (forbiddenTools.isEmpty()) {
             return clean(text, 8_000)
@@ -454,6 +511,7 @@ object EffectiveTaskPolicyCompiler {
     private data class ToolDirective(
         val tool: String,
         val forbidden: Boolean,
+        val start: Int,
         val order: Int
     )
 
@@ -479,7 +537,12 @@ object EffectiveTaskPolicyCompiler {
                 "(?iu)(?:не\\s+(?:використовуй|використовуйте|запускай|запускайте|виконуй|виконуйте|роби|робіть)|" +
                     "не\\s+(?:используй|используйте|запускай|запускайте|выполняй|выполняйте)|" +
                     "do\\s+not\\s+(?:use|run|execute)|don't\\s+(?:use|run|execute)|never\\s+(?:use|run|execute)|" +
-                    "nie\\s+(?:używaj|uzywaj|uruchamiaj|wykonuj)|без)\\s*$"
+                    "nie\\s+(?:używaj|uzywaj|uruchamiaj|wykonuj)|без)"
+            )
+        val positiveCue =
+            Regex(
+                "(?iu)(?:використай|використовуйте|запусти|виконай|используй|используйте|запусти|выполни|" +
+                    "use|run|execute|użyj|uzyj|uruchom|wykonaj)"
             )
 
         val results =
@@ -493,10 +556,28 @@ object EffectiveTaskPolicyCompiler {
                         masked,
                         match.range.first
                     )
+                val tail =
+                    prefix.takeLast(160)
+                val lastNegative =
+                    negativeCue
+                        .findAll(tail)
+                        .map {
+                            it.range.first
+                        }
+                        .maxOrNull()
+                        ?: -1
+                val lastPositive =
+                    positiveCue
+                        .findAll(tail)
+                        .map {
+                            it.range.first
+                        }
+                        .maxOrNull()
+                        ?: -1
                 val forbidden =
-                    negativeCue.containsMatchIn(
-                        prefix.takeLast(96)
-                    )
+                    lastNegative >= 0 &&
+                        lastNegative >
+                            lastPositive
                 results +=
                     ToolDirective(
                         tool =
@@ -504,6 +585,8 @@ object EffectiveTaskPolicyCompiler {
                                 match.value
                             ),
                         forbidden = forbidden,
+                        start =
+                            match.range.first,
                         order = order++
                     )
             }
@@ -619,6 +702,34 @@ object EffectiveTaskPolicyCompiler {
                 .map { it.range.first }
                 .toList()
         }
+
+    private fun maskToolNames(
+        value: String
+    ): String {
+        val chars =
+            value.toCharArray()
+        ToolRegistry.all()
+            .map { it.name }
+            .sortedByDescending {
+                it.length
+            }
+            .forEach { name ->
+                Regex(
+                    "(?iu)(?<![a-z0-9_])" +
+                        Regex.escape(name) +
+                        "(?![a-z0-9_])"
+                )
+                    .findAll(value)
+                    .forEach { match ->
+                        for (
+                            i in match.range
+                        ) {
+                            chars[i] = ' '
+                        }
+                    }
+            }
+        return String(chars)
+    }
 
     private fun maskQuoted(
         value: String
