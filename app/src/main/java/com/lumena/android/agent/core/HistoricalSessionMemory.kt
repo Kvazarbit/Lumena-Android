@@ -49,7 +49,8 @@ object HistoricalSessionMemory {
         branchId: String,
         subjectKeys: Set<String> = WorkThreadMemory.subjectKeys(task.goal),
         capturedAtMs: Long = System.currentTimeMillis(),
-        origin: HistoricalRecordOrigin = HistoricalRecordOrigin.LOCAL_CURRENT
+        origin: HistoricalRecordOrigin =
+            task.executionOrigin
     ): List<HistoricalTaskRecord> {
         if (!hex64.matches(sourceInstallRef)) return normalize(existing)
         if (branchId.isBlank()) return normalize(existing)
