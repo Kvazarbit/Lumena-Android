@@ -360,6 +360,53 @@ object EffectiveTaskPolicyCompiler {
         return TaskPolicyToolDecision(true)
     }
 
+    fun afterTool(
+        policy: EffectiveTaskPolicy,
+        call: AgentDecision.ToolCall,
+        ok: Boolean
+    ): EffectiveTaskPolicy {
+        if (
+            !ok ||
+            ToolRegistry.canonicalize(
+                call.tool
+            ) != "file.read"
+        ) {
+            return policy
+        }
+
+        val targetRef =
+            sha256(
+                ContextKernel.target(
+                    call
+                )
+            )
+        val remaining =
+            policy.unresolvedEffects
+                .filterNot {
+                    it.origin ==
+                        HistoricalRecordOrigin
+                            .LOCAL_CURRENT &&
+                        it.tool in
+                            setOf(
+                                "file.write",
+                                "file.patch"
+                            ) &&
+                        it.targetRef ==
+                            targetRef
+                }
+        return if (
+            remaining.size ==
+            policy.unresolvedEffects.size
+        ) {
+            policy
+        } else {
+            policy.copy(
+                unresolvedEffects =
+                    remaining
+            )
+        }
+    }
+
     fun render(
         policy: EffectiveTaskPolicy
     ): String = buildString {
