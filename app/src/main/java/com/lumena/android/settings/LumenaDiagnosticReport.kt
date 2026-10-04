@@ -37,7 +37,13 @@ data class DiagnosticTaskView(
     val goalContractMandatory: Int = 0,
     val goalContractPassed: Int = 0,
     val goalContractIndependentPassed: Int = 0,
-    val goalContractPending: List<String> = emptyList()
+    val goalContractPending: List<String> = emptyList(),
+    val currentInstruction: String = "",
+    val policyAllowedEffects: List<String> = emptyList(),
+    val policyForbiddenTools: List<String> = emptyList(),
+    val policyDisposition: String = "READY",
+    val policyUnresolvedEffects: Int = 0,
+    val executionOrigin: String = "LOCAL_CURRENT"
 )
 
 data class DiagnosticEvidenceView(
@@ -284,6 +290,12 @@ object LumenaDiagnosticFormatter {
                 appendLine("status=${clean(task.status, 80)}")
                 appendLine("step=${task.step}/${task.maxSteps}")
                 appendLine("goal=${clean(task.goal, 1200)}")
+                appendLine("current_instruction=${clean(task.currentInstruction, 1200)}")
+                appendLine("policy_allowed_effects=" + task.policyAllowedEffects.joinToString(","))
+                appendLine("policy_forbidden_tools=" + task.policyForbiddenTools.joinToString(","))
+                appendLine("policy_disposition=${clean(task.policyDisposition, 80)}")
+                appendLine("policy_unresolved_effects=${task.policyUnresolvedEffects}")
+                appendLine("execution_origin=${clean(task.executionOrigin, 80)}")
                 appendLine("last_tool=${clean(task.lastTool, 160)}")
                 appendLine("last_result=${clean(task.lastResult, 1600)}")
                 appendLine(
@@ -1276,7 +1288,26 @@ object LumenaDiagnosticReport {
                     .incompleteMandatory(
                         task.goalContract
                     )
-                    .map { it.id }
+                    .map { it.id },
+            currentInstruction =
+                task.currentInstruction,
+            policyAllowedEffects =
+                task.effectivePolicy
+                    .allowedRisks
+                    .map { it.name },
+            policyForbiddenTools =
+                task.effectivePolicy
+                    .forbiddenTools,
+            policyDisposition =
+                task.effectivePolicy
+                    .disposition
+                    .name,
+            policyUnresolvedEffects =
+                task.effectivePolicy
+                    .unresolvedEffects
+                    .size,
+            executionOrigin =
+                task.executionOrigin.name
         )
 
     private fun evidenceView(
