@@ -405,7 +405,37 @@ class HistoricalSessionMemoryTest {
     }
 
 
+
     @Test
+    fun importedTaskCannotBeUpgradedByRecapture() {
+        val importedTask =
+            task(
+                id = "imported-task",
+                goal = "Продовж aquarium.html"
+            ).copy(
+                executionOrigin =
+                    HistoricalRecordOrigin
+                        .IMPORTED_ADVISORY
+            )
+
+        val memory =
+            HistoricalSessionMemory.record(
+                existing = emptyList(),
+                task = importedTask,
+                sourceInstallRef =
+                    installRef,
+                branchId = "branch",
+                capturedAtMs = 1
+            )
+
+        assertEquals(
+            HistoricalRecordOrigin
+                .IMPORTED_ADVISORY,
+            memory.single().origin
+        )
+    }
+
+@Test
     fun unknownWritePersistsAsReconciliationConstraintAndReadClosesIt() {
         val unknownTask =
             TaskState(
