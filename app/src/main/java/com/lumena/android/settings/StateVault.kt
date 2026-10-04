@@ -92,12 +92,18 @@ object StateVault {
             ) {
                 t.copy(
                     effectivePolicy =
-                        importedPolicy
+                        importedPolicy,
+                    executionOrigin =
+                        HistoricalRecordOrigin
+                            .IMPORTED_ADVISORY
                 )
             } else {
                 t.copy(
                     effectivePolicy =
                         importedPolicy,
+                    executionOrigin =
+                        HistoricalRecordOrigin
+                            .IMPORTED_ADVISORY,
                     status = TaskStatus.CANCELLED,
                     errors =
                         (
