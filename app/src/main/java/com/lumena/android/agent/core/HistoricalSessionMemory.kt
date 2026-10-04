@@ -123,7 +123,11 @@ object HistoricalSessionMemory {
                 Triple(record, projectMatch, subjectScore)
             }
             .filter {
-                it.second || it.third > 0
+                if (projectRef != null) {
+                    it.second
+                } else {
+                    it.third > 0
+                }
             }
             .sortedWith(
                 compareByDescending<Triple<HistoricalTaskRecord, Boolean, Int>> {
