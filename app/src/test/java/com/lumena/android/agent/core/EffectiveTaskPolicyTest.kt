@@ -369,7 +369,46 @@ class EffectiveTaskPolicyTest {
         )
     }
 
+
     @Test
+    fun readOnlyPolicyBlocksMutationAndExecutionFamilies() {
+        val policy =
+            EffectiveTaskPolicyCompiler
+                .compile(
+                    rootGoal =
+                        "Онови проєкт",
+                    currentInstruction =
+                        "Тільки прочитай поточний стан, нічого не змінюй."
+                )
+        val blockedTools =
+            listOf(
+                "file.write",
+                "file.patch",
+                "git.add",
+                "git.commit",
+                "python.run",
+                "python.syntax_check",
+                "python.tests",
+                "ollama.start"
+            )
+
+        blockedTools.forEach { tool ->
+            val decision =
+                EffectiveTaskPolicyCompiler
+                    .validateTool(
+                        policy,
+                        AgentDecision.ToolCall(
+                            tool = tool
+                        )
+                    )
+            assertFalse(
+                tool,
+                decision.allowed
+            )
+        }
+    }
+
+@Test
     fun nestedMutatingBatchIsBlockedByReadOnlyPolicy() {
         val policy =
             EffectiveTaskPolicyCompiler
