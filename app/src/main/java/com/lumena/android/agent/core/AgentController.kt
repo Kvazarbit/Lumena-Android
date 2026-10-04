@@ -91,6 +91,9 @@ class AgentController(
                     task.effectivePolicy
                         .scopeRef
             )
+        val operationText =
+            EffectiveTaskPolicyCompiler
+                .routingText(policy)
         val profile =
             TaskIntentRouter.route(policy)
         val requiredTools =
@@ -101,10 +104,10 @@ class AgentController(
                 requiredTools = requiredTools,
                 visualRequired =
                     VisualGoalRouter.route(
-                        policy.currentInstruction
+                        operationText
                     ) != null,
                 goal =
-                    policy.currentInstruction
+                    operationText
             )
         val reserve = if (profile.preflight != null) 1 else 0
         val initialToolBudget = maxOf(
