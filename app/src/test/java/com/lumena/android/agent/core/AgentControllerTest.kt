@@ -2131,7 +2131,50 @@ class AgentControllerTest {
         assertTrue(third.state.task.status == TaskStatus.FAILED)
     }
 
+
     @Test
+    fun bareContinueKeepsRootOperationalContractButFreshKernel() {
+        val state =
+            controller.initial(
+                TaskState(
+                    id = "bare-continue-policy",
+                    projectId = null,
+                    goal =
+                        "Онови aquarium.html: виправ фізику.",
+                    currentInstruction =
+                        "продовж",
+                    status =
+                        TaskStatus.WAITING_MODEL
+                )
+            )
+
+        assertEquals(
+            TaskIntent.CODE_WORK,
+            state.intent
+        )
+        val action =
+            state.task.goalContract.criteria
+                .firstOrNull {
+                    it.kind ==
+                        CriterionKind
+                            .CODE_ACTION_EVIDENCE
+                }
+        assertTrue(action != null)
+        assertEquals(
+            "mutating",
+            action?.subject
+        )
+        assertEquals(
+            0,
+            state.task.kernel.observed
+        )
+        assertTrue(
+            state.task.kernel.evidence
+                .isEmpty()
+        )
+    }
+
+@Test
     fun currentReadOnlyInstructionOverridesOldMutationRootInController() {
         val state =
             controller.initial(
