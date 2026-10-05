@@ -106,6 +106,7 @@ import com.lumena.android.agent.core.ProjectContextResolver
 import com.lumena.android.agent.core.PreviousTaskOutcomeContext
 import com.lumena.android.agent.core.ShortTurnCue
 import com.lumena.android.agent.core.AdvisoryLayer
+import com.lumena.android.agent.core.GovernorCostAccumulator
 import com.lumena.android.settings.LayerGovernorStore
 import com.lumena.android.agent.core.ResearchThreadResolver
 import com.lumena.android.agent.core.ResearchThreadState
@@ -236,6 +237,8 @@ fun WorkflowChatScreen(
         mutableStateOf(listOf(systemMessage) + restored.history.map { OllamaMessage(it.role, it.content) })
     }
     var contextUsage by remember { mutableStateOf<ModelContextUsage?>(null) }
+    // Per-task resource accounting for the Layer Governor (UI thread only).
+    val governorCosts = remember { mutableMapOf<String, GovernorCostAccumulator>() }
     var codeGoal by remember {
         mutableStateOf(restored.codeGoal ?: CodeTaskAnchor.restore(restored.chat.map { it.role to it.text }))
     }
@@ -1411,6 +1414,9 @@ fun WorkflowChatScreen(
                 isCurrentTask(taskId)
             ) {
                 contextUsage = usage
+                governorCosts[taskId] =
+                    (governorCosts[taskId] ?: GovernorCostAccumulator())
+                        .report(usage.promptTokens, usage.generatedTokens)
             }
         }
     }
@@ -1429,6 +1435,12 @@ fun WorkflowChatScreen(
             is WorkflowOutcome.NeedsConfirmation -> null
         }
         if (terminalStatus != null) {
+            val steps = when (outcome) {
+                is WorkflowOutcome.Finished -> outcome.control.task.step
+                is WorkflowOutcome.Failed -> outcome.control.task.step
+                is WorkflowOutcome.NeedsConfirmation -> 0
+            }
+            val cost = (governorCosts.remove(taskId) ?: GovernorCostAccumulator()).finish(steps)
             uiScope.launch {
                 withContext(Dispatchers.IO) {
                     runCatching {
@@ -1441,7 +1453,8 @@ fun WorkflowChatScreen(
                     LayerGovernorStore.resolve(
                         context = context,
                         taskId = taskId,
-                        status = terminalStatus
+                        status = terminalStatus,
+                        cost = cost
                     )
                 }
             }

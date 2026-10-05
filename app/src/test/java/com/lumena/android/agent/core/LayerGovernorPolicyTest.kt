@@ -233,4 +233,71 @@ class LayerGovernorPolicyTest {
         assertEquals(LayerVerdict.INSUFFICIENT_DATA, effect.verdict)
         assertTrue("delta=${effect.delta}", effect.delta > 0.3)
     }
+
+    private fun costTrials(
+        layer: String,
+        successOn: Double,
+        successOff: Double,
+        tokensOn: Long,
+        tokensOff: Long,
+        seed: Long
+    ): List<GovernorTrial> {
+        // Alternating arms and deterministic success rates isolate the cost
+        // signal; 2000 tasks per arm make the success interval narrow enough.
+        val random = Random(seed)
+        return (0 until 4_000).map { i ->
+            val exposed = i % 2 == 0
+            val rate = if (exposed) successOn else successOff
+            val success = (i / 2) % 100 < (rate * 100).toInt()
+            val tokens = (if (exposed) tokensOn else tokensOff) + random.nextInt(400) - 200
+            GovernorTrial(
+                taskHash = "c$i", modelId = model, family = "CODE_WORK",
+                exposures = listOf(GovernorExposure(layer, exposed)),
+                status = if (success) "DONE" else "PARTIAL", success = success, at = i + 1L,
+                cost = GovernorCost(toolSteps = 3, modelCalls = 4, tokens = tokens, durationMs = 1_000)
+            )
+        }
+    }
+
+    @Test fun layerWithoutBenefitThatBurnsTokensIsFlaggedNotDisabled() {
+        val trials = costTrials("memory", 0.6, 0.6, tokensOn = 2_400, tokensOff = 1_600, seed = 4)
+        val effect = LayerGovernorPolicy.effect(trials, "memory")
+        assertTrue(effect.tokens.measured)
+        assertTrue("token delta=${effect.tokens.mean}", effect.tokens.mean in 700.0..900.0)
+        assertTrue(effect.tokens.low > 0.0)
+        assertEquals(LayerVerdict.COSTLY_NO_BENEFIT, effect.verdict)
+
+        val state = LayerGovernorState(trials = trials)
+        assertTrue(LayerGovernorPolicy.applyVerdicts(state, model, 1).disabled.isEmpty())
+    }
+
+    @Test fun benefitOutranksCost() {
+        val trials = costTrials("fractal", 0.8, 0.4, tokensOn = 2_400, tokensOff = 1_600, seed = 5)
+        val effect = LayerGovernorPolicy.effect(trials, "fractal")
+        assertEquals(LayerVerdict.KEEP, effect.verdict)
+        assertTrue(effect.tokens.low > 0.0)
+    }
+
+    @Test fun unmeasuredCostIsNotTreatedAsFree() {
+        val trials = costTrials("memory", 0.6, 0.6, 2_400, 1_600, seed = 6)
+            .map { it.copy(cost = GovernorCost()) }
+        val effect = LayerGovernorPolicy.effect(trials, "memory")
+        assertFalse(effect.tokens.measured)
+        assertTrue(effect.verdict != LayerVerdict.COSTLY_NO_BENEFIT)
+    }
+
+    @Test fun costAccumulatorCountsEachModelCallOnce() {
+        var acc = GovernorCostAccumulator()
+        acc = acc.report(1_000, null).report(1_000, 50)   // call 1: estimate + final
+        acc = acc.report(1_200, null)                       // call 2: estimate only
+        acc = acc.report(1_300, null).report(1_300, 40)   // call 3: estimate + final
+        val cost = acc.finish(toolSteps = 2)
+        assertEquals(3, cost.modelCalls)
+        assertEquals(1_050L + 1_200L + 1_340L, cost.tokens)
+        assertEquals(2, cost.toolSteps)
+
+        val dangling = GovernorCostAccumulator().report(900, null).finish(0)
+        assertEquals(1, dangling.modelCalls)
+        assertEquals(900L, dangling.tokens)
+    }
 }

@@ -76,6 +76,8 @@ object LayerGovernorStore {
         context: Context,
         taskId: String,
         status: String,
+        cost: com.lumena.android.agent.core.GovernorCost =
+            com.lumena.android.agent.core.GovernorCost(),
         now: Long = System.currentTimeMillis()
     ) {
         runCatching {
@@ -85,7 +87,7 @@ object LayerGovernorStore {
                     .firstOrNull { it.taskHash == LayerGovernorPolicy.taskHash(taskId) }
                     ?.modelId
                     ?: return@synchronized
-                var next = LayerGovernorPolicy.resolve(state, taskId, status, now)
+                var next = LayerGovernorPolicy.resolve(state, taskId, status, now, cost)
                 next = LayerGovernorPolicy.applyVerdicts(next, modelId, now)
                 if (next != state) save(context, next)
             }

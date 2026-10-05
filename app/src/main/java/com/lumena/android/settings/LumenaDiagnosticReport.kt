@@ -1620,6 +1620,9 @@ object LayerGovernorFormatter {
                     " withheld=" + e.withheldSuccess + "/" + e.withheldTasks +
                     " eligible_share=" + pct(e.eligibleShare) +
                     " unresolved=" + e.exposedUnresolved + "/" + e.withheldUnresolved +
+                    cost(" tokens", e.tokens) +
+                    cost(" steps", e.toolSteps) +
+                    cost(" ms", e.durationMs) +
                     (if (e.attritionImbalance) " ATTRITION_IMBALANCE" else "")
             )
         }
@@ -1633,6 +1636,16 @@ object LayerGovernorFormatter {
             )
         }
     }
+
+    private fun cost(
+        name: String,
+        delta: com.lumena.android.agent.core.CostDelta
+    ): String =
+        if (!delta.measured) "$name=n/a"
+        else name + "=" + num(delta.mean) + "[" + num(delta.low) + "," + num(delta.high) + "]"
+
+    private fun num(value: Double): String =
+        String.format(java.util.Locale.ROOT, "%+.1f", value)
 
     private fun pct(value: Double): String =
         String.format(java.util.Locale.ROOT, "%+.1f%%", value * 100.0)

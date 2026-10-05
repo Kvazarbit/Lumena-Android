@@ -49,7 +49,64 @@ data class GovernorTrial(
     val exposures: List<GovernorExposure>,
     val status: String,
     val success: Boolean,
-    val at: Long
+    val at: Long,
+    val cost: GovernorCost = GovernorCost()
+)
+
+/** Resources one task consumed. Zero means "not measured", not "free". */
+data class GovernorCost(
+    val toolSteps: Int = 0,
+    val modelCalls: Int = 0,
+    val tokens: Long = 0,
+    val durationMs: Long = 0
+)
+
+/**
+ * Per-task token/call accounting from context-usage reports. A model call
+ * reports an estimate before the request and, when available, final usage
+ * with generated tokens after it; each call is counted once.
+ */
+data class GovernorCostAccumulator(
+    val modelCalls: Int = 0,
+    val tokens: Long = 0,
+    val pendingEstimate: Int = 0
+) {
+    fun report(promptTokens: Int, generatedTokens: Int?): GovernorCostAccumulator {
+        val prompt = promptTokens.coerceAtLeast(0)
+        return if (generatedTokens != null) {
+            copy(
+                modelCalls = modelCalls + 1,
+                tokens = tokens + prompt + generatedTokens.coerceAtLeast(0),
+                pendingEstimate = 0
+            )
+        } else if (pendingEstimate > 0) {
+            // The previous call never reported final usage: keep its estimate.
+            copy(modelCalls = modelCalls + 1, tokens = tokens + pendingEstimate, pendingEstimate = prompt)
+        } else {
+            copy(pendingEstimate = prompt)
+        }
+    }
+
+    fun finish(toolSteps: Int): GovernorCost {
+        val closed = if (pendingEstimate > 0) {
+            copy(modelCalls = modelCalls + 1, tokens = tokens + pendingEstimate, pendingEstimate = 0)
+        } else {
+            this
+        }
+        return GovernorCost(
+            toolSteps = toolSteps.coerceAtLeast(0),
+            modelCalls = closed.modelCalls,
+            tokens = closed.tokens
+        )
+    }
+}
+
+/** Exposed minus withheld mean of one cost metric, with a corrected interval. */
+data class CostDelta(
+    val mean: Double = 0.0,
+    val low: Double = 0.0,
+    val high: Double = 0.0,
+    val measured: Boolean = false
 )
 
 data class LayerGovernorState(
@@ -69,6 +126,11 @@ enum class LayerVerdict {
     NEGLIGIBLE,
     /** The layer almost never had advice to give. */
     NOT_TRIGGERED,
+    /**
+     * No detectable benefit (success interval inside +-NEGLIGIBLE) while it
+     * clearly increases tokens per task. A recommendation, never automatic.
+     */
+    COSTLY_NO_BENEFIT,
     /** Not enough randomized tasks, or the interval still crosses zero. */
     INSUFFICIENT_DATA
 }
@@ -88,7 +150,10 @@ data class LayerEffect(
     val exposedUnresolved: Int = 0,
     val withheldUnresolved: Int = 0,
     /** Arms lose tasks at clearly different rates; estimates are not trusted. */
-    val attritionImbalance: Boolean = false
+    val attritionImbalance: Boolean = false,
+    val tokens: CostDelta = CostDelta(),
+    val toolSteps: CostDelta = CostDelta(),
+    val durationMs: CostDelta = CostDelta()
 )
 
 data class LayerInteraction(
@@ -239,7 +304,8 @@ object LayerGovernorPolicy {
         state: LayerGovernorState,
         taskId: String,
         status: String,
-        now: Long
+        now: Long,
+        cost: GovernorCost = GovernorCost()
     ): LayerGovernorState {
         val hash = taskHash(taskId)
         val pending = state.pending.firstOrNull { it.taskHash == hash } ?: return state
@@ -250,7 +316,11 @@ object LayerGovernorPolicy {
             exposures = pending.exposures,
             status = status,
             success = status == "DONE",
-            at = now
+            at = now,
+            cost = cost.copy(
+                durationMs = if (cost.durationMs > 0) cost.durationMs
+                else (now - pending.startedAt).coerceAtLeast(0)
+            )
         )
         return state.copy(
             pending = state.pending.filterNot { it.taskHash == hash },
@@ -359,6 +429,10 @@ object LayerGovernorPolicy {
         val share = if (trials.isEmpty()) 0.0 else eligible.size.toDouble() / trials.size
         val minArm = minOf(exposed.size, withheld.size)
 
+        val tokenDelta = costDelta(randomized, ::exposedOf, z) { it.cost.tokens.toDouble() }
+        val stepDelta = costDelta(randomized, ::exposedOf, z) { it.cost.toolSteps.toDouble() }
+        val timeDelta = costDelta(randomized, ::exposedOf, z) { it.cost.durationMs.toDouble() }
+
         val verdict = when {
             trials.size >= NOT_TRIGGERED_MIN_TRIALS && share < NOT_TRIGGERED_SHARE ->
                 LayerVerdict.NOT_TRIGGERED
@@ -368,6 +442,8 @@ object LayerGovernorPolicy {
                 LayerVerdict.KEEP
             high < 0.0 && minArm >= MIN_HARM_ARM_TASKS ->
                 LayerVerdict.DISABLE
+            low > -NEGLIGIBLE && high < NEGLIGIBLE && tokenDelta.measured && tokenDelta.low > 0.0 ->
+                LayerVerdict.COSTLY_NO_BENEFIT
             low > -NEGLIGIBLE && high < NEGLIGIBLE ->
                 LayerVerdict.NEGLIGIBLE
             else ->
@@ -387,8 +463,47 @@ object LayerGovernorPolicy {
             verdict = verdict,
             exposedUnresolved = unresolvedOn,
             withheldUnresolved = unresolvedOff,
-            attritionImbalance = attritionImbalance
+            attritionImbalance = attritionImbalance,
+            tokens = tokenDelta,
+            toolSteps = stepDelta,
+            durationMs = timeDelta
         )
+    }
+
+    /**
+     * Stratified difference of means (exposed - withheld) of a cost metric
+     * over trials where it was measured (> 0 in either arm counts as data).
+     */
+    private fun costDelta(
+        trials: List<GovernorTrial>,
+        exposedOf: (GovernorTrial) -> Boolean,
+        z: Double,
+        metric: (GovernorTrial) -> Double
+    ): CostDelta {
+        val measured = trials.filter { metric(it) > 0.0 }
+        var weightSum = 0.0
+        var weighted = 0.0
+        var variance = 0.0
+        measured.groupBy { it.family }.values.forEach { stratum ->
+            val on = stratum.filter(exposedOf).map(metric)
+            val off = stratum.filterNot(exposedOf).map(metric)
+            if (on.size < 2 || off.size < 2) return@forEach
+            val m1 = on.average()
+            val m0 = off.average()
+            val v1 = on.sumOf { (it - m1) * (it - m1) } / (on.size - 1)
+            val v0 = off.sumOf { (it - m0) * (it - m0) } / (off.size - 1)
+            val w = on.size.toDouble() * off.size / (on.size + off.size)
+            weightSum += w
+            weighted += w * (m1 - m0)
+            variance += w * w * (v1 / on.size + v0 / off.size)
+        }
+        val armsLargeEnough =
+            measured.count(exposedOf) >= MIN_ARM_TASKS &&
+                measured.count { !exposedOf(it) } >= MIN_ARM_TASKS
+        if (weightSum == 0.0 || !armsLargeEnough) return CostDelta()
+        val mean = weighted / weightSum
+        val se = sqrt(variance) / weightSum
+        return CostDelta(mean, mean - z * se, mean + z * se, measured = true)
     }
 
     /**
