@@ -105,8 +105,8 @@ import com.lumena.android.agent.core.FollowUpGoal
 import com.lumena.android.agent.core.ProjectContextResolver
 import com.lumena.android.agent.core.PreviousTaskOutcomeContext
 import com.lumena.android.agent.core.ShortTurnCue
-import com.lumena.android.agent.core.AdvisoryArm
-import com.lumena.android.agent.core.AdvisoryHoldout
+import com.lumena.android.agent.core.AdvisoryLayer
+import com.lumena.android.settings.LayerGovernorStore
 import com.lumena.android.agent.core.ResearchThreadResolver
 import com.lumena.android.agent.core.ResearchThreadState
 import com.lumena.android.agent.core.WorkThreadMemory
@@ -857,30 +857,57 @@ fun WorkflowChatScreen(
         } else {
             "ollama:" + selectedModel.ifBlank { "unknown" }
         }
+        // Layer Governor: every advisory layer with something to say gets an
+        // independent randomized arm per task. Hard rules are never governed.
+        fun governed(
+            task: TaskState,
+            layer: AdvisoryLayer,
+            lines: List<String>
+        ): List<String> {
+            if (lines.isEmpty()) return lines
+            val show = LayerGovernorStore.expose(
+                context = context,
+                task = task,
+                layer = layer,
+                modelId = constitutionContributorModelId
+            )
+            runCatching {
+                CognitiveInfluenceStore.recordArm(
+                    context = context,
+                    taskId = task.id,
+                    layer = layer.key,
+                    arm = if (show) "EXPOSED" else "WITHHELD"
+                )
+            }
+            return if (show) lines else emptyList()
+        }
         return WorkflowRunner(modelClient(), bridgeOrNull(), modelNameForRun(),
             relevantMemoryProvider = { task ->
                 val advice = try {
-                    ExperienceLandscapeStore.advice(context, session, task)
+                    governed(task, AdvisoryLayer.LANDSCAPE,
+                        ExperienceLandscapeStore.advice(context, session, task))
                 } catch (_: Exception) {
                     listOf(
                         "Learned advice unavailable; use current task state and fixed controller rules."
                     )
                 }
                 val verifiedMemory = try {
-                    ExperienceMemoryStore.relevant(context, task.goal)
+                    governed(task, AdvisoryLayer.MEMORY,
+                        ExperienceMemoryStore.relevant(context, task.goal))
                 } catch (_: Exception) {
                     listOf(
                         "Verified memory unavailable; do not infer prior execution success."
                     )
                 }
                 val coordinatorExamples = try {
-                    CoordinatorExperienceStore.relevant(
-                        context = context,
-                        query = task.goal,
-                        limit = 4,
-                        scopeId = task.projectId ?: "global",
-                        modelId = constitutionContributorModelId
-                    )
+                    governed(task, AdvisoryLayer.COORDINATOR,
+                        CoordinatorExperienceStore.relevant(
+                            context = context,
+                            query = task.goal,
+                            limit = 4,
+                            scopeId = task.projectId ?: "global",
+                            modelId = constitutionContributorModelId
+                        ))
                 } catch (_: Exception) {
                     listOf(
                         "Coordinator playbook unavailable; continue from current verified evidence only."
@@ -896,23 +923,8 @@ fun WorkflowChatScreen(
                         scopeId = task.projectId ?: "global",
                         limit = 4
                     )
-                    // Cross-model transfer is a hypothesis, not a fact: a
-                    // stable fraction of tasks runs without this layer so
-                    // that EXPOSED and WITHHELD outcomes can be compared.
-                    if (social.isEmpty()) {
-                        social
-                    } else {
-                        val arm = AdvisoryHoldout.arm(task.id, "fractal")
-                        runCatching {
-                            CognitiveInfluenceStore.recordArm(
-                                context = context,
-                                taskId = task.id,
-                                layer = "fractal",
-                                arm = arm.name
-                            )
-                        }
-                        if (arm == AdvisoryArm.WITHHELD) emptyList() else social
-                    }
+                    // Cross-model transfer is a hypothesis, not a fact.
+                    governed(task, AdvisoryLayer.FRACTAL, social)
                 } catch (_: Exception) {
                     listOf(
                         "Fractal experience canvas unavailable; continue from current verified evidence only."
@@ -946,11 +958,12 @@ fun WorkflowChatScreen(
                 }
             },
             evidenceProvider = { task ->
-                EvidenceGraphStore.relevant(
-                    context = context,
-                    query = task.goal,
-                    limit = 4
-                )
+                governed(task, AdvisoryLayer.EVIDENCE,
+                    EvidenceGraphStore.relevant(
+                        context = context,
+                        query = task.goal,
+                        limit = 4
+                    ))
             },
             constitutionProvider = { task ->
                 val exposed = ConstitutionGenomeStore.relevant(
@@ -984,11 +997,18 @@ fun WorkflowChatScreen(
                             generatedLearned && !exposedLearned
                     )
                 }
-                exposed
+                // Only learned advisory lines are governed; HARD DNA and
+                // user constraints are always kept.
+                val learnedLines = exposed.filter { it.startsWith("LEARNED CONSTITUTION") }
+                if (governed(task, AdvisoryLayer.CONSTITUTION, learnedLines).isEmpty() && learnedLines.isNotEmpty()) {
+                    exposed - learnedLines.toSet()
+                } else {
+                    exposed
+                }
             },
             reflexAdviceProvider = { event, candidates, task ->
                 var reflexRecorded = false
-                try {
+                val reflexAdvice: ReflexRuntimeAdvice? = try {
                     val query = buildString {
                         append(task.goal)
                         event.actionFamily
@@ -1148,6 +1168,14 @@ fun WorkflowChatScreen(
                         }
                     }
                     null
+                }
+                if (
+                    reflexAdvice != null &&
+                    governed(task, AdvisoryLayer.REFLEX, listOf(reflexAdvice.option.name)).isEmpty()
+                ) {
+                    null
+                } else {
+                    reflexAdvice
                 }
             },
             onReflexAdmitted = { _, _, advice ->
@@ -1410,6 +1438,11 @@ fun WorkflowChatScreen(
                             status = terminalStatus
                         )
                     }
+                    LayerGovernorStore.resolve(
+                        context = context,
+                        taskId = taskId,
+                        status = terminalStatus
+                    )
                 }
             }
         }

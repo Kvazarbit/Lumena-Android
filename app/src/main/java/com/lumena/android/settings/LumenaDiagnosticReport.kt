@@ -224,6 +224,7 @@ data class LumenaDiagnosticInput(
         DiagnosticLayaShadowView(),
     val cognitiveInfluence: DiagnosticCognitiveInfluenceView =
         DiagnosticCognitiveInfluenceView(),
+    val layerGovernor: List<String> = emptyList(),
     val cognitiveRegression: CognitiveRegressionReport? = null,
     val predictionDelta: DiagnosticPredictionDeltaView =
         DiagnosticPredictionDeltaView(),
@@ -602,6 +603,14 @@ object LumenaDiagnosticFormatter {
                             160
                         )
                 )
+            }
+            appendLine()
+
+            appendLine("[LAYER_GOVERNOR]")
+            if (input.layerGovernor.isEmpty()) {
+                appendLine("trials=0")
+            } else {
+                input.layerGovernor.forEach { appendLine(clean(it, 400)) }
             }
             appendLine()
 
@@ -1051,6 +1060,7 @@ object LumenaDiagnosticReport {
             layaProbe = layaProbe,
             layaShadow = layaShadow,
             cognitiveInfluence = cognitiveInfluence,
+            layerGovernor = LayerGovernorFormatter.lines(app),
             cognitiveRegression = runCatching {
                 val state = CoordinatorExperienceStore.load(app)
                 CognitiveRegressionSuite.replay(CognitiveRegressionSuite.corpus(state.learnedExamples))
@@ -1575,4 +1585,47 @@ object LumenaDiagnosticReport {
                         ?: "constitution genome failed"
             )
         }
+}
+
+/** Renders the Layer Governor table: one line per layer, then conflicts. */
+object LayerGovernorFormatter {
+    fun lines(context: android.content.Context): List<String> =
+        runCatching {
+            val report = LayerGovernorStore.latestReport(context)
+                ?: return@runCatching listOf(
+                    "trials=0 pending=" + LayerGovernorStore.pendingCount(context)
+                )
+            render(report, LayerGovernorStore.pendingCount(context))
+        }.getOrElse { listOf("error=" + (it.message ?: it::class.simpleName.orEmpty())) }
+
+    fun render(
+        report: com.lumena.android.agent.core.LayerGovernorReport,
+        pending: Int
+    ): List<String> = buildList {
+        add("model=" + report.modelId + " trials=" + report.trials + " pending=" + pending)
+        add("disabled=" + report.disabled.joinToString(",").ifBlank { "none" })
+        report.effects.forEach { e ->
+            add(
+                "layer=" + e.layer +
+                    " verdict=" + e.verdict.name +
+                    " delta=" + pct(e.delta) +
+                    " ci95=[" + pct(e.low) + "," + pct(e.high) + "]" +
+                    " exposed=" + e.exposedSuccess + "/" + e.exposedTasks +
+                    " withheld=" + e.withheldSuccess + "/" + e.withheldTasks +
+                    " eligible_share=" + pct(e.eligibleShare)
+            )
+        }
+        report.interactions.take(6).forEach { i ->
+            add(
+                "interaction=" + i.first + "x" + i.second +
+                    " estimate=" + pct(i.estimate) +
+                    " ci95=[" + pct(i.low) + "," + pct(i.high) + "]" +
+                    " tasks=" + i.tasks +
+                    (if (i.conflict) " CONFLICT" else "")
+            )
+        }
+    }
+
+    private fun pct(value: Double): String =
+        String.format(java.util.Locale.ROOT, "%+.1f%%", value * 100.0)
 }
