@@ -168,4 +168,69 @@ class LayerGovernorPolicyTest {
         // Independent 20% arms overlap in ~4% of tasks.
         assertTrue("overlap=$both", both in 0.02..0.06)
     }
+
+    @Test fun verdictsOnlyChangeAtCheckpoints() {
+        val base = simulate(1_250, listOf(AdvisoryLayer.FRACTAL), 0.4, mapOf(AdvisoryLayer.FRACTAL to 0.1))
+        val more = simulate(49, listOf(AdvisoryLayer.FRACTAL), 0.4, mapOf(AdvisoryLayer.FRACTAL to 0.1),
+            seed = 99, start = base, idPrefix = "extra")
+        val a = LayerGovernorPolicy.report(base, model)
+        val b = LayerGovernorPolicy.report(more, model)
+        assertEquals(1_200, a.checkpointTrials)
+        assertEquals(1_200, b.checkpointTrials)
+        assertEquals(a.effects, b.effects)
+    }
+
+    @Test fun nullLayersAreNotDisabledByRepeatedLooks() {
+        var falseDisables = 0
+        for (seed in 1L..20L) {
+            var state = LayerGovernorState()
+            for (chunk in 0 until 10) {
+                state = simulate(100, listOf(AdvisoryLayer.MEMORY, AdvisoryLayer.EVIDENCE), 0.5, emptyMap(),
+                    seed = seed * 1_000 + chunk, start = state, idPrefix = "s${seed}c${chunk}-")
+                state = LayerGovernorPolicy.applyVerdicts(state, model, chunk + 1L)
+            }
+            if (state.disabled.isNotEmpty()) falseDisables++
+        }
+        assertTrue("false disables in 20 null experiments: $falseDisables", falseDisables <= 1)
+    }
+
+    @Test fun abandonedAndStaleTasksBecomeUnresolvedNotLost() {
+        var state = LayerGovernorState()
+        state = LayerGovernorPolicy.begin(state, "cancelled", model, "GENERAL", GovernorExposure("fractal", false), 1)
+        state = LayerGovernorPolicy.abandon(state, "cancelled", 2)
+        assertEquals(LayerGovernorPolicy.UNRESOLVED, state.trials.single().status)
+        assertTrue(state.pending.isEmpty())
+
+        state = LayerGovernorPolicy.begin(state, "old", model, "GENERAL", GovernorExposure("fractal", true), 10)
+        val later = 10 + LayerGovernorPolicy.PENDING_MAX_AGE_MS + 1
+        state = LayerGovernorPolicy.begin(state, "new", model, "GENERAL", GovernorExposure("fractal", true), later)
+        assertEquals(2, state.trials.count { it.status == LayerGovernorPolicy.UNRESOLVED })
+        assertEquals(1, state.pending.size)
+
+        repeat(LayerGovernorPolicy.MAX_PENDING + 5) {
+            state = LayerGovernorPolicy.begin(state, "flood-$it", model, "GENERAL", GovernorExposure("memory", true), later + it)
+        }
+        assertEquals(LayerGovernorPolicy.MAX_PENDING, state.pending.size)
+        assertEquals(2 + 6, state.trials.count { it.status == LayerGovernorPolicy.UNRESOLVED })
+    }
+
+    @Test fun armThatLosesMoreTasksCannotGetAVerdict() {
+        // Withheld tasks succeed less, but 30% of exposed tasks were abandoned:
+        // the apparent benefit may just be that failures left the exposed arm.
+        fun trial(i: Int, exposed: Boolean, status: String) = GovernorTrial(
+            taskHash = "a$i", modelId = model, family = "CODE_WORK",
+            exposures = listOf(GovernorExposure("reflex", exposed)),
+            status = status, success = status == "DONE", at = i + 1L
+        )
+        val trials = mutableListOf<GovernorTrial>()
+        var i = 0
+        repeat(140) { trials += trial(i++, true, "DONE") }
+        repeat(60) { trials += trial(i++, true, LayerGovernorPolicy.UNRESOLVED) }
+        repeat(100) { trials += trial(i++, false, if (it < 50) "DONE" else "PARTIAL") }
+        val effect = LayerGovernorPolicy.effect(trials, "reflex")
+        assertTrue(effect.attritionImbalance)
+        assertEquals(60, effect.exposedUnresolved)
+        assertEquals(LayerVerdict.INSUFFICIENT_DATA, effect.verdict)
+        assertTrue("delta=${effect.delta}", effect.delta > 0.3)
+    }
 }

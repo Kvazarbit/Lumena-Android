@@ -1602,7 +1602,13 @@ object LayerGovernorFormatter {
         report: com.lumena.android.agent.core.LayerGovernorReport,
         pending: Int
     ): List<String> = buildList {
-        add("model=" + report.modelId + " trials=" + report.trials + " pending=" + pending)
+        add(
+            "model=" + report.modelId +
+                " trials=" + report.trials +
+                " checkpoint=" + report.checkpointTrials +
+                " pending=" + pending +
+                " ci=bonferroni-7 disable=two-consecutive-checkpoints"
+        )
         add("disabled=" + report.disabled.joinToString(",").ifBlank { "none" })
         report.effects.forEach { e ->
             add(
@@ -1612,7 +1618,9 @@ object LayerGovernorFormatter {
                     " ci95=[" + pct(e.low) + "," + pct(e.high) + "]" +
                     " exposed=" + e.exposedSuccess + "/" + e.exposedTasks +
                     " withheld=" + e.withheldSuccess + "/" + e.withheldTasks +
-                    " eligible_share=" + pct(e.eligibleShare)
+                    " eligible_share=" + pct(e.eligibleShare) +
+                    " unresolved=" + e.exposedUnresolved + "/" + e.withheldUnresolved +
+                    (if (e.attritionImbalance) " ATTRITION_IMBALANCE" else "")
             )
         }
         report.interactions.take(6).forEach { i ->

@@ -1542,6 +1542,13 @@ fun WorkflowChatScreen(
 
         input = ""
         val previous = currentTask
+        if (
+            previous != null &&
+            previous.status !in setOf(TaskStatus.DONE, TaskStatus.PARTIAL, TaskStatus.FAILED)
+        ) {
+            // Replaced before a terminal status: count it, do not lose it.
+            LayerGovernorStore.abandon(context, previous.id)
+        }
         previous?.let { completedOrInterrupted ->
             historicalFacts =
                 HistoricalSessionMemory.record(

@@ -92,6 +92,21 @@ object LayerGovernorStore {
         }
     }
 
+    /** A task replaced or cancelled before a terminal status. */
+    fun abandon(
+        context: Context,
+        taskId: String,
+        now: Long = System.currentTimeMillis()
+    ) {
+        runCatching {
+            synchronized(lock) {
+                val state = load(context)
+                val next = LayerGovernorPolicy.abandon(state, taskId, now)
+                if (next != state) save(context, next)
+            }
+        }
+    }
+
     /** Report for the model with the most recent finished task. */
     fun latestReport(context: Context): LayerGovernorReport? = synchronized(lock) {
         val state = load(context)
