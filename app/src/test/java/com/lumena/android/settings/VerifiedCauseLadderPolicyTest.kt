@@ -352,4 +352,34 @@ class VerifiedCauseLadderPolicyTest {
         )
         assertTrue(assessment.supportingEvidenceIds.isEmpty())
     }
+    @Test
+    fun nonFalsifiableProbesCannotVerifyEvenWhenIndependent() {
+        val hypothesis = CauseHypothesis(
+            id = "h-unfalsifiable",
+            causalLinkId = "link-1",
+            claimHash = "claim",
+            proposedByModelId = "gemma"
+        )
+        fun probe(id: String, target: String, falsifiable: Boolean) =
+            CauseProbeEvidence(
+                hypothesisId = hypothesis.id,
+                evidenceId = id,
+                tool = "file.read",
+                target = target,
+                verdict = CauseProbeVerdict.SUPPORTS,
+                falsifiable = falsifiable
+            )
+
+        val weak = VerifiedCauseLadderPolicy.assess(
+            hypothesis,
+            listOf(probe("e1", "path=a", false), probe("e2", "path=b", false))
+        )
+        assertEquals(CauseLadderStage.PROBED, weak.stage)
+
+        val strong = VerifiedCauseLadderPolicy.assess(
+            hypothesis,
+            listOf(probe("e1", "path=a", true), probe("e2", "path=b", true))
+        )
+        assertEquals(CauseLadderStage.VERIFIED, strong.stage)
+    }
 }

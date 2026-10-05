@@ -239,7 +239,13 @@ object VerifiedCauseLadderStore {
                                                 request
                                             ),
                                         verdict =
-                                            verdict
+                                            verdict,
+                                        falsifiable =
+                                            setOf(onSuccess, onFailure) ==
+                                                setOf(
+                                                    CauseProbeVerdict.SUPPORTS,
+                                                    CauseProbeVerdict.REJECTS
+                                                )
                                     ),
                                 taskHash =
                                     taskHash,

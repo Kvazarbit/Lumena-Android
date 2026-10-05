@@ -33,7 +33,14 @@ data class CauseProbeEvidence(
     val evidenceId: String,
     val tool: String,
     val target: String,
-    val verdict: CauseProbeVerdict
+    val verdict: CauseProbeVerdict,
+    /**
+     * True only when the probe was registered so that the opposite tool
+     * outcome would have REJECTED the hypothesis. A probe that "supports"
+     * on success and on failure (or never rejects) could not have refuted
+     * anything and therefore cannot count toward VERIFIED.
+     */
+    val falsifiable: Boolean = true
 )
 
 data class CauseAssessment(
@@ -47,7 +54,8 @@ data class CauseAssessment(
  *
  * A model-proposed explanation is only a HYPOTHESIS. It cannot become causal
  * evidence by repetition or confidence. Promotion requires real, registered
- * tool evidence. VERIFIED requires two independent supporting probe signatures.
+ * tool evidence. VERIFIED requires two independent supporting probe signatures,
+ * each from a falsifiable probe (registered so that the other outcome rejects).
  *
  * This object has no execution or permission API and stores only claim hashes,
  * never raw model prose.
@@ -197,7 +205,9 @@ object VerifiedCauseLadderPolicy {
             reject.isNotEmpty() ->
                 CauseLadderStage.REJECTED
 
-            independentSupportingSignatures(support) >= 2 ->
+            independentSupportingSignatures(
+                support.filter { it.falsifiable }
+            ) >= 2 ->
                 CauseLadderStage.VERIFIED
 
             support.isNotEmpty() ->
