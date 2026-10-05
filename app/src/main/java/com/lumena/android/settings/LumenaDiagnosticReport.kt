@@ -121,7 +121,10 @@ data class DiagnosticCognitiveInfluenceView(
     val reflex: DiagnosticInfluenceLayerView = DiagnosticInfluenceLayerView(),
     val tinyJev: DiagnosticInfluenceLayerView = DiagnosticInfluenceLayerView(),
     val laya: DiagnosticInfluenceLayerView = DiagnosticInfluenceLayerView(),
-    val pendingReflex: Int = 0
+    val pendingReflex: Int = 0,
+    val pendingArms: Int = 0,
+    val armOutcomes: Map<String, AdvisoryArmOutcome> = emptyMap(),
+    val previousEpochs: List<String> = emptyList()
 )
 
 data class DiagnosticLayaShadowView(
@@ -632,6 +635,20 @@ object LumenaDiagnosticFormatter {
                 appendInfluence("reflex", influence.reflex)
                 appendInfluence("tinyjev", influence.tinyJev)
                 appendInfluence("laya", influence.laya)
+                appendLine("pending_arms=" + influence.pendingArms)
+                influence.armOutcomes.toSortedMap().forEach { (key, o) ->
+                    appendLine(
+                        "experiment " + clean(key, 80) +
+                            " tasks=" + o.tasks +
+                            " done=" + o.done +
+                            " partial=" + o.partial +
+                            " failed=" + o.failed +
+                            " unresolved=" + o.unresolved
+                    )
+                }
+                influence.previousEpochs.forEach {
+                    appendLine("previous_epoch " + clean(it, 400))
+                }
             }
             appendLine()
 
@@ -1220,7 +1237,20 @@ object LumenaDiagnosticReport {
                 reflex = view(state.reflex),
                 tinyJev = view(state.tinyJev),
                 laya = view(state.laya),
-                pendingReflex = state.pendingReflex.size
+                pendingReflex = state.pendingReflex.size,
+                pendingArms = state.pendingArms.size,
+                armOutcomes = state.armOutcomes,
+                previousEpochs = state.previousEpochs.map { e ->
+                    "epoch=" + e.epoch +
+                        " version_code=" + e.versionCode +
+                        " since=" + e.since +
+                        " until=" + e.until +
+                        " reflex_exposed=" + e.reflex.exposed +
+                        " constitution_would_expose=" + e.constitution.wouldExpose +
+                        " arms=" + e.armOutcomes.entries.joinToString(",") {
+                            it.key + ":" + it.value.tasks + "/" + it.value.done
+                        }
+                }
             )
         }.getOrElse { failure ->
             DiagnosticCognitiveInfluenceView(

@@ -104,6 +104,9 @@ import com.lumena.android.agent.core.CodeTaskAnchor
 import com.lumena.android.agent.core.FollowUpGoal
 import com.lumena.android.agent.core.ProjectContextResolver
 import com.lumena.android.agent.core.PreviousTaskOutcomeContext
+import com.lumena.android.agent.core.ShortTurnCue
+import com.lumena.android.agent.core.AdvisoryArm
+import com.lumena.android.agent.core.AdvisoryHoldout
 import com.lumena.android.agent.core.ResearchThreadResolver
 import com.lumena.android.agent.core.ResearchThreadState
 import com.lumena.android.agent.core.WorkThreadMemory
@@ -887,12 +890,29 @@ fun WorkflowChatScreen(
                     // Social memory intentionally aggregates verified
                     // contributor models inside the same project scope.
                     // It is advisory only and grants no tool authority.
-                    FractalExperienceCanvasStore.relevant(
+                    val social = FractalExperienceCanvasStore.relevant(
                         context = context,
                         query = task.goal,
                         scopeId = task.projectId ?: "global",
                         limit = 4
                     )
+                    // Cross-model transfer is a hypothesis, not a fact: a
+                    // stable fraction of tasks runs without this layer so
+                    // that EXPOSED and WITHHELD outcomes can be compared.
+                    if (social.isEmpty()) {
+                        social
+                    } else {
+                        val arm = AdvisoryHoldout.arm(task.id, "fractal")
+                        runCatching {
+                            CognitiveInfluenceStore.recordArm(
+                                context = context,
+                                taskId = task.id,
+                                layer = "fractal",
+                                arm = arm.name
+                            )
+                        }
+                        if (arm == AdvisoryArm.WITHHELD) emptyList() else social
+                    }
                 } catch (_: Exception) {
                     listOf(
                         "Fractal experience canvas unavailable; continue from current verified evidence only."
@@ -1375,6 +1395,24 @@ fun WorkflowChatScreen(
 
     fun applyOutcome(taskId: String, runToken: Long, outcome: WorkflowOutcome) {
         if (!coordinator.isCurrent(runToken, taskId) || !isCurrentTask(taskId)) return
+        val terminalStatus = when (outcome) {
+            is WorkflowOutcome.Finished -> outcome.control.task.status.name
+            is WorkflowOutcome.Failed -> "FAILED"
+            is WorkflowOutcome.NeedsConfirmation -> null
+        }
+        if (terminalStatus != null) {
+            uiScope.launch {
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        CognitiveInfluenceStore.resolveTaskOutcome(
+                            context = context,
+                            taskId = taskId,
+                            status = terminalStatus
+                        )
+                    }
+                }
+            }
+        }
         when (outcome) {
             is WorkflowOutcome.Finished -> {
                 val finishedTask = outcome.control.task
@@ -1484,14 +1522,23 @@ fun WorkflowChatScreen(
                         currentBranchId()
                 )
         }
+        // A bare "?"/"що?" asks about the existing work. It must not become a
+        // new goal, a web query, or overwrite the active work/code anchors.
+        val explainPrevious =
+            previous != null &&
+                ShortTurnCue.isExplain(text)
+        val goalInput =
+            if (explainPrevious) ShortTurnCue.EXPLAIN_GOAL else text
         val workResolution =
             WorkThreadMemory.resolve(
-                text = text,
+                text = goalInput,
                 state = workThreads,
                 previousProjectId =
                     previous?.projectId
             )
-        workThreads = workResolution.state
+        if (!explainPrevious) {
+            workThreads = workResolution.state
+        }
         val codeResolution = CodeTaskAnchor.resolve(
             workResolution.goal,
             codeGoal,
@@ -1499,7 +1546,9 @@ fun WorkflowChatScreen(
                 it.role == "assistant"
             }?.text
         )
-        codeGoal = codeResolution.anchor
+        if (!explainPrevious) {
+            codeGoal = codeResolution.anchor
+        }
         val resolution =
             if (workResolution.continued) {
                 com.lumena.android.agent.core.ResearchThreadResolution(
@@ -1624,9 +1673,21 @@ fun WorkflowChatScreen(
             ?.takeIf { it.isNotBlank() }
             ?.let { listOf(OllamaMessage("user", it)) }
             .orEmpty()
+        val explainContext =
+            if (explainPrevious && previous != null) {
+                listOf(
+                    OllamaMessage(
+                        "user",
+                        PreviousTaskOutcomeContext.snapshot(previous)
+                    )
+                )
+            } else {
+                emptyList()
+            }
         val turnHistory =
             epochHistory +
                 previousContext +
+                explainContext +
                 workContext +
                 researchContext +
                 OllamaMessage(

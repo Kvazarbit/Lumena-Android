@@ -44,7 +44,37 @@ data class CognitiveInfluenceState(
     val reflex: CognitiveInfluenceCounters = CognitiveInfluenceCounters(),
     val tinyJev: CognitiveInfluenceCounters = CognitiveInfluenceCounters(),
     val laya: CognitiveInfluenceCounters = CognitiveInfluenceCounters(),
-    val pendingReflex: List<PendingReflexInfluence> = emptyList()
+    val pendingReflex: List<PendingReflexInfluence> = emptyList(),
+    val pendingArms: List<PendingAdvisoryArm> = emptyList(),
+    val armOutcomes: Map<String, AdvisoryArmOutcome> = emptyMap(),
+    val previousEpochs: List<CognitiveInfluenceEpochSummary> = emptyList()
+)
+/** Task-level ON/OFF assignment waiting for the task's terminal status. */
+data class PendingAdvisoryArm(
+    val taskHash: String,
+    val layer: String,
+    val arm: String,
+    val assignedAt: Long
+)
+/** Terminal task outcomes per (layer, arm). Comparable only between arms. */
+data class AdvisoryArmOutcome(
+    val tasks: Long = 0,
+    val done: Long = 0,
+    val partial: Long = 0,
+    val failed: Long = 0,
+    val unresolved: Long = 0
+)
+/** Closed epoch kept so an APK update does not erase collected evidence. */
+data class CognitiveInfluenceEpochSummary(
+    val epoch: String,
+    val since: Long,
+    val until: Long,
+    val versionCode: Long,
+    val constitution: CognitiveInfluenceCounters = CognitiveInfluenceCounters(),
+    val reflex: CognitiveInfluenceCounters = CognitiveInfluenceCounters(),
+    val tinyJev: CognitiveInfluenceCounters = CognitiveInfluenceCounters(),
+    val laya: CognitiveInfluenceCounters = CognitiveInfluenceCounters(),
+    val armOutcomes: Map<String, AdvisoryArmOutcome> = emptyMap()
 )
 /**
  * Pure observational reducer. Nothing here can authorize, rank, gate or execute.
@@ -52,6 +82,87 @@ data class CognitiveInfluenceState(
  */
 object CognitiveInfluencePolicy {
     const val MAX_PENDING = 32
+    const val MAX_PENDING_ARMS = 64
+    const val MAX_PREVIOUS_EPOCHS = 6
+
+    fun armKey(layer: String, arm: String): String = "$layer:$arm"
+
+    /**
+     * Records one assignment per (task, layer). Called only when the layer
+     * actually had advice to show, so both arms are eligible decisions.
+     */
+    fun recordArm(
+        state: CognitiveInfluenceState,
+        taskId: String,
+        layer: String,
+        arm: String,
+        now: Long
+    ): CognitiveInfluenceState {
+        val hash = taskHash(taskId)
+        if (state.pendingArms.any { it.taskHash == hash && it.layer == layer }) return state
+        val pending = state.pendingArms + PendingAdvisoryArm(hash, layer, arm, now)
+        val overflow = pending.size - MAX_PENDING_ARMS
+        var outcomes = state.armOutcomes
+        pending.take(overflow.coerceAtLeast(0)).forEach { dropped ->
+            val key = armKey(dropped.layer, dropped.arm)
+            val current = outcomes[key] ?: AdvisoryArmOutcome()
+            outcomes = outcomes + (key to current.copy(unresolved = current.unresolved + 1))
+        }
+        return state.copy(
+            pendingArms = pending.takeLast(MAX_PENDING_ARMS),
+            armOutcomes = outcomes
+        )
+    }
+
+    /** Attributes the terminal task status to every arm assigned to it. */
+    fun resolveTaskOutcome(
+        state: CognitiveInfluenceState,
+        taskId: String,
+        status: String
+    ): CognitiveInfluenceState {
+        val hash = taskHash(taskId)
+        val assigned = state.pendingArms.filter { it.taskHash == hash }
+        if (assigned.isEmpty()) return state
+        var outcomes = state.armOutcomes
+        assigned.forEach { pending ->
+            val key = armKey(pending.layer, pending.arm)
+            val c = outcomes[key] ?: AdvisoryArmOutcome()
+            outcomes = outcomes + (key to c.copy(
+                tasks = c.tasks + 1,
+                done = c.done + if (status == "DONE") 1 else 0,
+                partial = c.partial + if (status == "PARTIAL") 1 else 0,
+                failed = c.failed + if (status == "FAILED") 1 else 0,
+                unresolved = c.unresolved + if (status !in setOf("DONE", "PARTIAL", "FAILED")) 1 else 0
+            ))
+        }
+        return state.copy(
+            pendingArms = state.pendingArms.filterNot { it.taskHash == hash },
+            armOutcomes = outcomes
+        )
+    }
+
+    /** Opens a new epoch while keeping a bounded summary of the closed one. */
+    fun rollEpoch(
+        previous: CognitiveInfluenceState,
+        fresh: CognitiveInfluenceState,
+        now: Long
+    ): CognitiveInfluenceState {
+        if (previous.epoch.isBlank() || previous.since <= 0) return fresh
+        val summary = CognitiveInfluenceEpochSummary(
+            epoch = previous.epoch,
+            since = previous.since,
+            until = now,
+            versionCode = previous.versionCode,
+            constitution = previous.constitution,
+            reflex = previous.reflex,
+            tinyJev = previous.tinyJev,
+            laya = previous.laya,
+            armOutcomes = previous.armOutcomes
+        )
+        return fresh.copy(
+            previousEpochs = (previous.previousEpochs + summary).takeLast(MAX_PREVIOUS_EPOCHS)
+        )
+    }
     fun recordLayer(
         state: CognitiveInfluenceState,
         layer: CognitiveInfluenceLayer,
@@ -225,9 +336,13 @@ object CognitiveInfluenceStore {
             "Cognitive influence telemetry is empty/corrupt; refusing to replace history."
         }
         if (state.versionCode != versionCode || state.epoch.isBlank() || state.since <= 0) {
-            val fresh = fresh(versionCode)
-            save(context, fresh)
-            fresh
+            val rolled = CognitiveInfluencePolicy.rollEpoch(
+                previous = state,
+                fresh = fresh(versionCode),
+                now = System.currentTimeMillis().coerceAtLeast(1L)
+            )
+            save(context, rolled)
+            rolled
         } else {
             state
         }
@@ -311,6 +426,22 @@ object CognitiveInfluenceStore {
         taskId: String
     ) = mutate(context) { state ->
         CognitiveInfluencePolicy.resolvePartial(state, taskId)
+    }
+    fun recordArm(
+        context: Context,
+        taskId: String,
+        layer: String,
+        arm: String,
+        now: Long = System.currentTimeMillis()
+    ) = mutate(context) { state ->
+        CognitiveInfluencePolicy.recordArm(state, taskId, layer, arm, now)
+    }
+    fun resolveTaskOutcome(
+        context: Context,
+        taskId: String,
+        status: String
+    ) = mutate(context) { state ->
+        CognitiveInfluencePolicy.resolveTaskOutcome(state, taskId, status)
     }
     private fun mutate(
         context: Context,
