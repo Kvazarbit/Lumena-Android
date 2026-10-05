@@ -111,6 +111,20 @@ object PreviousTaskOutcomeContext {
             message = message
         )
 
+    /**
+     * Current recorded state of the previous task, for any status. Used to
+     * answer bare "?"/"що?" turns from evidence instead of starting new work.
+     */
+    fun snapshot(task: TaskState): String =
+        terminal(
+            task = task,
+            status = task.status.name,
+            detailKey = "tool_steps",
+            message = task.kernel.observed.toString() +
+                " recorded tool result(s); errors=" +
+                task.errors.takeLast(2).joinToString(" | ").ifBlank { "none" }
+        )
+
     private fun terminal(
         task: TaskState,
         status: String,

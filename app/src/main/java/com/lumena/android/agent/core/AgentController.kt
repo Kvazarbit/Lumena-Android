@@ -905,6 +905,31 @@ class AgentController(
             )
         }
 
+        // NO EVIDENCE -> NO COMPLETE. A bare completion claim with zero
+        // executed tools is never shown as "Task complete.", and an explicit
+        // execution directive ("реалізуй", "do it") cannot finish without work.
+        if (!state.toolUsed) {
+            val instruction = state.task.currentInstruction
+                .ifBlank { state.task.goal }
+            if (ShortTurnCue.isExecutionDirective(instruction)) {
+                return protocolRetry(
+                    state,
+                    "NO_EXECUTION_EVIDENCE: the user asked to execute work, but no tool was run. " +
+                        "Execute the active task with a registered tool, or reply honestly " +
+                        "what is missing (for example, which plan or file to implement). " +
+                        "Do not claim completion."
+                )
+            }
+            if (ShortTurnCue.isEmptyCompletionClaim(decision.summary)) {
+                return protocolRetry(
+                    state,
+                    "NO_EXECUTION_EVIDENCE: no tool was executed and the completion summary is empty. " +
+                        "If you are answering, return {\"reply\":\"...\"} with the actual answer; " +
+                        "if work is required, call a tool. Do not claim completion."
+                )
+            }
+        }
+
         val incompleteGoalCriteria =
             GoalContractPolicy.incompleteMandatory(
                 state.task.goalContract
