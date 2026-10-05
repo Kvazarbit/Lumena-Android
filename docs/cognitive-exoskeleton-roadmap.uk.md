@@ -135,6 +135,9 @@ Coordinator уже сформував з нього `RECOVERY EXAMPLE`.
 - **Layer Governor** — див. [LAYER_GOVERNOR_V1.uk.md](LAYER_GOVERNOR_V1.uk.md): факторний
   ON/OFF для 7 дорадчих шарів, вердикти KEEP/DISABLE/NEGLIGIBLE/NOT_TRIGGERED/INSUFFICIENT_DATA,
   контрольні точки, Бонферроні, облік незавершених задач.
+- **C5/C6/C7 (CI #1965):** TinyJev калібрується і на провалах; автоприв'язка вебджерела —
+  лише асоціація без `VERIFIED_BY_TEST`; неспростовний ген верифікації не стає LEARNED.
+- Відкрито: C2–C4 у Genome; офлайн парний A/B (S09); Snake порівнює прогноз сам із собою.
 
 ## 4. Цільова модель досвіду
 
