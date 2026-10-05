@@ -631,7 +631,12 @@ object ConstitutionGenomePolicy {
                 ) &&
                 evidenceReady &&
                 contextReady &&
-                pairedReady
+                pairedReady &&
+                // C7: "verify before success" is created only after the gate
+                // already passed and has no rejecting path, so its evidence
+                // cannot refute it. It restates Core DNA V (enforced in code)
+                // and is tracked as evidence only, never as learned advice.
+                !requiresPairedProjectProof
 
         val evidenceProgress =
             progress(

@@ -51,6 +51,7 @@ object ConstitutionContributionPolicy {
                 ?: return null
 
         if (
+            binding.association ||
             binding.status != EvidenceApplicationStatus.VERIFIED ||
             binding.projectId != projectId ||
             binding.artifactEvidenceIds.isEmpty() ||

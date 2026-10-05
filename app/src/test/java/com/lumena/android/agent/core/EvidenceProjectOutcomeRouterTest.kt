@@ -398,10 +398,41 @@ class EvidenceProjectOutcomeRouterTest {
             EvidenceApplicationStatus.VERIFIED,
             verified.state.applications.single().status
         )
+        assertTrue(verified.state.applications.single().association)
+        // C6: a lexical auto-binding is an association. Passing project tests
+        // next to a source does not verify the source itself.
         assertEquals(
-            EvidenceProjectOutcome.VERIFIED_BY_TEST,
+            EvidenceProjectOutcome.UNKNOWN,
             verified.state.claims.single().outcome
         )
+    }
+
+    @Test
+    fun syntaxCheckOfUnrelatedContentDoesNotVerifyTheWebSource() {
+        val retrieved = EvidenceGraphReducer.record(EvidenceGraphState(), EvidenceObservation(
+            claimKey = "pathlib-mkdir-parents",
+            statement = "Path.mkdir with parents true creates missing parent directories.",
+            relation = EvidenceRelation.SUPPORTS, sourceUri = "https://docs.python.org/pathlib",
+            sourceKind = EvidenceSourceKind.WEB_PAGE, retrievalMethod = "web.read",
+            evidenceId = "web-read-ok", observedAt = now, projectId = "demo_project",
+            projectRelevance = 0.95)).state
+        val write = ToolRequest("file.write", mapOf("path" to "demo_project/unrelated.py", "content" to "x = 1"))
+        val auto = EvidenceAutomaticProjectBindingPolicy.bindForSuccessfulMutation(
+            state = retrieved, projectId = "demo_project",
+            taskGoal = "Path.mkdir parents true project evidence",
+            request = write, result = ToolResult(ok = true, tool = "file.write"), now = now + 1)
+        val bindingId = auto.bindingIds.single()
+        val applied = EvidenceProjectApplicationPolicy.observeToolResult(
+            state = auto.state, bindingId = bindingId, taskProjectId = "demo_project",
+            request = write, result = ToolResult(ok = true, tool = "file.write"),
+            evidenceId = "write-ok", now = now + 2)
+        val checked = EvidenceProjectApplicationPolicy.observeToolResult(
+            state = applied.state, bindingId = bindingId, taskProjectId = "demo_project",
+            request = ToolRequest("python.syntax_check", mapOf("script" to "demo_project/unrelated.py")),
+            result = ToolResult(ok = true, tool = "python.syntax_check"),
+            evidenceId = "syntax-ok", now = now + 3)
+        assertTrue(checked.accepted)
+        assertEquals(EvidenceProjectOutcome.UNKNOWN, checked.state.claims.single().outcome)
     }
 
     @Test

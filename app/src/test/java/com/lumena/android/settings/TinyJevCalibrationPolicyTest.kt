@@ -294,4 +294,46 @@ class TinyJevCalibrationPolicyTest {
         assertEquals(0, metrics.samples)
         assertNull(metrics.selectiveAccuracy)
     }
+
+    private fun failedRecovery(id: String, tools: List<String>, updatedAt: Long) =
+        recovery(id, tools, updatedAt).copy(kind = CoordinatorExampleKind.FAILED_RECOVERY)
+
+    @Test
+    fun followedAdviceThatFailedBecomesANegativeSample() {
+        val predicted = TinyJevCalibrationPolicy.recordPrediction(
+            state = TinyJevCalibrationState(), taskKey = "task-key", family = "web.read",
+            attempt = 1, decision = decision(0.9, 0.1), selectedOption = ReflexOption.RETRY_VARIANT,
+            decisionLatencyMs = 1, now = 100
+        )
+        val resolved = TinyJevCalibrationPolicy.resolveVerified(
+            state = predicted, taskKey = "task-key",
+            examples = listOf(failedRecovery("f1", listOf("web.read", "web.read"), 150)),
+            now = 160
+        )
+        assertTrue(resolved.pending.isEmpty())
+        val sample = resolved.resolved.single()
+        assertFalse(sample.correct)
+        assertEquals(TinyJevCalibrationPolicy.SELECTED_FAILED, sample.expectedOption)
+
+        val metrics = TinyJevCalibrationPolicy.metrics(resolved)
+        assertEquals(0.0, metrics.accuracy, 1e-9)
+        // Only the confidence on the failed choice is penalized: 0.9^2.
+        assertEquals(0.81, metrics.brierScore, 1e-9)
+    }
+
+    @Test
+    fun failureOfADifferentOptionClosesPredictionWithoutLabel() {
+        val predicted = TinyJevCalibrationPolicy.recordPrediction(
+            state = TinyJevCalibrationState(), taskKey = "task-key", family = "web.read",
+            attempt = 1, decision = decision(0.9, 0.1), selectedOption = ReflexOption.RETRY_VARIANT,
+            decisionLatencyMs = 1, now = 100
+        )
+        val resolved = TinyJevCalibrationPolicy.resolveVerified(
+            state = predicted, taskKey = "task-key",
+            examples = listOf(failedRecovery("f2", listOf("web.read", "web.search", "web.read"), 150)),
+            now = 160
+        )
+        assertTrue(resolved.pending.isEmpty())
+        assertTrue(resolved.resolved.isEmpty())
+    }
 }

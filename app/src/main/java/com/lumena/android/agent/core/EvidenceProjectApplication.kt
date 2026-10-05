@@ -40,7 +40,8 @@ object EvidenceProjectApplicationPolicy {
         target: String,
         now: Long,
         staleAfterMs: Long =
-            EvidenceGraphReducer.DEFAULT_STALE_AFTER_MS
+            EvidenceGraphReducer.DEFAULT_STALE_AFTER_MS,
+        association: Boolean = false
     ): EvidenceApplicationUpdate {
         if (
             claimKey.isBlank() ||
@@ -124,7 +125,8 @@ object EvidenceProjectApplicationPolicy {
             target = normalizedTarget.take(800),
             status = EvidenceApplicationStatus.PENDING,
             createdAt = now,
-            updatedAt = now
+            updatedAt = now,
+            association = association
         )
 
         return EvidenceApplicationUpdate(
@@ -285,6 +287,7 @@ object EvidenceProjectApplicationPolicy {
         // new artifact must advance that binding without regressing the
         // aggregate claim back to APPLIED_TO_PROJECT.
         val aggregateState = when {
+            binding.association -> state
             outcome.accepted -> outcome.state
             outcome.reason == "OUTCOME_REGRESSION" &&
                 state.claims.firstOrNull {
@@ -399,7 +402,7 @@ object EvidenceProjectApplicationPolicy {
                 at = now
             )
         )
-        if (!outcome.accepted) {
+        if (!binding.association && !outcome.accepted) {
             return EvidenceApplicationUpdate(
                 state = state,
                 accepted = false,
@@ -407,6 +410,9 @@ object EvidenceProjectApplicationPolicy {
                 bindingId = binding.id
             )
         }
+        // An association records that a check passed next to the source,
+        // but the source's own project outcome is left untouched.
+        val outcomeState = if (binding.association) state else outcome.state
 
         val updated = binding.copy(
             status = EvidenceApplicationStatus.VERIFIED,
@@ -419,9 +425,9 @@ object EvidenceProjectApplicationPolicy {
         )
 
         return EvidenceApplicationUpdate(
-            state = outcome.state.copy(
+            state = outcomeState.copy(
                 applications = replaceBinding(
-                    outcome.state.applications,
+                    outcomeState.applications,
                     updated
                 )
             ),
@@ -626,7 +632,8 @@ object EvidenceAutomaticProjectBindingPolicy {
                     claimKey = claim.claimKey,
                     projectId = safeProject,
                     target = target,
-                    now = now
+                    now = now,
+                    association = true
                 )
             if (update.accepted) {
                 next = update.state

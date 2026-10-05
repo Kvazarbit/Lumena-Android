@@ -718,19 +718,21 @@ class ConstitutionContributionPolicyTest {
         rule = state.rules.single()
         calibration =
             ConstitutionGenomePolicy.calibration(rule)
+        // C7: the gene is confirmed only by passing its own gate, so it stays
+        // evidence-only even with full paired proof; Core DNA V enforces it.
         assertEquals(
-            ConstitutionRuleStatus.LEARNED,
+            ConstitutionRuleStatus.CANDIDATE,
             rule.status
         )
         assertEquals(
-            ConstitutionGeneStage.ACTIVE,
+            ConstitutionGeneStage.SHADOW,
             calibration.stage
         )
         assertEquals(4, calibration.verifiedEvidenceCount)
         assertEquals(2, calibration.distinctContextCount)
         assertEquals(2, calibration.pairedProjectContextCount)
         assertEquals(100, calibration.activationProgressPercent)
-        assertTrue(calibration.activeEligible)
+        assertFalse(calibration.activeEligible)
     }
 
     @Test

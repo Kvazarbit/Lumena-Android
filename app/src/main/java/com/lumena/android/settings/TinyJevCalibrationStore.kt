@@ -64,7 +64,10 @@ data class TinyJevCalibrationSample(
         require(modelVersion.isNotBlank())
         require(selectedOption.isNotBlank())
         require(expectedOption.isNotBlank())
-        require(expectedOption in probabilities)
+        require(
+            expectedOption in probabilities ||
+                (expectedOption == TinyJevCalibrationPolicy.SELECTED_FAILED && !correct)
+        )
         require(probabilities.values.all { it in 0.0..1.0 })
         require(rawConfidence in 0.0..1.0)
         require(decisionLatencyMs >= 0)
@@ -120,6 +123,13 @@ object TinyJevCalibrationPolicy {
     const val DEFAULT_MIN_SAMPLES = 12
     const val DEFAULT_MIN_BIN_SAMPLES = 3
     const val DEFAULT_SELECTIVE_THRESHOLD = 0.75
+
+    /**
+     * Label for a prediction whose selected option was actually followed and
+     * failed. The correct option is unknown, so no other option is credited;
+     * only the probability mass on the failed choice is penalized.
+     */
+    const val SELECTED_FAILED = "SELECTED_FAILED"
 
     fun recordPrediction(
         state: TinyJevCalibrationState,
@@ -185,9 +195,14 @@ object TinyJevCalibrationPolicy {
         require(taskKey.isNotBlank())
         require(now > 0)
 
+        // Failed recoveries are labels too. Learning only from successful
+        // recoveries measured agreement among survivors, not decision quality.
         val verifiedRecoveries = examples
             .asSequence()
-            .filter { it.kind == CoordinatorExampleKind.RECOVERY }
+            .filter {
+                it.kind == CoordinatorExampleKind.RECOVERY ||
+                    it.kind == CoordinatorExampleKind.FAILED_RECOVERY
+            }
             .filter { it.evidenceIds.isNotEmpty() }
             .filter { it.tools.isNotEmpty() }
             .toList()
@@ -215,8 +230,16 @@ object TinyJevCalibrationPolicy {
                     .minByOrNull { it.updatedAt }
                     ?: return@forEach
 
-                val expected = expectedOption(match).name
-                if (expected !in prediction.probabilities) {
+                val observed = expectedOption(match).name
+                val failed = match.kind == CoordinatorExampleKind.FAILED_RECOVERY
+                if (failed && observed != prediction.selectedOption) {
+                    // A different option was tried and failed: this says
+                    // nothing about the advised option. Close without a label.
+                    resolvedPredictionIds += prediction.id
+                    return@forEach
+                }
+                val expected = if (failed) SELECTED_FAILED else observed
+                if (!failed && expected !in prediction.probabilities) {
                     return@forEach
                 }
 
@@ -238,7 +261,7 @@ object TinyJevCalibrationPolicy {
                     expectedOption = expected,
                     probabilities = prediction.probabilities,
                     rawConfidence = prediction.rawConfidence,
-                    correct = prediction.selectedOption == expected,
+                    correct = !failed && prediction.selectedOption == expected,
                     decisionLatencyMs = prediction.decisionLatencyMs,
                     verifiedEvidenceIds = match.evidenceIds
                         .distinct()
@@ -400,6 +423,10 @@ object TinyJevCalibrationPolicy {
     private fun multiclassBrier(
         sample: TinyJevCalibrationSample
     ): Double {
+        if (sample.expectedOption == SELECTED_FAILED) {
+            val p = sample.probabilities[sample.selectedOption] ?: return 1.0
+            return (p * p).coerceIn(0.0, 1.0)
+        }
         val k = sample.probabilities.size.coerceAtLeast(1)
         val sum = sample.probabilities.entries.sumOf { (option, probability) ->
             val y = if (option == sample.expectedOption) 1.0 else 0.0

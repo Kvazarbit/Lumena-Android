@@ -143,7 +143,14 @@ data class EvidenceApplicationBinding(
     val createdAt: Long,
     val updatedAt: Long,
     val artifactEvidenceIds: List<String> = emptyList(),
-    val testEvidenceIds: List<String> = emptyList()
+    val testEvidenceIds: List<String> = emptyList(),
+    /**
+     * True when the binding was inferred from lexical similarity between the
+     * task goal and the source, not from the action actually citing it. An
+     * association never raises the source's project outcome: compiling or
+     * testing a file does not verify a web page it may not have used.
+     */
+    val association: Boolean = false
 ) {
     init {
         require(id.isNotBlank())
