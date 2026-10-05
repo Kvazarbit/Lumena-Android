@@ -6,11 +6,23 @@ enum class ToolRisk {
     EXECUTABLE
 }
 
+/**
+ * Workspace-content side effects are separate from authority/risk and from the
+ * cognitive role of an action. This axis is used only to reason about whether
+ * a previously verified target may have changed.
+ */
+enum class WorkspaceMutationEffect {
+    NONE,
+    DECLARED_TARGET,
+    UNDECLARED
+}
+
 data class ToolSpec(
     val name: String,
     val risk: ToolRisk,
     val requiredArgs: Set<String> = emptySet(),
-    val description: String
+    val description: String,
+    val workspaceMutationEffect: WorkspaceMutationEffect = WorkspaceMutationEffect.NONE
 )
 
 data class ToolValidation(
@@ -42,16 +54,16 @@ object ToolRegistry {
         ToolSpec("git.log", ToolRisk.READ_ONLY, setOf("cwd"), "Inspect recent Git commits; cwd may be @Lumena-Android."),
         ToolSpec("ollama.status", ToolRisk.READ_ONLY, description = "Inspect Ollama server state, installed models, and currently loaded models."),
 
-        ToolSpec("project.create", ToolRisk.MUTATING, setOf("name"), "Create a workspace project."),
-        ToolSpec("dir.create", ToolRisk.MUTATING, setOf("path"), "Create a directory inside the workspace."),
-        ToolSpec("file.write", ToolRisk.MUTATING, setOf("path", "content"), "Write a text file inside the workspace."),
-        ToolSpec("file.patch", ToolRisk.MUTATING, setOf("path", "old", "new"), "Replace exactly one known text fragment."),
+        ToolSpec("project.create", ToolRisk.MUTATING, setOf("name"), "Create a workspace project.", WorkspaceMutationEffect.DECLARED_TARGET),
+        ToolSpec("dir.create", ToolRisk.MUTATING, setOf("path"), "Create a directory inside the workspace.", WorkspaceMutationEffect.DECLARED_TARGET),
+        ToolSpec("file.write", ToolRisk.MUTATING, setOf("path", "content"), "Write a text file inside the workspace.", WorkspaceMutationEffect.DECLARED_TARGET),
+        ToolSpec("file.patch", ToolRisk.MUTATING, setOf("path", "old", "new"), "Replace exactly one known text fragment.", WorkspaceMutationEffect.DECLARED_TARGET),
         ToolSpec("git.add", ToolRisk.MUTATING, setOf("cwd", "paths"), "Stage workspace files."),
         ToolSpec("git.commit", ToolRisk.MUTATING, setOf("cwd", "message"), "Commit staged changes."),
 
-        ToolSpec("python.run", ToolRisk.EXECUTABLE, setOf("script"), "Run an existing .py file inside the workspace. The script arg is a file path only, never Python source code."),
+        ToolSpec("python.run", ToolRisk.EXECUTABLE, setOf("script"), "Run an existing .py file inside the workspace. The script arg is a file path only, never Python source code.", WorkspaceMutationEffect.UNDECLARED),
         ToolSpec("python.syntax_check", ToolRisk.EXECUTABLE, setOf("script"), "Compile-check an existing .py file. The script arg is a file path only, never Python source code."),
-        ToolSpec("python.tests", ToolRisk.EXECUTABLE, setOf("cwd"), "Run project tests through the controlled Python runner."),
+        ToolSpec("python.tests", ToolRisk.EXECUTABLE, setOf("cwd"), "Run project tests through the controlled Python runner.", WorkspaceMutationEffect.UNDECLARED),
         ToolSpec("ollama.start", ToolRisk.EXECUTABLE, description = "Start the same-phone Ollama sidecar."),
         ToolSpec("ollama.generate", ToolRisk.EXECUTABLE, setOf("model", "prompt"), "Run one bounded inference request through the same-phone Ollama API without creating scripts or installing Python packages."),
         ToolSpec("ollama.pull", ToolRisk.EXECUTABLE, setOf("model"), "Download an Ollama model after approval.")

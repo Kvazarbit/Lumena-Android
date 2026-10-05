@@ -122,4 +122,26 @@ class CognitiveExperienceFeedbackTest {
         assertTrue(state.learnedExamples.none { it.kind == CoordinatorExampleKind.RECOVERY })
     }
 
+
+    @Test fun learnedRecoveryFromNonProjectTasksIsVisibleToALaterNonProjectTask() {
+        var genome = ConstitutionGenomeState()
+        for (i in 1..3) {
+            genome = ConstitutionContributionPolicy.ingestVerifiedRecoveryExamples(
+                genome,
+                TaskState(id = "task-$i", projectId = null, goal = "research"),
+                listOf(episode("task-$i", true))
+            )
+        }
+
+        val lines = ConstitutionGenomeRuntime.promptLines(
+            genome,
+            TaskState(id = "task-next", projectId = null, goal = "research"),
+            limit = 16
+        )
+        assertTrue(
+            "verified non-project experience must reach a later non-project task",
+            lines.any { it.startsWith("LEARNED CONSTITUTION") }
+        )
+    }
+
 }

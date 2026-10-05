@@ -99,13 +99,18 @@ object ConstitutionGenomeRuntime {
     fun promptLines(
         state: ConstitutionGenomeState,
         task: TaskState,
-        limit: Int = 6
+        limit: Int = 6,
+        includeGlobalLearned: Boolean = true
     ): List<String> {
         val scope = scopeForTask(task)
         val effective = ConstitutionGenomePolicy.effectiveRules(
             hydrate(state),
             scope
-        )
+        ).filterNot { rule ->
+            !includeGlobalLearned &&
+                rule.status == ConstitutionRuleStatus.LEARNED &&
+                rule.scope.kind == ConstitutionScopeKind.GLOBAL
+        }
 
         val ordered = buildList {
             addAll(
@@ -388,16 +393,24 @@ object ConstitutionGenomeStore {
             next
         }
 
+    /**
+     * Learned GLOBAL advice stays shadow-only by default. C1 previously hid
+     * non-project learning accidentally through mismatched scopes; fixing that
+     * mismatch must not silently enable the still-unvalidated learned layer in
+     * live prompts. Callers may opt in explicitly after owner approval.
+     */
     fun relevant(
         context: Context,
         task: TaskState,
-        limit: Int = 6
+        limit: Int = 6,
+        exposeGlobalLearned: Boolean = false
     ): List<String> =
         synchronized(lock) {
             ConstitutionGenomeRuntime.promptLines(
                 state = load(context),
                 task = task,
-                limit = limit
+                limit = limit,
+                includeGlobalLearned = exposeGlobalLearned
             )
         }
 

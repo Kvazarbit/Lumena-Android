@@ -79,6 +79,17 @@ class WorkflowRunner(
         ReflexCandidateSet,
         TaskState
     ) -> ReflexRuntimeAdvice? = { _, _, _ -> null },
+    private val onReflexAdmitted: (
+        TaskState,
+        FailureEvent,
+        ReflexRuntimeAdvice
+    ) -> Unit = { _, _, _ -> },
+    private val onReflexExposed: (
+        TaskState,
+        FailureEvent,
+        ReflexRuntimeAdvice
+    ) -> Unit = { _, _, _ -> },
+    private val onReflexPartial: (TaskState) -> Unit = {},
     private val onToolExperience: (TaskState, ToolRequest, ToolResult, Long) -> Unit = { _, _, _, _ -> },
     private val onCauseProbeExperience: (
         TaskState,
@@ -594,6 +605,9 @@ class WorkflowRunner(
 
                 is ControllerInstruction.Finish -> {
                     state = instruction.state
+                    if (state.task.status == TaskStatus.PARTIAL) {
+                        runCatching { onReflexPartial(state.task) }
+                    }
                     publish(state, onState)
                     onProgress("FINISH\n${instruction.text.take(4_000)}")
                     val next = current + OllamaMessage("assistant", instruction.text)
@@ -937,6 +951,10 @@ class WorkflowRunner(
             return baseState
         }
 
+        runCatching {
+            onReflexAdmitted(baseState.task, event, advice)
+        }
+
         val gate = ReflexKernel.shouldUseReflex(
             candidates = candidates,
             confidence = advice.confidence,
@@ -949,6 +967,10 @@ class WorkflowRunner(
                     advice.evidenceCount
             )
             return baseState
+        }
+
+        runCatching {
+            onReflexExposed(baseState.task, event, advice)
         }
 
         val strengthPercent =

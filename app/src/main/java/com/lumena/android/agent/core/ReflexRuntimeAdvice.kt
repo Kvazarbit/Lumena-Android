@@ -7,13 +7,19 @@ package com.lumena.android.agent.core
  * or executable text. WorkflowRunner revalidates option membership against the
  * constitutional candidate set before exposing it to the model.
  */
+enum class ReflexAdviceSource {
+    REFLEX_EXPERIENCE,
+    TINYJEV
+}
+
 data class ReflexRuntimeAdvice(
     val option: ReflexOption,
     val confidence: Double,
     val evidenceCount: Int,
     val calibrated: Boolean = false,
     val calibratedConfidence: Double? = null,
-    val calibrationSamples: Int = 0
+    val calibrationSamples: Int = 0,
+    val source: ReflexAdviceSource = ReflexAdviceSource.REFLEX_EXPERIENCE
 ) {
     init {
         require(confidence in 0.0..1.0)
