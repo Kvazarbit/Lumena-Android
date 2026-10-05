@@ -49,12 +49,10 @@ object NervousShadowPolicy {
             return null
         }
 
-        val grade =
-            if (contexts.size >= minDistinctContexts) {
-                CausalGrade.TRANSFERRED
-            } else {
-                CausalGrade.VERIFIED_EFFECT
-            }
+        // Diversity of contexts is a precondition for a transfer experiment,
+        // not proof of transfer. TRANSFERRED requires an explicit test in a
+        // new context against a baseline, which this counter cannot provide.
+        val grade = CausalGrade.VERIFIED_EFFECT
 
         return NervousShadowCandidate(
             ruleId = ruleId,

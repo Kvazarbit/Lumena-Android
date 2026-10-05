@@ -157,7 +157,10 @@ object NervousSystemPolicy {
                     before = before,
                     after = after,
                     code = "CHATGPT_GENERATING_UI_MUTATION_BLOCKED",
-                    grade = CausalGrade.VERIFIED_EFFECT,
+                    // The block itself is an observed self-action. The effect
+                    // of an action that did not happen cannot be observed, so
+                    // a reflex firing is never VERIFIED_EFFECT evidence.
+                    grade = CausalGrade.OBSERVED,
                     source = source,
                     locallyVerified = source != NervousEvidenceSource.IMPORTED,
                     contextKey = contextKey

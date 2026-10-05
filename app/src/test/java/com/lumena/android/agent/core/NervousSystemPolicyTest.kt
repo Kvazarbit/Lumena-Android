@@ -36,7 +36,7 @@ class NervousSystemPolicyTest {
     }
 
     @Test
-    fun syntheticAbGuardPreventsViolationsWithoutBlockingIdleTurns() {
+    fun guardTruthTableBlocksMutationOnlyWhileGenerating() {
         val frames = listOf(
             generating,
             generating.copy(chatGptGenerating = false),
@@ -78,8 +78,11 @@ class NervousSystemPolicyTest {
         assertNotNull(assessment)
         assertTrue(assessment!!.reflexRequired)
         assertEquals(NervousEventKind.REFLEX_BLOCK, assessment.event.kind)
-        assertEquals(CausalGrade.VERIFIED_EFFECT, assessment.event.causalGrade)
-        assertTrue(assessment.event.promotionEligible())
+        assertEquals(CausalGrade.OBSERVED, assessment.event.causalGrade)
+        assertFalse(
+            "a reflex firing proves the block, not the effect of the blocked action",
+            assessment.event.promotionEligible()
+        )
     }
 
     @Test

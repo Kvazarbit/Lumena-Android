@@ -82,7 +82,8 @@ class NervousShadowPolicyTest {
         assertFalse(candidate.active)
         assertEquals(3, candidate.verifiedEvidenceIds.size)
         assertEquals(2, candidate.distinctContexts)
-        assertEquals(CausalGrade.TRANSFERRED, candidate.causalGrade)
+        // Two contexts satisfy the diversity gate but do not prove transfer.
+        assertEquals(CausalGrade.VERIFIED_EFFECT, candidate.causalGrade)
     }
 
     @Test
