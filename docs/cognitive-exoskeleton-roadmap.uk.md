@@ -133,7 +133,8 @@ Coordinator уже сформував з нього `RECOVERY EXAMPLE`.
 - **Нервова система:** заблокована дія = `OBSERVED`, не `VERIFIED_EFFECT`; кандидат не отримує
   `TRANSFERRED` за ≥2 контексти.
 - **Layer Governor** — див. [LAYER_GOVERNOR_V1.uk.md](LAYER_GOVERNOR_V1.uk.md): факторний
-  ON/OFF для 7 дорадчих шарів, вердикти KEEP/DISABLE/NEGLIGIBLE/NOT_TRIGGERED/INSUFFICIENT_DATA,
+  ON/OFF для 8 дорадчих шарів (включно з кандидатами в Core DNA), вимір токенів/кроків/часу,
+  вердикти KEEP/DISABLE/NEGLIGIBLE/COSTLY_NO_BENEFIT/NOT_TRIGGERED/INSUFFICIENT_DATA,
   контрольні точки, Бонферроні, облік незавершених задач.
 - **C5/C6/C7 (CI #1965):** TinyJev калібрується і на провалах; автоприв'язка вебджерела —
   лише асоціація без `VERIFIED_BY_TEST`; неспростовний ген верифікації не стає LEARNED.

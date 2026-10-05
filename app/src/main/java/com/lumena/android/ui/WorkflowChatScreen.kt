@@ -106,6 +106,7 @@ import com.lumena.android.agent.core.ProjectContextResolver
 import com.lumena.android.agent.core.PreviousTaskOutcomeContext
 import com.lumena.android.agent.core.ShortTurnCue
 import com.lumena.android.agent.core.AdvisoryLayer
+import com.lumena.android.agent.core.CandidatePrinciples
 import com.lumena.android.agent.core.GovernorCostAccumulator
 import com.lumena.android.settings.LayerGovernorStore
 import com.lumena.android.agent.core.ResearchThreadResolver
@@ -1003,11 +1004,15 @@ fun WorkflowChatScreen(
                 // Only learned advisory lines are governed; HARD DNA and
                 // user constraints are always kept.
                 val learnedLines = exposed.filter { it.startsWith("LEARNED CONSTITUTION") }
-                if (governed(task, AdvisoryLayer.CONSTITUTION, learnedLines).isEmpty() && learnedLines.isNotEmpty()) {
-                    exposed - learnedLines.toSet()
-                } else {
-                    exposed
-                }
+                val governedConstitution =
+                    if (governed(task, AdvisoryLayer.CONSTITUTION, learnedLines).isEmpty() && learnedLines.isNotEmpty()) {
+                        exposed - learnedLines.toSet()
+                    } else {
+                        exposed
+                    }
+                // Candidate Core DNA additions earn promotion only through the Governor.
+                governedConstitution +
+                    governed(task, AdvisoryLayer.PRINCIPLES, listOf(CandidatePrinciples.promptLine()))
             },
             reflexAdviceProvider = { event, candidates, task ->
                 var reflexRecorded = false
