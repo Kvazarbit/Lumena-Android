@@ -108,6 +108,9 @@ import com.lumena.android.agent.core.ShortTurnCue
 import com.lumena.android.agent.core.AdvisoryLayer
 import com.lumena.android.agent.core.CandidatePrinciples
 import com.lumena.android.agent.core.GovernorCostAccumulator
+import com.lumena.android.agent.core.LayerGovernorPolicy
+import com.lumena.android.agent.core.TaskIntentRouter
+import com.lumena.android.settings.FractalTaskEpisode
 import com.lumena.android.settings.LayerGovernorStore
 import com.lumena.android.agent.core.ResearchThreadResolver
 import com.lumena.android.agent.core.ResearchThreadState
@@ -848,6 +851,13 @@ fun WorkflowChatScreen(
             )
         }
 
+    fun currentModelId(): String =
+        if (inferenceBackend == "embedded") {
+            "embedded:" + ggufDisplayName.ifBlank { "gguf" }
+        } else {
+            "ollama:" + selectedModel.ifBlank { "unknown" }
+        }
+
     fun modelNameForRun(): String = if (inferenceBackend == "embedded") "embedded-gguf" else selectedModel
 
     fun workflowRunner(): WorkflowRunner {
@@ -1446,6 +1456,12 @@ fun WorkflowChatScreen(
                 is WorkflowOutcome.NeedsConfirmation -> 0
             }
             val cost = (governorCosts.remove(taskId) ?: GovernorCostAccumulator()).finish(steps)
+            val finishedGoal = when (outcome) {
+                is WorkflowOutcome.Finished -> outcome.control.task.goal
+                is WorkflowOutcome.Failed -> outcome.control.task.goal
+                is WorkflowOutcome.NeedsConfirmation -> ""
+            }
+            val trailModelId = currentModelId()
             uiScope.launch {
                 withContext(Dispatchers.IO) {
                     runCatching {
@@ -1455,11 +1471,33 @@ fun WorkflowChatScreen(
                             status = terminalStatus
                         )
                     }
-                    LayerGovernorStore.resolve(
+                    val trial = LayerGovernorStore.resolve(
                         context = context,
                         taskId = taskId,
                         status = terminalStatus,
                         cost = cost
+                    )
+                    // Every model leaves an evaluated trace on the fractal canvas,
+                    // whether or not any advisory layer was involved.
+                    FractalExperienceCanvasStore.recordTaskEpisode(
+                        context = context,
+                        episode = FractalTaskEpisode(
+                            id = LayerGovernorPolicy.taskHash(taskId),
+                            modelId = trial?.modelId ?: trailModelId,
+                            family = trial?.family
+                                ?: TaskIntentRouter.route(finishedGoal).intent.name,
+                            status = terminalStatus,
+                            success = terminalStatus == "DONE",
+                            toolSteps = cost.toolSteps,
+                            modelCalls = cost.modelCalls,
+                            tokens = cost.tokens,
+                            durationMs = trial?.cost?.durationMs ?: 0,
+                            exposedLayers = trial?.exposures
+                                ?.filter { it.exposed }?.map { it.layer }.orEmpty(),
+                            withheldLayers = trial?.exposures
+                                ?.filterNot { it.exposed }?.map { it.layer }.orEmpty(),
+                            at = System.currentTimeMillis()
+                        )
                     )
                 }
             }

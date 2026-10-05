@@ -79,20 +79,20 @@ object LayerGovernorStore {
         cost: com.lumena.android.agent.core.GovernorCost =
             com.lumena.android.agent.core.GovernorCost(),
         now: Long = System.currentTimeMillis()
-    ) {
+    ): com.lumena.android.agent.core.GovernorTrial? =
         runCatching {
             synchronized(lock) {
                 val state = load(context)
                 val modelId = state.pending
                     .firstOrNull { it.taskHash == LayerGovernorPolicy.taskHash(taskId) }
                     ?.modelId
-                    ?: return@synchronized
+                    ?: return@synchronized null
                 var next = LayerGovernorPolicy.resolve(state, taskId, status, now, cost)
                 next = LayerGovernorPolicy.applyVerdicts(next, modelId, now)
                 if (next != state) save(context, next)
+                next.trials.lastOrNull { it.taskHash == LayerGovernorPolicy.taskHash(taskId) }
             }
-        }
-    }
+        }.getOrNull()
 
     /** A task replaced or cancelled before a terminal status. */
     fun abandon(

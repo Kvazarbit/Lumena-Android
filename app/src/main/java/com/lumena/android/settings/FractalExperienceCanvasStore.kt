@@ -57,6 +57,7 @@ object FractalExperienceCanvasCodec {
         }
         require(parsed.records.size <= FractalExperienceCanvasPolicy.MAX_RECORDS)
         require(parsed.nodes.size <= FractalExperienceCanvasPolicy.MAX_NODES)
+        require(parsed.taskEpisodes.size <= FractalTaskTrailPolicy.MAX_EPISODES)
         require(
             parsed.languageObservations.size <=
                 FractalExperienceCanvasPolicy.MAX_LANGUAGE_OBSERVATIONS
@@ -263,6 +264,28 @@ object FractalExperienceCanvasStore {
                 StateVault.requestSave(context)
             }
             next
+        }
+
+    /** Leaves one evaluated task trace on the canvas. Never throws. */
+    fun recordTaskEpisode(
+        context: Context,
+        episode: FractalTaskEpisode
+    ) {
+        runCatching {
+            synchronized(lock) {
+                val current = load(context)
+                val next = FractalTaskTrailPolicy.record(current, episode)
+                if (next != current) {
+                    save(context, next)
+                    StateVault.requestSave(context)
+                }
+            }
+        }
+    }
+
+    fun trailSummaries(context: Context): List<FractalTrailSummary> =
+        synchronized(lock) {
+            FractalTaskTrailPolicy.summaries(load(context))
         }
 
     fun relevant(

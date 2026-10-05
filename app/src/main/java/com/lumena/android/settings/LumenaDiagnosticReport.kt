@@ -225,6 +225,7 @@ data class LumenaDiagnosticInput(
     val cognitiveInfluence: DiagnosticCognitiveInfluenceView =
         DiagnosticCognitiveInfluenceView(),
     val layerGovernor: List<String> = emptyList(),
+    val taskTrail: List<String> = emptyList(),
     val cognitiveRegression: CognitiveRegressionReport? = null,
     val predictionDelta: DiagnosticPredictionDeltaView =
         DiagnosticPredictionDeltaView(),
@@ -603,6 +604,15 @@ object LumenaDiagnosticFormatter {
                             160
                         )
                 )
+            }
+            appendLine()
+
+            appendLine("[FRACTAL_TASK_TRAIL]")
+            if (input.taskTrail.isEmpty()) {
+                appendLine("episodes=0")
+            } else {
+                appendLine("observational: user picks model and task; causal effects come from LAYER_GOVERNOR")
+                input.taskTrail.forEach { appendLine(clean(it, 300)) }
             }
             appendLine()
 
@@ -1061,6 +1071,18 @@ object LumenaDiagnosticReport {
             layaShadow = layaShadow,
             cognitiveInfluence = cognitiveInfluence,
             layerGovernor = LayerGovernorFormatter.lines(app),
+            taskTrail = runCatching {
+                FractalExperienceCanvasStore.trailSummaries(app).take(24).map { s ->
+                    s.level.name.lowercase() +
+                        (s.family?.let { " family=$it" } ?: "") +
+                        (s.modelId?.let { " model=$it" } ?: "") +
+                        " tasks=" + s.tasks +
+                        " success=" + String.format(java.util.Locale.ROOT, "%.0f%%", s.successRate * 100) +
+                        " ci95=[" + String.format(java.util.Locale.ROOT, "%.0f%%,%.0f%%", s.low * 100, s.high * 100) + "]" +
+                        " tokens=" + (s.meanTokens?.let { String.format(java.util.Locale.ROOT, "%.0f", it) } ?: "n/a") +
+                        " peak=" + s.peak.name
+                }
+            }.getOrElse { listOf("error=" + (it.message ?: "trail unavailable")) },
             cognitiveRegression = runCatching {
                 val state = CoordinatorExperienceStore.load(app)
                 CognitiveRegressionSuite.replay(CognitiveRegressionSuite.corpus(state.learnedExamples))

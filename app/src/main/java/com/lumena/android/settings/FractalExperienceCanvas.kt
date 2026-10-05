@@ -89,7 +89,9 @@ data class FractalExperienceCanvasState(
     val records: List<FractalExampleRecord> = emptyList(),
     val nodes: List<FractalExperienceNode> = emptyList(),
     val languageObservations: List<FractalLanguageObservation> = emptyList(),
-    val legacyBackfillVersion: Int = 0
+    val legacyBackfillVersion: Int = 0,
+    /** Evaluated whole-task traces left by every model (see FractalTaskTrail). */
+    val taskEpisodes: List<FractalTaskEpisode> = emptyList()
 )
 
 object FractalLanguageIntentPolicy {
