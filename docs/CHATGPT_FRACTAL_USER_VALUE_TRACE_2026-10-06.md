@@ -24,6 +24,12 @@ The weight is attached to an **existing deterministic fractal node** and is acce
 
 The adapter/model/UI that records the user's instruction is stored as `recordedBy` **only for provenance**. It does not multiply or otherwise affect the numerical weight.
 
+Runtime entry point is deliberately explicit and local:
+
+`/fractal-weight <node-id> <-3..3>`
+
+The Local UI parses this command before any model call and records `recordedBy=local-ui`. Natural-language model output cannot invoke it implicitly, and no `fractal.weight` / `fractal.user_weight` tool exists.
+
 ## Weight semantics
 
 Range: `-3..+3`.
