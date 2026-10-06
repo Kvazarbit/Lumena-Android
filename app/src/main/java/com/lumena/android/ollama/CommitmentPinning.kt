@@ -1,7 +1,11 @@
 package com.lumena.android.ollama
 
 /**
- * Commitment-aware context selection (experimental, not wired into runtime).
+ * Commitment-aware context selection.
+ *
+ * Runtime use goes through the Layer Governor (layer "commitments"): only a
+ * randomized share of tasks gets the pinned reminder, so its effect on
+ * success and tokens is measured rather than assumed.
  *
  * OllamaContextPolicy.compact keeps the newest turns that fit the budget, so
  * a user prohibition stated early in a long session ("не чіпай config.json")
@@ -14,8 +18,8 @@ package com.lumena.android.ollama
  * the human typed (the chat bubbles) may become commitments; a web page that
  * says "never ..." must not be pinned as a user rule.
  *
- * It is an offline experiment: the benchmark compares commitment loss of both
- * selections under an identical budget before any runtime use.
+ * The offline benchmark compares commitment loss of both selections under an
+ * identical budget.
  */
 object CommitmentPinning {
     const val DEFAULT_RESERVE_FRACTION = 0.15
@@ -52,6 +56,76 @@ object CommitmentPinning {
             .map { it.take(MAX_COMMITMENT_CHARS) }
             .distinctBy { it.lowercase() }
             .take(MAX_COMMITMENTS)
+
+    private val revokeCue = Regex(
+        "(?iu)(?:\\bтепер\\s+можна|\\bможна\\b|\\bдозволяю\\b|\\bдозволено\\b|\\bскасовую\\b|" +
+            "\\bзабудь\\b|\\bзамість\\b|\\bможно\\b|\\bразрешаю\\b|\\bвместо\\b|" +
+            "\\byou may\\b|\\ballowed\\b|\\binstead of\\b|\\bforget\\b|\\bignore (?:that|my)\\b)"
+    )
+
+    /** Generic verbs that must not link unrelated commitments. */
+    private val genericWords = setOf(
+        "використовуй", "використай", "використовувати", "змінювати", "перевіряй",
+        "напиши", "зроби", "используй", "использовать", "сделай", "please", "always"
+    )
+
+    /** Object words a commitment is about: files, versions and long nouns. */
+    fun keyTokens(text: String): Set<String> =
+        Regex("[\\p{L}\\p{N}_./-]+")
+            .findAll(text.lowercase())
+            .map { it.value.trim('.', '-', '/') }
+            .filter { token ->
+                val objectLike = '.' in token || '/' in token ||
+                    (token.length >= 2 && token.any { it.isDigit() }) ||
+                    token.length >= 7
+                objectLike && token !in genericWords &&
+                    !cue.containsMatchIn(token) && !revokeCue.containsMatchIn(token)
+            }
+            .toSet()
+
+    /**
+     * Commitments from earlier human turns that are still in force.
+     * A later turn revokes or replaces a commitment when it carries a
+     * revocation/replacement cue and names the same object ("тепер можна
+     * чіпати config.json", "замість v1 використовуй v2"). History is not
+     * erased; the revoked line is simply no longer pinned.
+     */
+    fun activeCommitments(humanTurnsChronological: List<String>): List<String> {
+        val active = mutableListOf<Pair<Int, String>>()
+        humanTurnsChronological.forEachIndexed { index, turn ->
+            val sentences = turn
+                .split(Regex("(?<=[.!?;])\\s+|\\n"))
+                .map { it.replace(Regex("\\s+"), " ").trim() }
+                .filter { it.isNotBlank() }
+            if (sentences.any { revokeCue.containsMatchIn(it) }) {
+                val tokens = keyTokens(turn)
+                active.removeAll { (_, line) -> keyTokens(line).any { it in tokens } }
+            }
+            sentences
+                .filter { cue.containsMatchIn(it) && !revokeCue.containsMatchIn(it) }
+                .forEach { active += index to it.take(MAX_COMMITMENT_CHARS) }
+        }
+        return active
+            .asReversed()
+            .map { it.second }
+            .distinctBy { it.lowercase() }
+            .take(MAX_COMMITMENTS)
+    }
+
+    /** Reminder message for the model; bounded and explicitly user-sourced. */
+    fun reminder(lines: List<String>, maxChars: Int = 600): String? {
+        if (lines.isEmpty()) return null
+        val header = "PINNED USER COMMITMENTS (typed by the user earlier in this session; still binding unless revoked):"
+        val text = buildString {
+            append(header)
+            for (line in lines) {
+                val next = "\n- $line"
+                if (length + next.length > maxChars) break
+                append(next)
+            }
+        }
+        return text.takeIf { it.length > header.length }
+    }
 
     fun compact(
         messages: List<OllamaMessage>,

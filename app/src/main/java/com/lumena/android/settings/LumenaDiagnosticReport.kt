@@ -1629,7 +1629,7 @@ object LayerGovernorFormatter {
                 " trials=" + report.trials +
                 " checkpoint=" + report.checkpointTrials +
                 " pending=" + pending +
-                " ci=bonferroni-8 disable=two-consecutive-checkpoints"
+                " ci=bonferroni-9 disable=two-consecutive-checkpoints"
         )
         add("disabled=" + report.disabled.joinToString(",").ifBlank { "none" })
         report.effects.forEach { e ->

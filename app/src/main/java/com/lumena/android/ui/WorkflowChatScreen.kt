@@ -106,6 +106,7 @@ import com.lumena.android.agent.core.ProjectContextResolver
 import com.lumena.android.agent.core.PreviousTaskOutcomeContext
 import com.lumena.android.agent.core.ShortTurnCue
 import com.lumena.android.agent.core.AdvisoryLayer
+import com.lumena.android.ollama.CommitmentPinning
 import com.lumena.android.agent.core.CandidatePrinciples
 import com.lumena.android.agent.core.GovernorCostAccumulator
 import com.lumena.android.agent.core.LayerGovernorPolicy
@@ -1780,10 +1781,29 @@ fun WorkflowChatScreen(
             } else {
                 emptyList()
             }
+        // Earlier user commitments that recency compaction may drop, measured
+        // by the Layer Governor before they are trusted to help.
+        val earlierHumanTurns = bubbles.filter { it.role == "user" }.map { it.text }
+        val pinnedCommitments = CommitmentPinning
+            .activeCommitments(earlierHumanTurns)
+            .filterNot { line -> text.contains(line) }
+        val commitmentContext =
+            CommitmentPinning.reminder(pinnedCommitments)
+                ?.takeIf {
+                    LayerGovernorStore.expose(
+                        context = context,
+                        task = task,
+                        layer = AdvisoryLayer.COMMITMENTS,
+                        modelId = currentModelId()
+                    )
+                }
+                ?.let { listOf(OllamaMessage("user", it)) }
+                .orEmpty()
         val turnHistory =
             epochHistory +
                 previousContext +
                 explainContext +
+                commitmentContext +
                 workContext +
                 researchContext +
                 OllamaMessage(

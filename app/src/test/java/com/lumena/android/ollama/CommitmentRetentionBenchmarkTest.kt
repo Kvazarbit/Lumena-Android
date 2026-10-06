@@ -81,4 +81,37 @@ class CommitmentRetentionBenchmarkTest {
         )
         assertEquals(listOf(typed), extracted)
     }
+
+    @Test fun laterPermissionRevokesTheMatchingCommitmentOnly() {
+        val active = CommitmentPinning.activeCommitments(
+            listOf(
+                "Онови aquarium.html. Не чіпай config.json.",
+                "Пиши тільки на чистому JavaScript, без нових бібліотек.",
+                "Тепер можна чіпати config.json, додай туди швидкість мухи."
+            )
+        )
+        assertFalse(active.any { it.contains("config.json") })
+        assertTrue(active.any { it.contains("JavaScript") })
+    }
+
+    @Test fun replacedDecisionIsNoLongerPinned() {
+        val active = CommitmentPinning.activeCommitments(
+            listOf(
+                "Використовуй тільки API v1.",
+                "Не комітай нічого в git.",
+                "Замість v1 використовуй v2."
+            )
+        )
+        assertFalse(active.any { it.contains("v1") })
+        // A generic verb shared by both turns must not revoke the git rule.
+        assertTrue(active.any { it.contains("git") })
+    }
+
+    @Test fun reminderIsBoundedAndLabelledAsUserSourced() {
+        val lines = (1..20).map { "Ніколи не видаляй файл backup-$it.json у проєкті." }
+        val reminder = requireNotNull(CommitmentPinning.reminder(lines))
+        assertTrue(reminder.length <= 600)
+        assertTrue(reminder.startsWith("PINNED USER COMMITMENTS"))
+        assertEquals(null, CommitmentPinning.reminder(emptyList()))
+    }
 }
