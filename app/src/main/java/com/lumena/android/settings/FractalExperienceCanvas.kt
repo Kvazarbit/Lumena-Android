@@ -91,7 +91,9 @@ data class FractalExperienceCanvasState(
     val languageObservations: List<FractalLanguageObservation> = emptyList(),
     val legacyBackfillVersion: Int = 0,
     /** Evaluated whole-task traces left by every model (see FractalTaskTrail). */
-    val taskEpisodes: List<FractalTaskEpisode> = emptyList()
+    val taskEpisodes: List<FractalTaskEpisode> = emptyList(),
+    /** Explicit normative user priorities. Never evidence confidence. */
+    val userValueWeights: List<FractalUserValueWeight> = emptyList()
 )
 
 object FractalLanguageIntentPolicy {
@@ -174,11 +176,28 @@ object FractalExperienceCanvasPolicy {
                     .thenBy { it.id }
             )
             .takeLast(MAX_LANGUAGE_OBSERVATIONS)
+        val projectedNodes =
+            project(records)
+        val validNodeIds =
+            projectedNodes.map {
+                it.id
+            }.toSet()
+        val userValues =
+            FractalUserValueWeightPolicy
+                .normalize(
+                    state.userValueWeights
+                )
+                .filter {
+                    it.nodeId in
+                        validNodeIds
+                }
+
         return state.copy(
             version = 1,
             records = records,
-            nodes = project(records),
-            languageObservations = language
+            nodes = projectedNodes,
+            languageObservations = language,
+            userValueWeights = userValues
         )
     }
 
@@ -276,10 +295,20 @@ object FractalExperienceCanvasPolicy {
             .filter { (_, overlap) -> queryTokens.isEmpty() || overlap > 0 }
             .sortedWith(
                 compareByDescending<Pair<FractalExperienceNode, Int>> {
-                    it.second * 100 +
-                        it.first.distinctTasks * 10 +
-                        (it.first.confidence * 10).toInt()
-                }.thenByDescending { it.first.updatedAt }
+                    it.second
+                }.thenByDescending {
+                    it.first.distinctTasks
+                }.thenByDescending {
+                    FractalUserValueWeightPolicy
+                        .activeWeight(
+                            state,
+                            it.first.id
+                        )
+                }.thenByDescending {
+                    it.first.confidence
+                }.thenByDescending {
+                    it.first.updatedAt
+                }
             )
             .take(limit.coerceIn(1, 32))
             .map { it.first }
