@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.lumena.android.agent.core.AdvisoryLayer
 
 /**
  * Offline benchmark: does context selection lose user commitments when a long
@@ -107,7 +108,44 @@ class CommitmentRetentionBenchmarkTest {
         assertTrue(active.any { it.contains("git") })
     }
 
-    @Test fun reminderIsBoundedAndLabelledAsUserSourced() {
+
+    @Test
+    fun bindingUserCommitmentsAreNeverAGovernedLayer() {
+        assertFalse(
+            AdvisoryLayer.entries.any {
+                it.key == "commitments"
+            }
+        )
+
+        val active =
+            CommitmentPinning.activeCommitments(
+                listOf(
+                    "Не чіпай config.json.",
+                    "продовжуй"
+                )
+            )
+        val reminder =
+            CommitmentPinning.reminder(
+                active
+            )
+
+        assertTrue(
+            active.any {
+                it.contains(
+                    "config.json"
+                )
+            }
+        )
+        assertTrue(
+            reminder
+                ?.contains(
+                    "still binding",
+                    ignoreCase = true
+                ) == true
+        )
+    }
+
+@Test fun reminderIsBoundedAndLabelledAsUserSourced() {
         val lines = (1..20).map { "Ніколи не видаляй файл backup-$it.json у проєкті." }
         val reminder = requireNotNull(CommitmentPinning.reminder(lines))
         assertTrue(reminder.length <= 600)
