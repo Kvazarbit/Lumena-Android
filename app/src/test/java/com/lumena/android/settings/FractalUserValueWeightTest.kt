@@ -324,7 +324,37 @@ class FractalUserValueWeightTest {
         }
     }
 
+
     @Test
+    fun localWeightCommandIsExplicitAndBounded() {
+        val valid =
+            FractalUserValueCommandParser
+                .parse(
+                    "/fractal-weight fx-pattern-abc123 3"
+                )
+        assertEquals(
+            "fx-pattern-abc123",
+            valid?.nodeId
+        )
+        assertEquals(3, valid?.weight)
+
+        listOf(
+            "/fractal-weight fx-pattern-abc123 4",
+            "/fractal-weight fx-pattern-abc123 -4",
+            "/fractal-weight invented 2",
+            "/fractal-weight fx-pattern-abc123",
+            "please weight fx-pattern-abc123 3"
+        ).forEach { raw ->
+            assertEquals(
+                raw,
+                null,
+                FractalUserValueCommandParser
+                    .parse(raw)
+            )
+        }
+    }
+
+@Test
     fun thereIsNoModelToolThatCanSelfAssignFractalWeight() {
         assertEquals(
             null,
