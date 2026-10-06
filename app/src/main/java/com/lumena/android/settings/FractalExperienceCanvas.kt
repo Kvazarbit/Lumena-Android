@@ -178,19 +178,14 @@ object FractalExperienceCanvasPolicy {
             .takeLast(MAX_LANGUAGE_OBSERVATIONS)
         val projectedNodes =
             project(records)
-        val validNodeIds =
-            projectedNodes.map {
-                it.id
-            }.toSet()
+        // User-value records are audit history, not a cache. Keep them even
+        // when compaction/reprojection temporarily removes the target node.
+        // A missing node simply means the record has no ranking effect now.
         val userValues =
             FractalUserValueWeightPolicy
                 .normalize(
                     state.userValueWeights
                 )
-                .filter {
-                    it.nodeId in
-                        validNodeIds
-                }
 
         return state.copy(
             version = 1,
