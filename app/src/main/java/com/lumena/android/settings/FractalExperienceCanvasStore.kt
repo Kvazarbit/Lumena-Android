@@ -59,6 +59,10 @@ object FractalExperienceCanvasCodec {
         require(parsed.nodes.size <= FractalExperienceCanvasPolicy.MAX_NODES)
         require(parsed.taskEpisodes.size <= FractalTaskTrailPolicy.MAX_EPISODES)
         require(
+            parsed.userValueWeights.size <=
+                FractalUserValueWeightPolicy.MAX_RECORDS
+        )
+        require(
             parsed.languageObservations.size <=
                 FractalExperienceCanvasPolicy.MAX_LANGUAGE_OBSERVATIONS
         )
@@ -131,6 +135,27 @@ object FractalExperienceCanvasCodec {
             require(observation.canonicalIntent.length in 1..80)
             require(observation.sourceTaskHash.length in 1..64)
             require(observation.at > 0)
+        }
+
+        parsed.userValueWeights.forEach { value ->
+            require(value.id.length in 1..128)
+            require(value.nodeId.length in 1..128)
+            require(
+                value.weight in
+                    FractalUserValueWeightPolicy.MIN_WEIGHT..
+                        FractalUserValueWeightPolicy.MAX_WEIGHT
+            )
+            require(
+                value.source ==
+                    FractalUserValueSource.EXPLICIT_USER
+            )
+            require(value.sourceTurnHash.matches(Regex("[0-9a-f]{24}")))
+            require(value.recordedBy.length in 1..160)
+            require(value.at > 0L)
+            require(
+                value.supersededBy == null ||
+                    value.supersededBy.length in 1..128
+            )
         }
 
         // Nodes are a deterministic cache. Never trust a restored/imported
@@ -264,6 +289,48 @@ object FractalExperienceCanvasStore {
                 StateVault.requestSave(context)
             }
             next
+        }
+
+    /**
+     * Record a user-authored priority for one existing fractal node.
+     *
+     * No model/tool API calls this automatically. The caller must have an
+     * explicit user turn and passes the recorder identity only as provenance.
+     */
+    fun recordExplicitUserValueWeight(
+        context: Context,
+        nodeId: String,
+        weight: Int,
+        sourceUserTurn: String,
+        recordedBy: String,
+        at: Long = System.currentTimeMillis()
+    ): FractalExperienceCanvasState =
+        synchronized(lock) {
+            val current = load(context)
+            val next =
+                FractalUserValueWeightPolicy
+                    .recordExplicit(
+                        state = current,
+                        nodeId = nodeId,
+                        weight = weight,
+                        sourceUserTurn =
+                            sourceUserTurn,
+                        recordedBy = recordedBy,
+                        at = at
+                    )
+            if (next != current) {
+                save(context, next)
+                StateVault.requestSave(context)
+            }
+            next
+        }
+
+    fun activeUserValueWeights(
+        context: Context
+    ): List<FractalUserValueWeight> =
+        synchronized(lock) {
+            FractalUserValueWeightPolicy
+                .active(load(context))
         }
 
     /** Leaves one evaluated task trace on the canvas. Never throws. */
