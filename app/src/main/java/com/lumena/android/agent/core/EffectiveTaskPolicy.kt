@@ -27,6 +27,12 @@ data class EffectiveTaskPolicy(
         ToolRisk.EXECUTABLE
     ),
     val forbiddenTools: List<String> = emptyList(),
+    /**
+     * Capabilities the current instruction forbids. Checked in addition to
+     * allowedRisks: a read-only instruction denies WRITE_WORKSPACE even when
+     * execution is allowed, so python.run/python.tests stay blocked.
+     */
+    val deniedCapabilities: List<ToolCapability> = emptyList(),
     val requiredTools: List<String> = emptyList(),
     val scopeRef: String? = null,
     val unresolvedEffects: List<PolicyUnresolvedEffect> = emptyList(),
@@ -215,6 +221,22 @@ object EffectiveTaskPolicyCompiler {
             effectiveDirectives[it.tool] = it
         }
 
+        // Capability view of the same instruction. A later "запусти" can
+        // reopen execution, but only an explicit later mutation request can
+        // reopen workspace writes.
+        val deniedCapabilities =
+            buildList {
+                if (lastReadOnly != null && !mutationAllowed) {
+                    add(ToolCapability.WRITE_WORKSPACE)
+                }
+                if (
+                    lastNoExecute != null &&
+                    (lastExecution == null || lastExecution <= lastNoExecute)
+                ) {
+                    add(ToolCapability.EXECUTE_CODE)
+                }
+            }
+
         val allowedRisks =
             buildList {
                 add(ToolRisk.READ_ONLY)
@@ -242,7 +264,8 @@ object EffectiveTaskPolicyCompiler {
                 .map { it.tool }
                 .filter { it !in forbiddenTools }
                 .filter { tool ->
-                    ToolRegistry.get(tool)?.risk in allowedRisks
+                    ToolRegistry.get(tool)?.risk in allowedRisks &&
+                        ToolRegistry.capabilities(tool).none { it in deniedCapabilities }
                 }
                 .distinct()
                 .sorted()
@@ -269,6 +292,7 @@ object EffectiveTaskPolicyCompiler {
             currentInstruction = current,
             allowedRisks = allowedRisks,
             forbiddenTools = forbiddenTools,
+            deniedCapabilities = deniedCapabilities,
             requiredTools = requiredTools,
             scopeRef = scopeRef?.take(160),
             unresolvedEffects =
@@ -395,6 +419,19 @@ object EffectiveTaskPolicyCompiler {
             )
         }
 
+        val deniedCapability =
+            ToolRegistry.capabilities(canonical)
+                .firstOrNull { it in policy.deniedCapabilities }
+        if (deniedCapability != null) {
+            return TaskPolicyToolDecision(
+                false,
+                "TASK_POLICY_CAPABILITY_DENIED: " + deniedCapability +
+                    " (" + canonical + " can " +
+                    ToolRegistry.capabilities(canonical).joinToString("+") +
+                    "; the current instruction forbids " + deniedCapability + ")"
+            )
+        }
+
         unresolvedBlocker(policy, call)?.let {
             return TaskPolicyToolDecision(false, it)
         }
@@ -502,6 +539,12 @@ object EffectiveTaskPolicyCompiler {
         appendLine(
             "allowed_effects=" +
                 policy.allowedRisks.joinToString(",")
+        )
+        appendLine(
+            "denied_capabilities=" +
+                policy.deniedCapabilities
+                    .joinToString(",")
+                    .ifBlank { "(none)" }
         )
         appendLine(
             "forbidden_tools=" +

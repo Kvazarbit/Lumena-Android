@@ -35,12 +35,19 @@ MUTANTS = (
     ("workspace-declared-target-effect", CORE / "ContextKernel.kt",
      "event.target == target",
      "event.target != target"),
+    ("capability-denial-check", CORE / "EffectiveTaskPolicy.kt",
+     ".firstOrNull { it in policy.deniedCapabilities }",
+     ".firstOrNull { false }"),
+    ("python-run-write-capability", CORE / "ToolRegistry.kt",
+     "ToolCapability.EXECUTE_CODE,\n            ToolCapability.WRITE_WORKSPACE,\n            ToolCapability.NETWORK",
+     "ToolCapability.EXECUTE_CODE,\n            ToolCapability.NETWORK"),
 )
 TEST_NAMES = (
     "*RecoveryAdversarialSearchTest",
     "*ConstitutionKernelTest",
     "*ReflexKernelTest",
     "*ContextKernelTest",
+    "*ToolCapabilityPolicyTest",
 )
 
 

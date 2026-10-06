@@ -17,6 +17,21 @@ enum class WorkspaceMutationEffect {
     UNDECLARED
 }
 
+/**
+ * What a tool can possibly do, independent of its approval tier (ToolRisk)
+ * and of its cognitive role. A tool may have several capabilities; task
+ * policy denies capabilities, so an EXECUTABLE tool that can also rewrite
+ * files cannot slip past a "do not change anything" instruction.
+ */
+enum class ToolCapability {
+    READ_STATE,
+    WRITE_WORKSPACE,
+    EXECUTE_CODE,
+    NETWORK,
+    PROCESS_CONTROL,
+    MODEL_INFERENCE
+}
+
 data class ToolSpec(
     val name: String,
     val risk: ToolRisk,
@@ -89,6 +104,65 @@ object ToolRegistry {
         "python_run" to "python.run",
         "ollama_generate" to "ollama.generate"
     )
+
+    /**
+     * Explicit capability table. Every registered tool must appear here;
+     * a missing entry is a test failure, never a silent default.
+     */
+    private val capabilityTable: Map<String, Set<ToolCapability>> = mapOf(
+        "health" to setOf(ToolCapability.READ_STATE),
+        "system.time" to setOf(ToolCapability.READ_STATE),
+        "system.info" to setOf(ToolCapability.READ_STATE),
+        "http.json" to setOf(ToolCapability.READ_STATE, ToolCapability.NETWORK),
+        "http.get" to setOf(ToolCapability.READ_STATE, ToolCapability.NETWORK),
+        "web.search" to setOf(ToolCapability.READ_STATE, ToolCapability.NETWORK),
+        "web.read" to setOf(ToolCapability.READ_STATE, ToolCapability.NETWORK),
+        "image.search" to setOf(ToolCapability.READ_STATE, ToolCapability.NETWORK),
+        "context.snapshot" to setOf(ToolCapability.READ_STATE),
+        // Children are validated one by one by the task policy.
+        "inspect.batch" to setOf(ToolCapability.READ_STATE),
+        "process.status" to setOf(ToolCapability.READ_STATE),
+        "file.list" to setOf(ToolCapability.READ_STATE),
+        "file.search" to setOf(ToolCapability.READ_STATE),
+        "workspace.list" to setOf(ToolCapability.READ_STATE),
+        "file.read" to setOf(ToolCapability.READ_STATE),
+        "git.status" to setOf(ToolCapability.READ_STATE),
+        "git.diff" to setOf(ToolCapability.READ_STATE),
+        "git.log" to setOf(ToolCapability.READ_STATE),
+        "ollama.status" to setOf(ToolCapability.READ_STATE),
+        "project.create" to setOf(ToolCapability.WRITE_WORKSPACE),
+        "dir.create" to setOf(ToolCapability.WRITE_WORKSPACE),
+        "file.write" to setOf(ToolCapability.WRITE_WORKSPACE),
+        "file.patch" to setOf(ToolCapability.WRITE_WORKSPACE),
+        "git.add" to setOf(ToolCapability.WRITE_WORKSPACE),
+        "git.commit" to setOf(ToolCapability.WRITE_WORKSPACE),
+        // Arbitrary user code: may rewrite any workspace file and reach the network.
+        "python.run" to setOf(
+            ToolCapability.EXECUTE_CODE,
+            ToolCapability.WRITE_WORKSPACE,
+            ToolCapability.NETWORK
+        ),
+        // Test suites execute project code and fixtures may write files.
+        "python.tests" to setOf(
+            ToolCapability.EXECUTE_CODE,
+            ToolCapability.WRITE_WORKSPACE
+        ),
+        // Bridge compiles source bytes without running them or writing .pyc.
+        "python.syntax_check" to setOf(
+            ToolCapability.READ_STATE,
+            ToolCapability.EXECUTE_CODE
+        ),
+        "ollama.start" to setOf(ToolCapability.PROCESS_CONTROL),
+        "ollama.generate" to setOf(ToolCapability.MODEL_INFERENCE),
+        "ollama.pull" to setOf(ToolCapability.NETWORK, ToolCapability.PROCESS_CONTROL)
+    )
+
+    /** Unknown tools get every capability, so a policy can only block them. */
+    fun capabilities(name: String): Set<ToolCapability> =
+        capabilityTable[canonicalize(name)] ?: ToolCapability.entries.toSet()
+
+    internal fun declaresCapabilities(name: String): Boolean =
+        canonicalize(name) in capabilityTable
 
     fun all(): List<ToolSpec> = specs.values.sortedBy { it.name }
 
