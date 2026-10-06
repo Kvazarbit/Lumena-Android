@@ -131,6 +131,7 @@ import com.lumena.android.settings.ExperienceLandscapeStore
 import com.lumena.android.settings.CoordinatorExperienceStore
 import com.lumena.android.settings.FractalExperienceCanvasStore
 import com.lumena.android.settings.FractalLanguageIntentPolicy
+import com.lumena.android.settings.FractalUserValueCommandParser
 import com.lumena.android.settings.ReflexExperienceRanker
 import com.lumena.android.settings.TinyJevAssetLoader
 import com.lumena.android.settings.TinyJevCalibrationStore
@@ -1583,6 +1584,72 @@ fun WorkflowChatScreen(
                 "LUMENA_TOOL is Companion transport, not a Local work goal. " +
                     "No task or tool was started."
             )
+            scrollRequest++
+            persistSession()
+            return
+        }
+        if (
+            text.startsWith(
+                FractalUserValueCommandParser.PREFIX
+            )
+        ) {
+            input = ""
+            bubbles +=
+                ChatBubble(
+                    "user",
+                    text
+                )
+            val command =
+                FractalUserValueCommandParser
+                    .parse(text)
+            if (command == null) {
+                bubbles +=
+                    ChatBubble(
+                        "error",
+                        "Invalid local fractal-weight command. Use: " +
+                            FractalUserValueCommandParser
+                                .usage()
+                    )
+            } else {
+                val outcome =
+                    runCatching {
+                        FractalExperienceCanvasStore
+                            .recordExplicitUserValueWeight(
+                                context = context,
+                                nodeId =
+                                    command.nodeId,
+                                weight =
+                                    command.weight,
+                                sourceUserTurn =
+                                    text,
+                                recordedBy =
+                                    "local-ui"
+                            )
+                    }
+                outcome.onSuccess {
+                    bubbles +=
+                        ChatBubble(
+                            "assistant",
+                            "Fractal user-value recorded locally: " +
+                                "node=" +
+                                command.nodeId +
+                                " weight=" +
+                                command.weight +
+                                ". This changes advisory ranking only; " +
+                                "it is not evidence or permission."
+                        )
+                }.onFailure { failure ->
+                    bubbles +=
+                        ChatBubble(
+                            "error",
+                            "Fractal user-value was not recorded: " +
+                                (
+                                    failure.message
+                                        ?: "invalid node or value"
+                                    ).take(500)
+                        )
+                }
+            }
             scrollRequest++
             persistSession()
             return
