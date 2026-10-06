@@ -133,6 +133,26 @@ class ConstitutionContributionPolicyTest {
             state = state,
             proposal = second
         )
+        // C2: two episodes are two pieces of evidence, not four; not enough yet.
+        assertNotEquals(
+            ConstitutionRuleStatus.LEARNED,
+            state.rules.single { it.claimKey == first.claimKey }.status
+        )
+
+        val third = requireNotNull(
+            ConstitutionContributionPolicy.verifiedRecoveryRule(
+                task = task("task-3"),
+                example = recovery(
+                    id = "r3",
+                    evidenceIds = listOf("e5", "e6"),
+                    updatedAt = 300
+                )
+            )
+        )
+        state = ConstitutionGenomePolicy.contributeVerifiedAdvisory(
+            state = state,
+            proposal = third
+        )
 
         val learned = state.rules.single {
             it.claimKey == first.claimKey
@@ -145,9 +165,10 @@ class ConstitutionContributionPolicyTest {
             ConstitutionAuthority.ADVISORY,
             learned.authority
         )
-        assertEquals(4, learned.evidenceRefs.size)
+        // Only the decisive final attempt of each episode counts.
+        assertEquals(listOf("e2", "e4", "e6"), learned.evidenceRefs.map { it.id })
         assertEquals(
-            setOf("task-1", "task-2"),
+            setOf("task-1", "task-2", "task-3"),
             learned.evidenceRefs.mapNotNull { it.taskId }.toSet()
         )
     }
@@ -421,6 +442,18 @@ class ConstitutionContributionPolicyTest {
                 recovery("r2", listOf("e3", "e4"), updatedAt = 200)
             )
         )
+        assertEquals(
+            ConstitutionRuleStatus.CANDIDATE,
+            state.rules.single().status
+        )
+
+        state = ConstitutionContributionPolicy.ingestVerifiedRecoveryExamples(
+            state = state,
+            task = task("task-3"),
+            examples = listOf(
+                recovery("r3", listOf("e5", "e6"), updatedAt = 300)
+            )
+        )
 
         assertEquals(
             ConstitutionRuleStatus.LEARNED,
@@ -461,6 +494,22 @@ class ConstitutionContributionPolicyTest {
         state = ConstitutionGenomePolicy.contributeVerifiedAdvisory(
             state,
             second
+        )
+
+        val third = requireNotNull(
+            ConstitutionContributionPolicy.verifiedRecoveryRule(
+                task = task("task-c"),
+                example = recovery(
+                    id = "model-a-again",
+                    evidenceIds = listOf("c1", "c2"),
+                    updatedAt = 300,
+                    contributorModelIds = listOf("model-a")
+                )
+            )
+        )
+        state = ConstitutionGenomePolicy.contributeVerifiedAdvisory(
+            state,
+            third
         )
 
         val learned = state.rules.single()

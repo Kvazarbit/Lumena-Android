@@ -209,15 +209,24 @@ object ConstitutionContributionPolicy {
         } else {
             "via-" + sha256(middle.joinToString(">")).take(16)
         }
-        val claimKey = "recovery:$failedFamily:$pattern"
+        // C4: the experience address includes the structured failure cause.
+        // A retry after TIMEOUT and after DEPENDENCY_EXHAUSTED are different
+        // claims; mixing them produced contradictions that were really a
+        // missing condition, not noise.
+        val failureClass = example.failureClasses.firstOrNull()
+            ?.trim()
+            ?.uppercase()
+            ?.takeIf { it.matches(Regex("[A-Z0-9_]{1,48}")) }
+            ?: "UNKNOWN"
+        val claimKey = "recovery:$failedFamily:$failureClass:$pattern"
             .take(160)
 
         val statement = if (failed) {
-            "For $failedFamily failure in this scope, this recovery pattern has a verified failed attempt; do not assume it will recover the operation. Reinspect current conditions before reuse."
+            "For $failedFamily failure ($failureClass) in this scope, this recovery pattern has a verified failed attempt; do not assume it will recover the operation. Reinspect current conditions before reuse."
         } else if (middle.isEmpty()) {
-            "For $failedFamily failure in this scope, a bounded retry of the same operation has a verified recovery example; recheck current state before reuse."
+            "For $failedFamily failure ($failureClass) in this scope, a bounded retry of the same operation has a verified recovery example; recheck current state before reuse."
         } else {
-            "For $failedFamily failure in this scope, verified recovery used intermediate discovery/repair steps before the same operation succeeded; prefer a state-aware alternative before retrying."
+            "For $failedFamily failure ($failureClass) in this scope, verified recovery used intermediate discovery/repair steps before the same operation succeeded; prefer a state-aware alternative before retrying."
         }
         val rationale = if (failed) {
             "A linked local attempt ended in another failure. This is a counterexample to unconditional reuse, not proof that the approach can never work. Conflicting positive experience requires review."
@@ -227,11 +236,14 @@ object ConstitutionContributionPolicy {
             "Verified recovery episodes show that repeating the failed operation only after intermediate discovery/repair can be more useful than an unchanged retry. The rule is scoped, advisory, and must be rechecked against current state."
         }
 
+        // C2: one episode is one piece of evidence. Only the decisive final
+        // attempt counts; the initial failed call does not support the claim.
         val evidence = example.evidenceIds
             .asSequence()
             .filter { it.isNotBlank() }
-            .distinct()
-            .take(16)
+            .toList()
+            .takeLast(1)
+            .asSequence()
             .map { evidenceId ->
                 ConstitutionEvidenceRef(
                     id = evidenceId.take(180),

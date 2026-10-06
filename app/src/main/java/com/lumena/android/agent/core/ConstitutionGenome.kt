@@ -804,10 +804,66 @@ object ConstitutionGenomePolicy {
                 }
             }
 
+            // C3: for learned recovery advice a contradiction is graded, not
+            // absorbing. With enough independent episodes, a clear majority
+            // stance stays usable; the minority rule is kept as CONTESTED
+            // history. Close or small samples remain CONTESTED for review.
+            gradedRecoveryStance(sameClaim)?.let { winner ->
+                return@map if (rule.stance == winner) {
+                    // Re-evaluate from a neutral status: a rule that was
+                    // CONTESTED before must be able to regain eligibility.
+                    evaluate(rule.copy(status = ConstitutionRuleStatus.CANDIDATE))
+                } else {
+                    rule.copy(status = ConstitutionRuleStatus.CONTESTED)
+                }
+            }
+
             rule.copy(status = ConstitutionRuleStatus.CONTESTED)
         }
 
         return if (next == state.rules) state else state.copy(rules = next)
+    }
+
+    const val MIN_GRADED_EPISODES = 5
+    const val GRADED_MAJORITY = 0.6
+
+    private fun gradedRecoveryStance(
+        sameClaim: List<ConstitutionRule>
+    ): ConstitutionStance? {
+        if (
+            sameClaim.any {
+                it.kind != ConstitutionRuleKind.RECOVERY ||
+                    it.authority != ConstitutionAuthority.ADVISORY
+            }
+        ) {
+            return null
+        }
+        fun episodes(stance: ConstitutionStance): Int =
+            sameClaim
+                .filter { it.stance == stance }
+                .flatMap { rule -> rule.evidenceRefs.filter { it.promotionEligible() } }
+                .map { it.contextKey() }
+                .distinct()
+                .size
+        val affirm = episodes(ConstitutionStance.AFFIRM)
+        val reject = episodes(ConstitutionStance.REJECT)
+        val n = affirm + reject
+        if (n < MIN_GRADED_EPISODES) return null
+        val (low, high) = wilson(affirm, n)
+        return when {
+            low >= GRADED_MAJORITY -> ConstitutionStance.AFFIRM
+            high <= 1.0 - GRADED_MAJORITY -> ConstitutionStance.REJECT
+            else -> null
+        }
+    }
+
+    private fun wilson(successes: Int, n: Int): Pair<Double, Double> {
+        val z = 1.96
+        val p = successes.toDouble() / n
+        val z2 = z * z
+        val centre = (p + z2 / (2 * n)) / (1 + z2 / n)
+        val margin = z * kotlin.math.sqrt((p * (1 - p) + z2 / (4 * n)) / n) / (1 + z2 / n)
+        return (centre - margin) to (centre + margin)
     }
 
     private fun replace(
