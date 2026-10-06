@@ -34,6 +34,8 @@ Range: `-3..+3`.
 
 A newer explicit value supersedes the older active value for the same node. Older records remain in bounded audit history as `SUPERSEDED`.
 
+If compaction or reprojection temporarily removes the target node, the audit record is retained but has no ranking effect while the node is absent. It must not be silently deleted just because a derived node cache changed.
+
 No raw user turn is stored in the value record. A 24-hex SHA-256 prefix is stored as `sourceTurnHash` so a later audit can correlate the record without persisting the whole sentence in this layer.
 
 ## Ranking rule
