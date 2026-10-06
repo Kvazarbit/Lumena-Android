@@ -288,6 +288,53 @@ object FractalUserValueWeightPolicy {
             }
 }
 
+data class FractalUserValueCommand(
+    val nodeId: String,
+    val weight: Int
+)
+
+object FractalUserValueCommandParser {
+    const val PREFIX = "/fractal-weight"
+
+    fun parse(text: String): FractalUserValueCommand? {
+        val parts =
+            text.trim()
+                .split(Regex("\\s+"))
+        if (
+            parts.size != 3 ||
+            parts[0] != PREFIX
+        ) {
+            return null
+        }
+        val nodeId =
+            parts[1].trim()
+        if (
+            !nodeId.matches(
+                Regex("fx-[a-z0-9-]{3,124}")
+            )
+        ) {
+            return null
+        }
+        val weight =
+            parts[2].toIntOrNull()
+                ?: return null
+        if (
+            weight !in
+            FractalUserValueWeightPolicy.MIN_WEIGHT..
+                FractalUserValueWeightPolicy.MAX_WEIGHT
+        ) {
+            return null
+        }
+        return FractalUserValueCommand(
+            nodeId = nodeId,
+            weight = weight
+        )
+    }
+
+    fun usage(): String =
+        "$PREFIX <node-id> <-3..3>"
+}
+
 data class FractalUserValueRanking(
     val semanticOverlap: Int,
     val distinctTasks: Int,
