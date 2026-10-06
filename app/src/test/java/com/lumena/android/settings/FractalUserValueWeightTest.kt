@@ -340,7 +340,49 @@ class FractalUserValueWeightTest {
         )
     }
 
+
     @Test
+    fun reprojectionCanDropNodeWithoutErasingUserValueAudit() {
+        val base =
+            FractalExperienceCanvasState(
+                nodes =
+                    listOf(
+                        node(
+                            id = "temporary-node"
+                        )
+                    )
+            )
+        val weighted =
+            FractalUserValueWeightPolicy
+                .recordExplicit(
+                    base,
+                    "temporary-node",
+                    2,
+                    "Для мене цей патерн важливий.",
+                    "chatgpt:gpt-5.6-sol",
+                    1_000L
+                )
+
+        val reprojected =
+            FractalExperienceCanvasPolicy
+                .normalize(weighted)
+
+        assertTrue(
+            reprojected.nodes.isEmpty()
+        )
+        assertEquals(
+            1,
+            reprojected.userValueWeights.size
+        )
+        assertEquals(
+            "temporary-node",
+            reprojected.userValueWeights
+                .single()
+                .nodeId
+        )
+    }
+
+@Test
     fun realCanvasRoundTripPreservesUserValueAudit() {
         val example =
             CoordinatorExecutionExample(
