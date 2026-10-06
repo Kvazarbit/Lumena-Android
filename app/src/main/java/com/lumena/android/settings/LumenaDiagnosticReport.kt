@@ -181,7 +181,10 @@ data class DiagnosticFractalExperienceView(
     val causeRejected: Int = 0,
     val causeRuntimeFailures: Int = 0,
     val causeRuntimeHypotheses: Int = 0,
-    val causeRuntimeProbes: Int = 0
+    val causeRuntimeProbes: Int = 0,
+    val userValueRecords: Int = 0,
+    val userValueActive: Int = 0,
+    val userValueAudit: List<String> = emptyList()
 )
 
 data class LumenaDiagnosticInput(
@@ -818,6 +821,28 @@ object LumenaDiagnosticFormatter {
                     "cause_runtime_probes_total=" +
                         fractal.causeRuntimeProbes
                 )
+                appendLine(
+                    "user_value_records=" +
+                        fractal.userValueRecords
+                )
+                appendLine(
+                    "user_value_active=" +
+                        fractal.userValueActive
+                )
+                appendLine(
+                    "user_value_axis=normative_tiebreaker_only"
+                )
+                appendLine(
+                    "user_value_changes_evidence_confidence=false"
+                )
+                fractal.userValueAudit
+                    .take(8)
+                    .forEach {
+                        appendLine(
+                            "user_value=" +
+                                clean(it, 500)
+                        )
+                    }
                 appendLine("cause_model_prose_is_evidence=false")
                 appendLine("immune_worst_peaks=" + fractal.worst)
                 appendLine(
@@ -1201,7 +1226,21 @@ object LumenaDiagnosticReport {
                 causeRuntimeHypotheses =
                     causeRuntime.hypotheses,
                 causeRuntimeProbes =
-                    causeRuntime.probes
+                    causeRuntime.probes,
+                userValueRecords =
+                    stats.userValueRecords,
+                userValueActive =
+                    stats.userValueActive,
+                userValueAudit =
+                    FractalExperienceCanvasStore
+                        .activeUserValueWeights(
+                            context
+                        )
+                        .take(8)
+                        .map {
+                            FractalUserValueWeightPolicy
+                                .auditLine(it)
+                        }
             )
         }.getOrElse { failure ->
             DiagnosticFractalExperienceView(
