@@ -3,9 +3,9 @@ package com.lumena.android.ollama
 /**
  * Commitment-aware context selection.
  *
- * Runtime use goes through the Layer Governor (layer "commitments"): only a
- * randomized share of tasks gets the pinned reminder, so its effect on
- * success and tokens is measured rather than assumed.
+ * Runtime commitment reminders are not governed or randomized. They represent
+ * still-active user instructions and therefore remain binding context until the
+ * user revokes or replaces them. Advisory experiments must never withhold them.
  *
  * OllamaContextPolicy.compact keeps the newest turns that fit the budget, so
  * a user prohibition stated early in a long session ("не чіпай config.json")
