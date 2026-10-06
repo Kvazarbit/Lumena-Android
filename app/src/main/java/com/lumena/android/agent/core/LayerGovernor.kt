@@ -20,9 +20,7 @@ enum class AdvisoryLayer(val key: String) {
     CONSTITUTION("constitution"),
     REFLEX("reflex"),
     /** Candidate Core DNA additions, measured before promotion. */
-    PRINCIPLES("principles"),
-    /** Reminder of earlier user commitments that recency compaction may drop. */
-    COMMITMENTS("commitments");
+    PRINCIPLES("principles");
 
     companion object {
         fun fromKey(key: String): AdvisoryLayer? = entries.firstOrNull { it.key == key }
@@ -216,10 +214,10 @@ object LayerGovernorPolicy {
     const val CHECKPOINT_TRIALS = 100
     /** Unresolved-rate gap between arms above which estimates are not trusted. */
     const val MAX_ATTRITION_GAP = 0.10
-    /** Bonferroni over 9 layers at 5% two-sided. */
-    const val Z_LAYER = 2.77
-    /** Bonferroni over 36 layer pairs at 5% two-sided. */
-    const val Z_PAIR = 3.20
+    /** Bonferroni over 8 advisory layers at 5% two-sided. */
+    const val Z_LAYER = 2.73
+    /** Bonferroni over 28 advisory-layer pairs at 5% two-sided. */
+    const val Z_PAIR = 3.12
 
     fun taskHash(taskId: String): String =
         MessageDigest.getInstance("SHA-256")
