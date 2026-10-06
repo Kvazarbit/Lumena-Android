@@ -31,7 +31,9 @@ data class FractalExperienceCanvasStats(
     val causeProbed: Int = 0,
     val causeVerified: Int = 0,
     val causeContested: Int = 0,
-    val causeRejected: Int = 0
+    val causeRejected: Int = 0,
+    val userValueRecords: Int = 0,
+    val userValueActive: Int = 0
 )
 
 object FractalExperienceCanvasCodec {
@@ -495,7 +497,13 @@ object FractalExperienceCanvasStore {
                 causeContested =
                     causal.causeContested,
                 causeRejected =
-                    causal.causeRejected
+                    causal.causeRejected,
+                userValueRecords =
+                    state.userValueWeights.size,
+                userValueActive =
+                    FractalUserValueWeightPolicy
+                        .active(state)
+                        .size
             )
         }
 
