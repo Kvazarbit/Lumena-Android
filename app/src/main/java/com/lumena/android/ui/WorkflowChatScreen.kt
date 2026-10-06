@@ -1788,16 +1788,18 @@ fun WorkflowChatScreen(
             .activeCommitments(earlierHumanTurns)
             .filterNot { line -> text.contains(line) }
         val commitmentContext =
-            CommitmentPinning.reminder(pinnedCommitments)
-                ?.takeIf {
-                    LayerGovernorStore.expose(
-                        context = context,
-                        task = task,
-                        layer = AdvisoryLayer.COMMITMENTS,
-                        modelId = currentModelId()
+            CommitmentPinning
+                .reminder(
+                    pinnedCommitments
+                )
+                ?.let {
+                    listOf(
+                        OllamaMessage(
+                            "user",
+                            it
+                        )
                     )
                 }
-                ?.let { listOf(OllamaMessage("user", it)) }
                 .orEmpty()
         val turnHistory =
             epochHistory +
