@@ -184,7 +184,8 @@ data class DiagnosticFractalExperienceView(
     val causeRuntimeProbes: Int = 0,
     val userValueRecords: Int = 0,
     val userValueActive: Int = 0,
-    val userValueAudit: List<String> = emptyList()
+    val userValueAudit: List<String> = emptyList(),
+    val userValueCandidates: List<String> = emptyList()
 )
 
 data class LumenaDiagnosticInput(
@@ -843,6 +844,17 @@ object LumenaDiagnosticFormatter {
                                 clean(it, 500)
                         )
                     }
+                fractal.userValueCandidates
+                    .take(8)
+                    .forEach {
+                        appendLine(
+                            "user_value_candidate=" +
+                                clean(it, 500)
+                        )
+                    }
+                appendLine(
+                    "user_value_command=/fractal-weight <node-id> <-3..3>"
+                )
                 appendLine("cause_model_prose_is_evidence=false")
                 appendLine("immune_worst_peaks=" + fractal.worst)
                 appendLine(
@@ -1240,6 +1252,38 @@ object LumenaDiagnosticReport {
                         .map {
                             FractalUserValueWeightPolicy
                                 .auditLine(it)
+                        },
+                userValueCandidates =
+                    FractalExperienceCanvasStore
+                        .nodes(
+                            context = context,
+                            limit = 8
+                        )
+                        .filter {
+                            it.level !=
+                                FractalExperienceLevel
+                                    .EPISODE
+                        }
+                        .take(8)
+                        .map { node ->
+                            "node=" +
+                                node.id +
+                                " level=" +
+                                node.level.name +
+                                " peak=" +
+                                node.peak.name +
+                                " tasks=" +
+                                node.distinctTasks +
+                                " confidence=" +
+                                (
+                                    node.confidence
+                                        .coerceIn(
+                                            0.0,
+                                            1.0
+                                        ) * 100
+                                    ).toInt() +
+                                "% summary=" +
+                                node.summary.take(180)
                         }
             )
         }.getOrElse { failure ->
