@@ -18,6 +18,9 @@
 
 Ніколи не керуються і не вимикаються: Core DNA, HARD-інваріанти, ToolRegistry/ToolGate,
 обмеження користувача, Goal Contract, перевірки ContextKernel, підтвердження дій.
+Зокрема **binding user commitments** (наприклад «не чіпай config.json») не є advisory layer
+і не можуть потрапляти у WITHHELD-arm. Їхній reminder завжди зберігається, доки користувач
+його явно не відкличе або не замінить.
 
 ## Як працює
 
