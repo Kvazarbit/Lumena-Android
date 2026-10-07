@@ -154,7 +154,7 @@ object EffectiveTaskPolicyCompiler {
                 )
                     .filterNot {
                         isNegatedOperation(
-                            maskedCurrent,
+                            operationalMasked,
                             it
                         )
                     } +
@@ -176,7 +176,7 @@ object EffectiveTaskPolicyCompiler {
                 )
                     .filterNot {
                         isNegatedOperation(
-                            maskedCurrent,
+                            operationalMasked,
                             it
                         )
                     } +

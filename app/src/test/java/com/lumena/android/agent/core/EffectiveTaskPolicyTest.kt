@@ -199,6 +199,38 @@ class EffectiveTaskPolicyTest {
     }
 
     @Test
+    fun bareContinuationKeepsNegatedMutationFromRootBlocked() {
+        val policy =
+            EffectiveTaskPolicyCompiler
+                .compile(
+                    rootGoal =
+                        "Тільки прочитай demo.py; не виправ його.",
+                    currentInstruction =
+                        "продовж"
+                )
+
+        assertEquals(
+            listOf(ToolRisk.READ_ONLY),
+            policy.allowedRisks
+        )
+        assertFalse(
+            EffectiveTaskPolicyCompiler
+                .validateTool(
+                    policy,
+                    AgentDecision.ToolCall(
+                        "file.patch",
+                        mapOf(
+                            "path" to "demo.py",
+                            "old" to "bad",
+                            "new" to "good"
+                        )
+                    )
+                )
+                .allowed
+        )
+    }
+
+    @Test
     fun explicitMutationAfterReadOnlyRootUsesNewCurrentInstruction() {
         val policy =
             EffectiveTaskPolicyCompiler
