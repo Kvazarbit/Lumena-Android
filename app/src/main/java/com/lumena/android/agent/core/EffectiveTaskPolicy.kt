@@ -112,14 +112,22 @@ object EffectiveTaskPolicyCompiler {
             maskQuoted(current)
         val maskedRoot =
             maskQuoted(root)
+        val operationalMasked =
+            if (isBareContinuation(current)) {
+                maskedRoot
+            } else {
+                maskedCurrent
+            }
 
         val currentToolDirectives =
             toolDirectives(maskedCurrent)
         val rootToolDirectives =
             toolDirectives(maskedRoot)
+        val operationalToolDirectives =
+            toolDirectives(operationalMasked)
         val effectText =
             maskToolNames(
-                maskedCurrent
+                operationalMasked
             )
 
         val readOnlyMatches =
@@ -129,12 +137,12 @@ object EffectiveTaskPolicyCompiler {
             )
         val noExecuteMatches =
             findPositions(
-                maskedCurrent,
+                operationalMasked,
                 noExecuteCues
             )
                 .filterNot {
                     explicitToolFollows(
-                        maskedCurrent,
+                        operationalMasked,
                         it
                     )
                 }
@@ -150,7 +158,7 @@ object EffectiveTaskPolicyCompiler {
                             it
                         )
                     } +
-                    currentToolDirectives
+                    operationalToolDirectives
                         .filter {
                             !it.forbidden &&
                                 ToolRegistry.get(
@@ -172,7 +180,7 @@ object EffectiveTaskPolicyCompiler {
                             it
                         )
                     } +
-                    currentToolDirectives
+                    operationalToolDirectives
                         .filter {
                             !it.forbidden &&
                                 ToolRegistry.get(
@@ -250,9 +258,9 @@ object EffectiveTaskPolicyCompiler {
         val conflictingMutation =
             readOnlyMatches.isNotEmpty() &&
                 mutationMatches.isNotEmpty() &&
-                !sequenceCues.containsMatchIn(maskedCurrent) &&
+                !sequenceCues.containsMatchIn(operationalMasked) &&
                 sameClauseConflict(
-                    maskedCurrent,
+                    operationalMasked,
                     readOnlyMatches,
                     mutationMatches
                 )

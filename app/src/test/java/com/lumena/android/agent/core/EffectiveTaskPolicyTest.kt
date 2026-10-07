@@ -144,6 +144,97 @@ class EffectiveTaskPolicyTest {
     }
 
     @Test
+    fun bareContinuationInheritsReadOnlyAndNoExecuteFromRootGoal() {
+        val policy =
+            EffectiveTaskPolicyCompiler
+                .compile(
+                    rootGoal =
+                        "Тільки прочитай demo.py. Нічого не змінюй і не запускай нічого.",
+                    currentInstruction =
+                        "продовж"
+                )
+
+        assertEquals(
+            "продовж",
+            policy.currentInstruction
+        )
+        assertEquals(
+            listOf(ToolRisk.READ_ONLY),
+            policy.allowedRisks
+        )
+        assertEquals(
+            TaskIntent.FILE_INSPECTION,
+            TaskIntentRouter
+                .route(policy)
+                .intent
+        )
+        assertFalse(
+            EffectiveTaskPolicyCompiler
+                .validateTool(
+                    policy,
+                    AgentDecision.ToolCall(
+                        "file.patch",
+                        mapOf(
+                            "path" to "demo.py",
+                            "old" to "bad",
+                            "new" to "good"
+                        )
+                    )
+                )
+                .allowed
+        )
+        assertFalse(
+            EffectiveTaskPolicyCompiler
+                .validateTool(
+                    policy,
+                    AgentDecision.ToolCall(
+                        "python.run",
+                        mapOf(
+                            "script" to "demo.py"
+                        )
+                    )
+                )
+                .allowed
+        )
+    }
+
+    @Test
+    fun explicitMutationAfterReadOnlyRootUsesNewCurrentInstruction() {
+        val policy =
+            EffectiveTaskPolicyCompiler
+                .compile(
+                    rootGoal =
+                        "Тільки прочитай demo.py. Нічого не змінюй.",
+                    currentInstruction =
+                        "Тепер виправ demo.py через file.patch."
+                )
+
+        assertTrue(
+            ToolRisk.MUTATING in
+                policy.allowedRisks
+        )
+        assertTrue(
+            "file.patch" in
+                policy.requiredTools
+        )
+        assertTrue(
+            EffectiveTaskPolicyCompiler
+                .validateTool(
+                    policy,
+                    AgentDecision.ToolCall(
+                        "file.patch",
+                        mapOf(
+                            "path" to "demo.py",
+                            "old" to "bad",
+                            "new" to "good"
+                        )
+                    )
+                )
+                .allowed
+        )
+    }
+
+    @Test
     fun explicitReadOnlyContinuationUsesCurrentIntent() {
         val policy =
             EffectiveTaskPolicyCompiler
