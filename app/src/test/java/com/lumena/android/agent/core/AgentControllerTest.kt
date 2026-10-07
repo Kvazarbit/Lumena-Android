@@ -1222,6 +1222,121 @@ class AgentControllerTest {
     }
 
     @Test
+    fun malformedRequestsToolEnvelopeInsideProseCannotFinishGeneralTask() {
+        val generalTask =
+            TaskState(
+                id = "general-malformed-request",
+                projectId = null,
+                goal = "але ти раніше запускав сервер",
+                currentInstruction =
+                    "але ти раніше запускав сервер",
+                status =
+                    TaskStatus.WAITING_MODEL
+            )
+        val state =
+            controller.initial(generalTask)
+
+        assertEquals(
+            TaskIntent.GENERAL,
+            state.intent
+        )
+
+        val reply =
+            controller.interpret(
+                "Так, можу спробувати. Крок 1: Перевіряю файли. {\"requests\": \"workspace.list\"}",
+                state
+            )
+
+        assertTrue(
+            reply is
+                ControllerInstruction.AskModelAgain
+        )
+        reply as
+            ControllerInstruction.AskModelAgain
+        assertTrue(
+            reply.state.task.status !=
+                TaskStatus.DONE
+        )
+        assertFalse(reply.state.toolUsed)
+        assertEquals(
+            0,
+            reply.state.task.step
+        )
+    }
+
+    @Test
+    fun prosePromiseToRunRegisteredToolCannotFinishWithoutToolResult() {
+        val generalTask =
+            TaskState(
+                id = "general-tool-promise",
+                projectId = null,
+                goal = "але ти раніше запускав сервер",
+                currentInstruction =
+                    "але ти раніше запускав сервер",
+                status =
+                    TaskStatus.WAITING_MODEL
+            )
+        val state =
+            controller.initial(generalTask)
+
+        val reply =
+            controller.interpret(
+                "Я зараз перевірю це через workspace.list.",
+                state
+            )
+
+        assertTrue(
+            reply is
+                ControllerInstruction.AskModelAgain
+        )
+        reply as
+            ControllerInstruction.AskModelAgain
+        assertTrue(
+            reply.feedback.contains(
+                "no TOOL_RESULT"
+            )
+        )
+        assertTrue(
+            reply.state.task.status !=
+                TaskStatus.DONE
+        )
+    }
+
+    @Test
+    fun explanatoryGeneralReplyMayMentionToolWithoutClaimingExecution() {
+        val generalTask =
+            TaskState(
+                id = "general-tool-explanation",
+                projectId = null,
+                goal =
+                    "що таке workspace.list?",
+                currentInstruction =
+                    "що таке workspace.list?",
+                status =
+                    TaskStatus.WAITING_MODEL
+            )
+        val state =
+            controller.initial(generalTask)
+
+        val reply =
+            controller.interpret(
+                "workspace.list — це read-only інструмент для перегляду доступного workspace.",
+                state
+            )
+
+        assertTrue(
+            reply is
+                ControllerInstruction.Finish
+        )
+        reply as ControllerInstruction.Finish
+        assertEquals(
+            TaskStatus.DONE,
+            reply.state.task.status
+        )
+        assertFalse(reply.state.toolUsed)
+    }
+
+    @Test
     fun publicWebPlainReplyFinishesAfterSuccessfulSourceRead() {
         val webTask = TaskState(
             id = "web-plain-finish",

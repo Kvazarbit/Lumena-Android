@@ -954,8 +954,17 @@ class AgentController(
                     trimmed.contains("\"partial\"") ||
                     (trimmed.contains("\"name\"") && trimmed.contains("\"arguments\""))
                 )
+        val embeddedRegisteredRequest =
+            ToolRegistry.all().any { spec ->
+                Regex(
+                    "(?iu)\\\"(?:request|requests)\\\"\\s*:\\s*\\\"" +
+                        Regex.escape(spec.name) +
+                        "\\\""
+                ).containsMatchIn(trimmed)
+            }
         val looksLikeBrokenProtocol =
             hasProtocolJsonShape ||
+                embeddedRegisteredRequest ||
                 (trimmed.startsWith("{") && Regex("\"[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\"\\s*:").containsMatchIn(trimmed)) ||
                 trimmed.contains("<tool_call>", ignoreCase = true)
 
@@ -963,6 +972,44 @@ class AgentController(
             return protocolRetry(
                 state,
                 "The previous output looked like a tool/protocol message but could not be parsed safely. Return exactly one valid tool/done/partial/reply JSON object. No proposed tool was executed."
+            )
+        }
+
+        val registeredToolMention =
+            ToolRegistry.all().any { spec ->
+                Regex(
+                    "(?iu)(?<![a-z0-9_])" +
+                        Regex.escape(spec.name) +
+                        "(?![a-z0-9_])"
+                ).containsMatchIn(trimmed)
+            }
+        val lowerReply = trimmed.lowercase()
+        val unexecutedActionClaim =
+            !state.toolUsed &&
+                registeredToolMention &&
+                listOf(
+                    "я запущ",
+                    "я зараз запущ",
+                    "я перевір",
+                    "перевіряю",
+                    "я створю",
+                    "я знайду",
+                    "я викона",
+                    "i'll run",
+                    "i will run",
+                    "i'll check",
+                    "i will check",
+                    "i'll start",
+                    "i will start",
+                    "teraz uruchom",
+                    "zaraz uruchom",
+                    "sprawdzę",
+                    "sprawdze"
+                ).any(lowerReply::contains)
+        if (unexecutedActionClaim) {
+            return protocolRetry(
+                state,
+                "The model claimed it would execute a registered tool action, but no TOOL_RESULT exists. Return exactly one valid tool JSON object, or answer without claiming that execution happened."
             )
         }
 
