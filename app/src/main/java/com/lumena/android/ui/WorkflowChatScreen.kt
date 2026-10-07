@@ -110,6 +110,8 @@ import com.lumena.android.ollama.CommitmentPinning
 import com.lumena.android.agent.core.CandidatePrinciples
 import com.lumena.android.agent.core.GovernorCostAccumulator
 import com.lumena.android.agent.core.LayerGovernorPolicy
+import com.lumena.android.agent.core.LeastActionPolicy
+import com.lumena.android.settings.LeastActionStore
 import com.lumena.android.agent.core.TaskIntentRouter
 import com.lumena.android.settings.FractalTaskEpisode
 import com.lumena.android.settings.LayerGovernorStore
@@ -1227,6 +1229,21 @@ fun WorkflowChatScreen(
             },
             checkpoint = { control ->
                 withContext(Dispatchers.IO) { ContextCheckpointStore.save(context, control) }
+            },
+            onActionOutcome = { task, request, result, elapsedMs, prediction ->
+                // Shadow ledger for U and E; never changes which tool runs.
+                LeastActionStore.record(
+                    context = context,
+                    task = task,
+                    modelId = currentModelId(),
+                    tool = request.tool,
+                    ok = result.ok,
+                    elapsedMs = elapsedMs,
+                    predictedOk = LeastActionPolicy.predictedOk(
+                        prediction?.expectOk,
+                        prediction?.confidence
+                    )
+                )
             },
             onToolExperience = { task, request, result, elapsedMs ->
                 runCatching {

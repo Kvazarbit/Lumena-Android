@@ -259,6 +259,20 @@ class ProtocolNormalizer {
             return null
         }
 
+        // Optional outcome prediction. A malformed prediction is dropped,
+        // never a protocol failure: it must not cost the user a retry.
+        when (val value = obj["expect_ok"]) {
+            is Boolean -> canonical["expect_ok"] = value
+            is String -> value.trim().lowercase().toBooleanStrictOrNull()
+                ?.let { canonical["expect_ok"] = it }
+        }
+        when (val value = obj["confidence"]) {
+            is Number -> value.toDouble()
+            is String -> value.trim().toDoubleOrNull()
+            else -> null
+        }?.takeIf { it.isFinite() && it in 0.0..1.0 }
+            ?.let { canonical["confidence"] = it }
+
         copyCauseString(
             "cause_hypothesis",
             600

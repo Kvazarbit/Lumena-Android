@@ -12,7 +12,11 @@ sealed interface AgentDecision {
         // before any pending approval/session persistence.
         val causeHypothesis: String? = null,
         val causeProbeOnSuccess: String? = null,
-        val causeProbeOnFailure: String? = null
+        val causeProbeOnFailure: String? = null,
+        // Pre-execution prediction for the least-action ledger. Optional;
+        // never permission and never evidence.
+        val expectOk: Boolean? = null,
+        val confidence: Double? = null
     ) : AgentDecision
 
     data class Done(val summary: String) : AgentDecision

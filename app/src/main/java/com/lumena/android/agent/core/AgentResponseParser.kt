@@ -89,6 +89,17 @@ class AgentResponseParser {
             ?.takeIf(String::isNotBlank)
             ?.take(24)
 
+        val expectOk = when (val value = obj["expect_ok"]) {
+            is Boolean -> value
+            is String -> value.trim().lowercase().toBooleanStrictOrNull()
+            else -> null
+        }
+        val confidence = when (val value = obj["confidence"]) {
+            is Number -> value.toDouble()
+            is String -> value.trim().toDoubleOrNull()
+            else -> null
+        }?.takeIf { it.isFinite() && it in 0.0..1.0 }
+
         return AgentDecision.ToolCall(
             tool = tool,
             args = args,
@@ -96,7 +107,9 @@ class AgentResponseParser {
             plan = plan,
             causeHypothesis = causeHypothesis,
             causeProbeOnSuccess = causeProbeOnSuccess,
-            causeProbeOnFailure = causeProbeOnFailure
+            causeProbeOnFailure = causeProbeOnFailure,
+            expectOk = expectOk,
+            confidence = confidence
         )
     }
 

@@ -229,6 +229,7 @@ data class LumenaDiagnosticInput(
     val cognitiveInfluence: DiagnosticCognitiveInfluenceView =
         DiagnosticCognitiveInfluenceView(),
     val layerGovernor: List<String> = emptyList(),
+    val leastAction: List<String> = emptyList(),
     val taskTrail: List<String> = emptyList(),
     val cognitiveRegression: CognitiveRegressionReport? = null,
     val predictionDelta: DiagnosticPredictionDeltaView =
@@ -625,6 +626,14 @@ object LumenaDiagnosticFormatter {
                 appendLine("trials=0")
             } else {
                 input.layerGovernor.forEach { appendLine(clean(it, 400)) }
+            }
+            appendLine()
+
+            appendLine("[LEAST_ACTION]")
+            if (input.leastAction.isEmpty()) {
+                appendLine("outcomes=0 status=WAITING_FOR_DATA")
+            } else {
+                input.leastAction.forEach { appendLine(clean(it, 400)) }
             }
             appendLine()
 
@@ -1108,6 +1117,7 @@ object LumenaDiagnosticReport {
             layaShadow = layaShadow,
             cognitiveInfluence = cognitiveInfluence,
             layerGovernor = LayerGovernorFormatter.lines(app),
+            leastAction = LeastActionFormatter.lines(app),
             taskTrail = runCatching {
                 FractalExperienceCanvasStore.trailSummaries(app).take(24).map { s ->
                     s.level.name.lowercase() +
@@ -1693,6 +1703,35 @@ object LumenaDiagnosticReport {
 }
 
 /** Renders the Layer Governor table: one line per layer, then conflicts. */
+object LeastActionFormatter {
+    fun lines(context: android.content.Context): List<String> =
+        runCatching {
+            val report = LeastActionStore.latestReport(context)
+                ?: return@runCatching listOf("outcomes=0 status=WAITING_FOR_DATA")
+            render(report)
+        }.getOrElse { listOf("error=" + (it.message ?: it::class.simpleName.orEmpty())) }
+
+    fun render(report: com.lumena.android.agent.core.LeastActionReport): List<String> = buildList {
+        val r = report.readiness
+        fun f(x: Double?) = x?.let { String.format(java.util.Locale.ROOT, "%.3f", it) } ?: "-"
+        add(
+            "model=" + report.modelId +
+                " status=" + r.status.name +
+                " predictions=" + r.predictions + "/" + r.needed +
+                " outcomes=" + report.outcomes
+        )
+        add("calibration skill=" + f(r.skill) + " ece=" + f(r.ece) + " brier=" + f(r.brier) + " (out-of-sample)")
+        add(
+            "formula J=C+R+U+E-G weights=unfitted-equal mode=shadow" +
+                " shadows=" + report.shadows +
+                " agreed=" + report.agreed +
+                " agreed_ok=" + report.agreedOk +
+                " disagreed_ok=" + report.disagreedOk +
+                " label=observational"
+        )
+    }
+}
+
 object LayerGovernorFormatter {
     fun lines(context: android.content.Context): List<String> =
         runCatching {

@@ -19,6 +19,7 @@ import com.lumena.android.agent.core.TaskIntentRouter
 import com.lumena.android.agent.local.PlannedTool
 import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.CauseProbeExecutionIntent
+import com.lumena.android.agent.local.OutcomePrediction
 import com.lumena.android.agent.local.ToolExecutor
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
@@ -91,6 +92,13 @@ class WorkflowRunner(
     ) -> Unit = { _, _, _ -> },
     private val onReflexPartial: (TaskState) -> Unit = {},
     private val onToolExperience: (TaskState, ToolRequest, ToolResult, Long) -> Unit = { _, _, _, _ -> },
+    private val onActionOutcome: (
+        TaskState,
+        ToolRequest,
+        ToolResult,
+        Long,
+        OutcomePrediction?
+    ) -> Unit = { _, _, _, _, _ -> },
     private val onCauseProbeExperience: (
         TaskState,
         ToolRequest,
@@ -486,7 +494,13 @@ class WorkflowRunner(
                                         onFailure =
                                             instruction.call.causeProbeOnFailure
                                     )
+                                },
+                        prediction =
+                            instruction.call.expectOk?.let { expect ->
+                                instruction.call.confidence?.let { confidence ->
+                                    OutcomePrediction(expect, confidence)
                                 }
+                            }
                     )
 
                     if (!planned.allowed) {
@@ -557,7 +571,8 @@ class WorkflowRunner(
                         result,
                         startedNs,
                         onProgress,
-                        planned.causeProbeIntent
+                        planned.causeProbeIntent,
+                        planned.prediction
                     )
 
                     val transition = controller.afterTool(
@@ -701,7 +716,8 @@ class WorkflowRunner(
             result,
             startedNs,
             onProgress,
-            pending.plan.causeProbeIntent
+            pending.plan.causeProbeIntent,
+            pending.plan.prediction
         )
 
         val call = AgentDecision.ToolCall(
@@ -1061,7 +1077,8 @@ class WorkflowRunner(
         result: ToolResult,
         startedNs: Long,
         onProgress: (String) -> Unit,
-        causeProbeIntent: CauseProbeExecutionIntent? = null
+        causeProbeIntent: CauseProbeExecutionIntent? = null,
+        prediction: OutcomePrediction? = null
     ) {
         if (result.outcomeUnknown) {
             onProgress("UNKNOWN OUTCOME · результат не врахований як успіх або невдача")
@@ -1082,6 +1099,15 @@ class WorkflowRunner(
         } catch (error: Exception) {
             onProgress(
                 "EXPERIENCE NOT SAVED · " +
+                    error.message.orEmpty().take(300)
+            )
+        }
+
+        try {
+            onActionOutcome(task, request, result, elapsedMs, prediction)
+        } catch (error: Exception) {
+            onProgress(
+                "PREDICTION NOT SAVED · " +
                     error.message.orEmpty().take(300)
             )
         }

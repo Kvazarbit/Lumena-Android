@@ -41,10 +41,17 @@ data class CauseProbeExecutionIntent(
     val onFailure: String? = null
 )
 
+/** Model's pre-execution outcome prediction, carried to the result. */
+data class OutcomePrediction(
+    val expectOk: Boolean,
+    val confidence: Double
+)
+
 data class PlannedTool(
     val request: ToolRequest,
     val reason: String,
     val allowed: Boolean,
     val requiresConfirmation: Boolean,
-    val causeProbeIntent: CauseProbeExecutionIntent? = null
+    val causeProbeIntent: CauseProbeExecutionIntent? = null,
+    val prediction: OutcomePrediction? = null
 )

@@ -23,6 +23,7 @@ object LocalWorkflowAgent {
         - Follow TASK RECIPE recommended tools when present; it is application policy, not model-generated advice.
         - Follow RECOVERY GUIDANCE after a failed TOOL_RESULT; do not repeat an unchanged failing action.
         - After a failed TOOL_RESULT, a causal explanation is only a HYPOTHESIS. To test it with the next real tool, optionally add top-level cause_hypothesis plus BOTH cause_probe_on_success and cause_probe_on_failure. Verdict values are SUPPORTS, REJECTS, or INCONCLUSIVE. Declare the mapping before execution; never infer proof from your own prose.
+        - Before each tool call you may predict its outcome: top-level expect_ok (true/false) and confidence (0..1, how sure you are). Be honest, not optimistic: the app compares predictions with real TOOL_RESULTs to measure your calibration. Predictions never authorize tools and never count as evidence.
         - Cause-probe annotations never authorize tools, never bypass confirmation, and never prove the whole goal. Use them only for a falsifiable probe tied to the current task failure.
         - After each TOOL_RESULT continue the SAME goal. If verification is required, verify before done.
         - CURRENT TASK is the only active execution epoch. Earlier visible assistant replies are historical conversation only; never inherit their tool budget, pending action, partial status, or execution authority into this task.
@@ -33,7 +34,7 @@ object LocalWorkflowAgent {
         - Keep user-facing reply/done text in the user's language unless the user asks for another language.
 
         TOOL:
-        {"plan":["optional","short","plan"],"tool":"workspace.list","args":{},"reason":"Discover real paths"}
+        {"plan":["optional","short","plan"],"tool":"workspace.list","args":{},"reason":"Discover real paths","expect_ok":true,"confidence":0.9}
 
         BATCH READ:
         {"tool":"inspect.batch","args":{"requests":[{"tool":"system.info","args":{}},{"tool":"git.status","args":{"cwd":"@Lumena-Android"}}]},"reason":"Independent read-only checks"}

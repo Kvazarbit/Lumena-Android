@@ -41,6 +41,12 @@ MUTANTS = (
     ("python-run-write-capability", CORE / "ToolRegistry.kt",
      "ToolCapability.EXECUTE_CODE,\n            ToolCapability.WRITE_WORKSPACE,\n            ToolCapability.NETWORK",
      "ToolCapability.EXECUTE_CODE,\n            ToolCapability.NETWORK"),
+    ("least-action-calibration-gate", CORE / "LeastAction.kt",
+     "val ready = skill != null && skill >= MIN_SKILL && ece <= MAX_ECE",
+     "val ready = true"),
+    ("least-action-data-gate", CORE / "LeastAction.kt",
+     "if (samples.size < MIN_PREDICTIONS) {",
+     "if (samples.size < 0) {"),
 )
 TEST_NAMES = (
     "*RecoveryAdversarialSearchTest",
@@ -48,6 +54,7 @@ TEST_NAMES = (
     "*ReflexKernelTest",
     "*ContextKernelTest",
     "*ToolCapabilityPolicyTest",
+    "*LeastActionPolicyTest",
 )
 
 
