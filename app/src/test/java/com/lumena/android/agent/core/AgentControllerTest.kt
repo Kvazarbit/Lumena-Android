@@ -1309,9 +1309,9 @@ class AgentControllerTest {
                 id = "general-tool-explanation",
                 projectId = null,
                 goal =
-                    "що таке workspace.list?",
+                    "поясни це простими словами",
                 currentInstruction =
-                    "що таке workspace.list?",
+                    "поясни це простими словами",
                 status =
                     TaskStatus.WAITING_MODEL
             )
