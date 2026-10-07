@@ -29,9 +29,22 @@ data class PlannerDecision(
     val reason: String
 )
 
+/**
+ * Pre-execution causal probe metadata.
+ *
+ * Only a hash of model-proposed hypothesis prose is carried past the model
+ * turn. It is never permission and never evidence by itself.
+ */
+data class CauseProbeExecutionIntent(
+    val hypothesisHash: String,
+    val onSuccess: String? = null,
+    val onFailure: String? = null
+)
+
 data class PlannedTool(
     val request: ToolRequest,
     val reason: String,
     val allowed: Boolean,
-    val requiresConfirmation: Boolean
+    val requiresConfirmation: Boolean,
+    val causeProbeIntent: CauseProbeExecutionIntent? = null
 )

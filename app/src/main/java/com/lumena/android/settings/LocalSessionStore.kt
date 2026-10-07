@@ -2,8 +2,13 @@ package com.lumena.android.settings
 
 import android.content.Context
 import com.lumena.android.agent.core.AgentControlState
+import com.lumena.android.agent.core.HistoricalSessionMemory
+import com.lumena.android.agent.core.HistoricalTaskRecord
 import com.lumena.android.agent.core.ResearchThreadState
 import com.lumena.android.agent.core.TaskState
+import com.lumena.android.agent.core.WorkThreadMemory
+import com.lumena.android.agent.core.WorkThreadState
+import com.lumena.android.agent.local.CauseProbeExecutionIntent
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 
@@ -33,7 +38,8 @@ data class PersistedPendingTool(
     val reason: String = "",
     val control: AgentControlState? = null,
     val history: List<PersistedHistoryMessage> = emptyList(),
-    val images: List<PersistedChatImage> = emptyList()
+    val images: List<PersistedChatImage> = emptyList(),
+    val causeProbeIntent: CauseProbeExecutionIntent? = null
 )
 
 data class LocalSessionSnapshot(
@@ -46,7 +52,10 @@ data class LocalSessionSnapshot(
     // bounded researchThread and mirrors rootGoal here for safe migration.
     val researchGoal: String? = null,
     val researchThread: ResearchThreadState? = null,
-    val codeGoal: String? = null
+    val codeGoal: String? = null,
+    val workThreads: WorkThreadState = WorkThreadState(),
+    val historicalFacts: List<HistoricalTaskRecord> = emptyList(),
+    val historicalFactsQuarantined: Int = 0
 )
 
 /**
@@ -68,13 +77,50 @@ object LocalSessionStore {
     private val adapter = moshi.adapter(LocalSessionSnapshot::class.java)
 
     fun load(context: Context): LocalSessionSnapshot {
-        val raw = prefs(context).getString(KEY_SNAPSHOT, null) ?: return LocalSessionSnapshot()
-        return runCatching { adapter.fromJson(raw) }
-            .getOrNull()
-            ?: LocalSessionSnapshot()
+        val raw =
+            prefs(context)
+                .getString(
+                    KEY_SNAPSHOT,
+                    null
+                )
+                ?: return LocalSessionSnapshot()
+        val decoded =
+            runCatching {
+                adapter.fromJson(raw)
+            }.getOrNull()
+                ?: return LocalSessionSnapshot()
+        val normalizedFacts =
+            HistoricalSessionMemory.normalize(
+                decoded.historicalFacts
+            )
+        val dropped =
+            (
+                decoded.historicalFacts.size -
+                    normalizedFacts.size
+                ).coerceAtLeast(0)
+        return decoded.copy(
+            historicalFacts =
+                normalizedFacts,
+            historicalFactsQuarantined =
+                (
+                    decoded
+                        .historicalFactsQuarantined
+                        .coerceAtLeast(0) +
+                        dropped
+                    ).coerceAtMost(10_000)
+        )
     }
 
     fun save(context: Context, snapshot: LocalSessionSnapshot) = synchronized(StateVaultLock.monitor) {
+        val normalizedFacts =
+            HistoricalSessionMemory.normalize(
+                snapshot.historicalFacts
+            )
+        val newlyQuarantined =
+            (
+                snapshot.historicalFacts.size -
+                    normalizedFacts.size
+                ).coerceAtLeast(0)
         val bounded = snapshot.copy(
             chat = snapshot.chat.takeLast(MAX_CHAT_MESSAGES).map { message ->
                 message.copy(
@@ -95,6 +141,21 @@ object LocalSessionStore {
                 .map { it.copy(content = it.content.take(MAX_MESSAGE_CHARS)) },
             pending = snapshot.pending?.copy(
                 requestId = snapshot.pending.requestId?.take(220),
+                causeProbeIntent =
+                    snapshot.pending.causeProbeIntent?.copy(
+                        hypothesisHash =
+                            snapshot.pending.causeProbeIntent
+                                .hypothesisHash
+                                .take(24),
+                        onSuccess =
+                            snapshot.pending.causeProbeIntent
+                                .onSuccess
+                                ?.take(24),
+                        onFailure =
+                            snapshot.pending.causeProbeIntent
+                                .onFailure
+                                ?.take(24)
+                    ),
                 control = snapshot.pending.control?.copy(
                     plan = snapshot.pending.control.plan.take(6).map { it.take(180) },
                     task = snapshot.pending.control.task.copy(
@@ -132,7 +193,20 @@ object LocalSessionStore {
                     .map { it.take(2_000) }
                     .distinct()
                     .takeLast(16)
-            )
+            ),
+            workThreads =
+                WorkThreadMemory.normalize(
+                    snapshot.workThreads
+                ),
+            historicalFacts =
+                normalizedFacts,
+            historicalFactsQuarantined =
+                (
+                    snapshot
+                        .historicalFactsQuarantined
+                        .coerceAtLeast(0) +
+                        newlyQuarantined
+                    ).coerceAtMost(10_000)
         )
         prefs(context).edit().putString(KEY_SNAPSHOT, adapter.toJson(bounded)).apply()
         // History mirrors only bounded, app-private context. Workspace files are never copied/rolled back.

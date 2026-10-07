@@ -92,7 +92,16 @@ class ContextBuilderTest {
 
         assertTrue(context.length <= ConstitutionCapsule.MIN_CONTEXT_CHARS)
         assertTrue(context.contains("CONSTITUTION CAPSULE ${ConstitutionCapsule.VERSION}"))
-        assertTrue(context.contains("goal=" + "G".repeat(320)))
+        assertTrue(
+            context.contains(
+                "goal=" + "G".repeat(100)
+            )
+        )
+        assertTrue(
+            context.contains(
+                "goal middle omitted"
+            )
+        )
         assertTrue(context.contains("VERIFICATION REQUIRED BEFORE DONE"))
         assertTrue(context.contains("V".repeat(320)))
         assertTrue(context.contains("NO TOOL BUDGET"))
@@ -174,6 +183,60 @@ class ContextBuilderTest {
         assertTrue(context.contains("TOOL_RESULT is the only execution proof"))
         assertTrue(context.length <= ConstitutionCapsule.MIN_CONTEXT_CHARS)
         assertTrue(context.contains("[lower-priority context omitted]") || !context.contains("OPTIONAL MEMORY"))
+    }
+
+    @Test
+    fun typedGoalContractObligationsStayInMandatoryContext() {
+        val contract = GoalContract(
+            coverage = GoalContractCoverage.TYPED_OPERATIONAL_V1,
+            criteria = listOf(
+                AcceptanceCriterion(
+                    id = "operational-tool-evidence",
+                    kind = CriterionKind.OPERATIONAL_TOOL_EVIDENCE,
+                    status = CriterionStatus.PASSED
+                ),
+                AcceptanceCriterion(
+                    id = "source-content-evidence",
+                    kind = CriterionKind.SOURCE_CONTENT_EVIDENCE,
+                    status = CriterionStatus.PENDING
+                )
+            )
+        )
+        val context = ContextBuilder(
+            maxChars = ConstitutionCapsule.MIN_CONTEXT_CHARS
+        ).build(
+            task = TaskState(
+                id = "goal-contract-context",
+                projectId = null,
+                goal = "Find and verify current source evidence",
+                status = TaskStatus.WAITING_MODEL,
+                goalContract = contract
+            ),
+            project = null,
+            relevantMemory = List(12) {
+                "optional memory " + "x".repeat(500)
+            }
+        )
+
+        assertTrue(
+            context.contains(
+                "GOAL CONTRACT (typed operational coverage; not full semantic proof)"
+            )
+        )
+        assertTrue(
+            context.contains(
+                "pending=source-content-evidence"
+            )
+        )
+        assertTrue(
+            context.contains(
+                "- source-content-evidence"
+            )
+        )
+        assertTrue(
+            context.length <=
+                ConstitutionCapsule.MIN_CONTEXT_CHARS
+        )
     }
 
     @Test

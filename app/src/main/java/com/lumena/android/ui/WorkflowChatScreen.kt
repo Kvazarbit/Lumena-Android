@@ -68,6 +68,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.core.AgentControlState
+import com.lumena.android.agent.core.EffectiveTaskPolicyCompiler
+import com.lumena.android.agent.core.HistoricalSessionMemory
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.local.PlannerDecision
@@ -81,6 +83,7 @@ import com.lumena.android.llama.EmbeddedLlamaClient
 import com.lumena.android.llama.EmbeddedLlamaRuntime
 import com.lumena.android.llama.LlamaHardwareProfile
 import com.lumena.android.ollama.ChatModelClient
+import com.lumena.android.ollama.ExecutionEpochHistory
 import com.lumena.android.ollama.LocalWorkflowAgent
 import com.lumena.android.ollama.ModelContextUsage
 import com.lumena.android.ollama.OllamaClient
@@ -91,6 +94,7 @@ import com.lumena.android.ollama.WorkflowImage
 import com.lumena.android.ollama.WorkflowRunner
 import com.lumena.android.settings.LocalSessionSnapshot
 import com.lumena.android.settings.HistoryTreeStore
+import com.lumena.android.settings.HistoricalInstallIdentity
 import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.settings.ContextCheckpointStore
 import com.lumena.android.settings.AdaptiveWebResearchStore
@@ -102,6 +106,7 @@ import com.lumena.android.agent.core.ProjectContextResolver
 import com.lumena.android.agent.core.PreviousTaskOutcomeContext
 import com.lumena.android.agent.core.ResearchThreadResolver
 import com.lumena.android.agent.core.ResearchThreadState
+import com.lumena.android.agent.core.WorkThreadMemory
 import com.lumena.android.agent.core.ReflexRuntimeAdvice
 import com.lumena.android.agent.core.TinyJevReflexAdapter
 import com.lumena.android.settings.ContextGenomeStats
@@ -117,6 +122,7 @@ import com.lumena.android.settings.ReflexExperienceRanker
 import com.lumena.android.settings.TinyJevAssetLoader
 import com.lumena.android.settings.TinyJevCalibrationStore
 import com.lumena.android.settings.LayaShadowStore
+import com.lumena.android.settings.VerifiedCauseLadderStore
 import com.lumena.android.settings.GenomeCapsule
 import com.lumena.android.settings.GenomeUnpackedUnit
 import com.lumena.android.settings.LumenaPreferences
@@ -226,12 +232,62 @@ fun WorkflowChatScreen(
     var codeGoal by remember {
         mutableStateOf(restored.codeGoal ?: CodeTaskAnchor.restore(restored.chat.map { it.role to it.text }))
     }
+    var workThreads by remember {
+        mutableStateOf(
+            WorkThreadMemory.restore(
+                turns =
+                    restored.chat.map {
+                        it.role to it.text
+                    },
+                seedState =
+                    restored.workThreads
+            ).let { recovered ->
+                if (
+                    recovered.anchors.isNotEmpty() ||
+                    restored.codeGoal.isNullOrBlank()
+                ) {
+                    recovered
+                } else {
+                    WorkThreadMemory.restore(
+                        turns =
+                            listOf(
+                                "user" to
+                                    restored.codeGoal
+                                        .orEmpty()
+                            ),
+                        seedState =
+                            recovered
+                    )
+                }
+            }
+        )
+    }
     var researchThread by remember {
         mutableStateOf(
             restored.researchThread
                 ?: restored.researchGoal?.let { legacy ->
                     ResearchThreadState(rootGoal = legacy)
                 }
+        )
+    }
+    val historicalInstallRef =
+        remember {
+            HistoricalInstallIdentity.ref(
+                context
+            )
+        }
+    var historicalFacts by remember {
+        mutableStateOf(
+            HistoricalSessionMemory.normalize(
+                restored.historicalFacts
+            )
+        )
+    }
+    var historicalFactsQuarantined by remember {
+        mutableStateOf(
+            restored
+                .historicalFactsQuarantined
+                .coerceAtLeast(0)
         )
     }
     var busy by remember {
@@ -290,8 +346,64 @@ fun WorkflowChatScreen(
     }
 
     fun restoredPendingFrom(saved: PersistedPendingTool?): PendingWorkflowTool? = saved?.let {
-        val planned = ToolGate.plan(PlannerDecision(request = ToolRequest(it.tool, it.args, it.requestId), reason = it.reason))
-        val control = it.control ?: currentTask?.let { task -> AgentControlState(task = task) } ?: return@let null
+        val rawControl =
+            it.control
+                ?: currentTask?.let {
+                    task ->
+                    AgentControlState(
+                        task = task
+                    )
+                }
+                ?: return@let null
+        val restoredTask =
+            rawControl.task
+        val restoredPolicy =
+            EffectiveTaskPolicyCompiler
+                .compile(
+                    rootGoal =
+                        restoredTask.goal,
+                    currentInstruction =
+                        restoredTask
+                            .currentInstruction
+                            .ifBlank {
+                                restoredTask.goal
+                            },
+                    unresolvedEffects =
+                        restoredTask
+                            .effectivePolicy
+                            .unresolvedEffects,
+                    scopeRef =
+                        restoredTask
+                            .effectivePolicy
+                            .scopeRef
+                )
+        val control =
+            rawControl.copy(
+                task =
+                    restoredTask.copy(
+                        currentInstruction =
+                            restoredPolicy
+                                .currentInstruction,
+                        effectivePolicy =
+                            restoredPolicy
+                    )
+            )
+        val planned = ToolGate.plan(
+            PlannerDecision(
+                request = ToolRequest(
+                    it.tool,
+                    it.args,
+                    it.requestId
+                ),
+                reason = it.reason
+            ),
+            taskPolicy =
+                control.task
+                    .effectivePolicy
+        ).copy(
+            causeProbeIntent =
+                it.causeProbeIntent
+        )
         if (planned.allowed) {
             PendingWorkflowTool(
                 plan = planned,
@@ -336,6 +448,8 @@ fun WorkflowChatScreen(
                 args = active.plan.request.args,
                 requestId = active.plan.request.requestId,
                 reason = active.plan.reason,
+                causeProbeIntent =
+                    active.plan.causeProbeIntent,
                 control = active.control,
                 history = active.history.filterNot { it.role == "system" }
                     .map { PersistedHistoryMessage(it.role, it.content) },
@@ -352,8 +466,18 @@ fun WorkflowChatScreen(
         inputDraft = input,
         researchGoal = researchThread?.rootGoal,
         researchThread = researchThread,
-        codeGoal = codeGoal
+        codeGoal = codeGoal,
+        workThreads = workThreads,
+        historicalFacts = historicalFacts,
+        historicalFactsQuarantined =
+            historicalFactsQuarantined
     )
+
+    fun currentBranchId(): String =
+        HistoryTreeStore
+            .activeBranch(context)
+            ?.id
+            .orEmpty()
 
     fun persistSession() {
         LocalSessionStore.save(context, sessionSnapshot())
@@ -371,6 +495,30 @@ fun WorkflowChatScreen(
 
     fun acceptControl(taskId: String, runToken: Long, control: AgentControlState) {
         if (!coordinator.isCurrent(runToken, taskId) || !isCurrentTask(taskId)) return
+        val previousKernel =
+            currentTask?.kernel
+        if (
+            control.task.kernel !=
+                previousKernel
+        ) {
+            historicalFacts =
+                HistoricalSessionMemory.reconcile(
+                    records =
+                        historicalFacts,
+                    verificationTask =
+                        control.task
+                )
+            historicalFacts =
+                HistoricalSessionMemory.record(
+                    existing =
+                        historicalFacts,
+                    task = control.task,
+                    sourceInstallRef =
+                        historicalInstallRef,
+                    branchId =
+                        currentBranchId()
+                )
+        }
         currentTask = control.task
         persistSession()
     }
@@ -404,13 +552,23 @@ fun WorkflowChatScreen(
         if (storedHistory != history) history = storedHistory
 
         val storedPending = restoredPendingFrom(stored.pending)
-        if (storedPending?.plan?.request != pending?.plan?.request) pending = storedPending
+        if (storedPending?.plan != pending?.plan) {
+            pending = storedPending
+        }
         val storedThread = stored.researchThread
             ?: stored.researchGoal?.let { legacy ->
                 ResearchThreadState(rootGoal = legacy)
             }
         if (storedThread != researchThread) researchThread = storedThread
         codeGoal = stored.codeGoal
+        historicalFacts =
+            HistoricalSessionMemory.normalize(
+                stored.historicalFacts
+            )
+        historicalFactsQuarantined =
+            stored
+                .historicalFactsQuarantined
+                .coerceAtLeast(0)
 
         busy = stored.task?.status in setOf(
             TaskStatus.PLANNING, TaskStatus.WAITING_MODEL, TaskStatus.EXECUTING, TaskStatus.VERIFYING
@@ -440,6 +598,8 @@ fun WorkflowChatScreen(
         contextUsage = null
         researchThread = null
         codeGoal = null
+        historicalFacts = emptyList()
+        historicalFactsQuarantined = 0
         bubbles.clear()
         bubbles += ChatBubble("assistant", "Новий чат. Що хочеш зробити?")
         busy = false
@@ -1035,6 +1195,23 @@ fun WorkflowChatScreen(
 
                 coordinatorFailure?.let { throw it }
                 verifiedProjectionFailure?.let { throw it }
+            },
+            onCauseProbeExperience = {
+                    task,
+                    request,
+                    result,
+                    intent,
+                    _ ->
+                VerifiedCauseLadderStore
+                    .observeToolResult(
+                        context = context,
+                        taskId = task.id,
+                        modelId =
+                            constitutionContributorModelId,
+                        request = request,
+                        result = result,
+                        intent = intent
+                    )
             })
     }
 
@@ -1154,6 +1331,20 @@ fun WorkflowChatScreen(
     fun send() {
         val text = input.trim()
         if (text.isBlank() || busy) return
+        if (
+            ExecutionEpochHistory
+                .isTransportOnlyTurn(text)
+        ) {
+            input = ""
+            bubbles += ChatBubble(
+                "error",
+                "LUMENA_TOOL is Companion transport, not a Local work goal. " +
+                    "No task or tool was started."
+            )
+            scrollRequest++
+            persistSession()
+            return
+        }
         if (inferenceBackend == "embedded" && ggufPath.isBlank()) {
             showSettings = true
             ggufPickerStatus = "Choose a GGUF model first."
@@ -1166,15 +1357,48 @@ fun WorkflowChatScreen(
 
         input = ""
         val previous = currentTask
+        previous?.let { completedOrInterrupted ->
+            historicalFacts =
+                HistoricalSessionMemory.record(
+                    existing =
+                        historicalFacts,
+                    task =
+                        completedOrInterrupted,
+                    sourceInstallRef =
+                        historicalInstallRef,
+                    branchId =
+                        currentBranchId()
+                )
+        }
+        val workResolution =
+            WorkThreadMemory.resolve(
+                text = text,
+                state = workThreads,
+                previousProjectId =
+                    previous?.projectId
+            )
+        workThreads = workResolution.state
         val codeResolution = CodeTaskAnchor.resolve(
-            text, codeGoal, bubbles.lastOrNull { it.role == "assistant" }?.text
+            workResolution.goal,
+            codeGoal,
+            bubbles.lastOrNull {
+                it.role == "assistant"
+            }?.text
         )
         codeGoal = codeResolution.anchor
-        val resolution = ResearchThreadResolver.resolve(
-            text = codeResolution.text,
-            previousGoal = previous?.goal,
-            thread = researchThread
-        )
+        val resolution =
+            if (workResolution.continued) {
+                com.lumena.android.agent.core.ResearchThreadResolution(
+                    goal = codeResolution.text,
+                    thread = researchThread
+                )
+            } else {
+                ResearchThreadResolver.resolve(
+                    text = codeResolution.text,
+                    previousGoal = previous?.goal,
+                    thread = researchThread
+                )
+            }
         val resolvedGoal = resolution.goal
         researchThread = resolution.thread
         val referenceUsesPreviousTask =
@@ -1187,12 +1411,44 @@ fun WorkflowChatScreen(
             carryForward =
                 referenceUsesPreviousTask ||
                     resolution.followUpKind.name !=
-                    "NONE"
-        )
+                    "NONE" ||
+                    workResolution.continued
+        ) ?: workResolution.projectId
+        val selectedHistorical =
+            HistoricalSessionMemory.select(
+                records =
+                    historicalFacts,
+                branchId =
+                    currentBranchId(),
+                projectId =
+                    projectId,
+                subjectKeys =
+                    WorkThreadMemory.subjectKeys(
+                        resolvedGoal
+                    )
+            )
+        val effectivePolicy =
+            EffectiveTaskPolicyCompiler.compile(
+                rootGoal =
+                    resolvedGoal,
+                currentInstruction =
+                    text,
+                unresolvedEffects =
+                    HistoricalSessionMemory
+                        .unresolvedForPolicy(
+                            selectedHistorical
+                        ),
+                scopeRef =
+                    projectId
+                        ?: currentBranchId()
+            )
         val task = TaskState(
             id = UUID.randomUUID().toString(),
             projectId = projectId,
             goal = resolvedGoal,
+            currentInstruction = text,
+            effectivePolicy =
+                effectivePolicy,
             status = TaskStatus.WAITING_MODEL
         )
         val languageIntent = FractalLanguageIntentPolicy.canonicalIntent(
@@ -1212,6 +1468,21 @@ fun WorkflowChatScreen(
                 }
             }
         }
+        val historicalContext =
+            HistoricalSessionMemory.render(
+                selectedHistorical
+            )
+        val epochHistory =
+            ExecutionEpochHistory.rebuild(
+                systemMessage = systemMessage,
+                visibleTurns =
+                    bubbles.map {
+                        it.role to it.text
+                    },
+                historicalContext =
+                    historicalContext
+            )
+
         taskApprovals.clear()
         currentTask = task
         bubbles += ChatBubble("user", text)
@@ -1221,18 +1492,33 @@ fun WorkflowChatScreen(
             listOf(OllamaMessage("user", "HISTORICAL TASK CHECKPOINT; verify current state before acting. " +
                 "Earlier tool success is not proof for this new task.\n" + ContextKernel.capsule(previous.kernel, 1200)))
             else emptyList()
+        val workContext =
+            workResolution.contextMessage
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+                ?.let {
+                    listOf(
+                        OllamaMessage(
+                            "user",
+                            it
+                        )
+                    )
+                }
+                .orEmpty()
         val researchContext = resolution.contextMessage
             ?.takeIf { it.isNotBlank() }
             ?.let { listOf(OllamaMessage("user", it)) }
             .orEmpty()
         val turnHistory =
-            history +
+            epochHistory +
                 previousContext +
+                workContext +
                 researchContext +
                 OllamaMessage(
                     "user",
                     if (resolvedGoal != text) {
-                        "$text\nResolved research task:\n$resolvedGoal"
+                        "$text\nResolved active task:\n$resolvedGoal"
                     } else {
                         text
                     }
@@ -1288,6 +1574,20 @@ fun WorkflowChatScreen(
         pending = null
         researchThread = null
         codeGoal = null
+        workThreads =
+            WorkThreadMemory.restore(
+                branch.session.chat.map {
+                    it.role to it.text
+                }
+            )
+        historicalFacts =
+            HistoricalSessionMemory.normalize(
+                branch.session.historicalFacts
+            )
+        historicalFactsQuarantined =
+            branch.session
+                .historicalFactsQuarantined
+                .coerceAtLeast(0)
         contextUsage = null
         history = listOf(systemMessage) + branch.session.history.map { OllamaMessage(it.role, it.content) }
         val retainedIds = branch.session.chat.map { it.id }.toSet()
@@ -1543,6 +1843,17 @@ fun WorkflowChatScreen(
                 experienceNegative = experienceStats.negative,
                 experienceUnresolved = experienceStats.unresolvedNegative,
                 experienceTotal = experienceStats.total,
+                historicalTaskRecords =
+                    historicalFacts.size,
+                historicalImportedRecords =
+                    historicalFacts.count {
+                        it.origin ==
+                            com.lumena.android.agent.core
+                                .HistoricalRecordOrigin
+                                .IMPORTED_ADVISORY
+                    },
+                historicalQuarantinedRecords =
+                    historicalFactsQuarantined,
                 genomeStats = genomeStats,
                 genomeCapsules = genomeCapsules,
                 onUnpackGenome = { id -> ContextGenomeStore.unpack(context, id) },
@@ -2088,6 +2399,9 @@ private fun ModelAndConnectionSheet(
     experienceNegative: Int,
     experienceUnresolved: Int,
     experienceTotal: Int,
+    historicalTaskRecords: Int,
+    historicalImportedRecords: Int,
+    historicalQuarantinedRecords: Int,
     genomeStats: ContextGenomeStats,
     genomeCapsules: List<GenomeCapsule>,
     onUnpackGenome: (String) -> GenomeUnpackedUnit?,
@@ -2245,6 +2559,29 @@ private fun ModelAndConnectionSheet(
         Text(
             "Total $experienceTotal · positive $experiencePositive · negative $experienceNegative · unresolved $experienceUnresolved",
             style = MaterialTheme.typography.bodySmall
+        )
+
+        HorizontalDivider()
+        Text(
+            "Historical execution receipts",
+            style =
+                MaterialTheme.typography
+                    .titleMedium
+        )
+        Text(
+            "Past app-owned execution facts only. They are not current evidence, permission, approval, or completion proof.",
+            style =
+                MaterialTheme.typography
+                    .bodySmall,
+            color =
+                MaterialTheme.colorScheme
+                    .onSurfaceVariant
+        )
+        Text(
+            "Stored $historicalTaskRecords · imported advisory $historicalImportedRecords · quarantined $historicalQuarantinedRecords",
+            style =
+                MaterialTheme.typography
+                    .bodySmall
         )
 
         HorizontalDivider()

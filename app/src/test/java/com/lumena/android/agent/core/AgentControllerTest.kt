@@ -16,6 +16,160 @@ class AgentControllerTest {
     )
 
     @Test
+    fun causeProbeMetadataNeedsPriorFailedToolEvidence() {
+        val state = controller.initial(
+            TaskState(
+                id = "cause-before-failure",
+                projectId = null,
+                goal = "Перевір файл demo.py",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+
+        val instruction = controller.interpret(
+            """{"tool":"workspace.list","args":{},"cause_hypothesis":"Path state differs","cause_probe_on_success":"SUPPORTS","cause_probe_on_failure":"REJECTS"}""",
+            state
+        )
+
+        assertTrue(
+            instruction is
+                ControllerInstruction.AskModelAgain
+        )
+        instruction as ControllerInstruction.AskModelAgain
+        assertTrue(
+            instruction.feedback.contains(
+                "CAUSE_PROBE_REJECTED"
+            )
+        )
+        assertEquals(0, instruction.state.task.step)
+    }
+
+    @Test
+    fun falsifiableCauseProbeIsAllowedAfterRealFailure() {
+        var state = controller.initial(
+            TaskState(
+                id = "cause-after-failure",
+                projectId = null,
+                goal = "Перевір файл demo.py",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        state = controller.afterTool(
+            state = state,
+            call = AgentDecision.ToolCall(
+                tool = "file.read",
+                args = mapOf(
+                    "path" to "demo.py"
+                )
+            ),
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "No such file"
+        ).state
+
+        val instruction = controller.interpret(
+            """{"tool":"workspace.list","args":{},"reason":"check current paths","cause_hypothesis":"Path state differs","cause_probe_on_success":"SUPPORTS","cause_probe_on_failure":"REJECTS"}""",
+            state
+        )
+
+        assertTrue(
+            instruction is
+                ControllerInstruction.Execute
+        )
+        instruction as ControllerInstruction.Execute
+        assertEquals(
+            "Path state differs",
+            instruction.call.causeHypothesis
+        )
+        assertEquals(
+            "SUPPORTS",
+            instruction.call.causeProbeOnSuccess
+        )
+        assertEquals(
+            "REJECTS",
+            instruction.call.causeProbeOnFailure
+        )
+    }
+
+    @Test
+    fun explicitCauseProbeGoalRejectsUnannotatedProbeAfterFailure() {
+        var state = controller.initial(
+            TaskState(
+                id = "cause-required-probe",
+                projectId = null,
+                goal = "Після FAILED TOOL_RESULT виконай workspace.list як cause probe з cause_hypothesis і mappings.",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        state = controller.afterTool(
+            state = state,
+            call = AgentDecision.ToolCall(
+                tool = "file.read",
+                args = mapOf("path" to "missing.txt")
+            ),
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "No such file"
+        ).state
+
+        val instruction = controller.interpret(
+            """{"tool":"workspace.list","args":{},"reason":"probe current workspace"}""",
+            state
+        )
+
+        assertTrue(
+            instruction is ControllerInstruction.AskModelAgain
+        )
+        instruction as ControllerInstruction.AskModelAgain
+        assertTrue(
+            instruction.feedback.contains(
+                "CAUSE_PROBE_REQUIRED"
+            )
+        )
+    }
+
+    @Test
+    fun halfSpecifiedCauseProbeIsRejectedBeforeExecution() {
+        var state = controller.initial(
+            TaskState(
+                id = "cause-half-probe",
+                projectId = null,
+                goal = "Перевір файл demo.py",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        state = controller.afterTool(
+            state = state,
+            call = AgentDecision.ToolCall(
+                tool = "file.read",
+                args = mapOf("path" to "demo.py")
+            ),
+            ok = false,
+            stdout = "",
+            stderr = "",
+            error = "No such file"
+        ).state
+
+        val instruction = controller.interpret(
+            """{"tool":"workspace.list","args":{},"cause_hypothesis":"Path state differs","cause_probe_on_success":"SUPPORTS"}""",
+            state
+        )
+
+        assertTrue(
+            instruction is
+                ControllerInstruction.AskModelAgain
+        )
+        instruction as ControllerInstruction.AskModelAgain
+        assertTrue(
+            instruction.feedback.contains(
+                "provide both"
+            )
+        )
+    }
+
+    @Test
     fun ordinaryReplyCanFinishBeforeToolWork() {
         val conversational = TaskState(
             id = "chat",
@@ -389,12 +543,23 @@ class AgentControllerTest {
 
     @Test
     fun successfulPythonVerificationClearsRequirement() {
-        var state = controller.initial(task()).copy(
-            toolUsed = true,
-            verificationRequired = true,
-            pendingPythonPaths = setOf("demo.py"),
-            verificationReason = "verify python"
-        )
+        var state = controller.initial(task())
+        state = controller.afterTool(
+            state = state,
+            call = AgentDecision.ToolCall(
+                tool = "file.write",
+                args = mapOf(
+                    "path" to "demo.py",
+                    "content" to "print('ok')"
+                )
+            ),
+            ok = true,
+            stdout = "wrote=demo.py",
+            stderr = "",
+            error = null
+        ).state
+        assertTrue(state.verificationRequired)
+
         val call = AgentDecision.ToolCall(
             tool = "python.syntax_check",
             args = mapOf("script" to "demo.py")
@@ -403,13 +568,21 @@ class AgentControllerTest {
             state,
             call,
             ok = true,
-            stdout = "",
+            stdout = "Syntax OK",
             stderr = "",
             error = null
         ).state
         assertFalse(state.verificationRequired)
+        assertTrue(
+            GoalContractPolicy.allMandatoryPassed(
+                state.task.goalContract
+            )
+        )
 
-        val done = controller.interpret("""{"done":true,"summary":"verified"}""", state)
+        val done = controller.interpret(
+            """{"done":true,"summary":"verified"}""",
+            state
+        )
         assertTrue(done is ControllerInstruction.Finish)
     }
 
@@ -487,15 +660,22 @@ class AgentControllerTest {
 
     @Test
     fun taskAllowsFinalModelTurnAtToolLimit() {
-        val atLimit = task().copy(
+        val atLimit = TaskState(
+            id = "final-turn-general",
+            projectId = null,
+            goal = "Summarize the already verified result",
             status = TaskStatus.WAITING_MODEL,
             step = 4,
             maxSteps = 4
         )
         assertTrue(atLimit.canContinue)
 
-        val state = controller.initial(atLimit).copy(toolUsed = true)
-        val done = controller.interpret("""{"done":true,"summary":"verified"}""", state)
+        val state =
+            controller.initial(atLimit)
+        val done = controller.interpret(
+            """{"done":true,"summary":"verified"}""",
+            state
+        )
         assertTrue(done is ControllerInstruction.Finish)
     }
 
@@ -593,7 +773,14 @@ class AgentControllerTest {
 
     @Test
     fun fullProjectPytestCanCloseAllPendingVerificationButSelectedPytestCannot() {
-        val base = controller.initial(task()).copy(
+        val base = controller.initial(
+            TaskState(
+                id = "pytest-scope",
+                projectId = "e2e_step87",
+                goal = "запусти тести Python проекту",
+                status = TaskStatus.WAITING_MODEL
+            )
+        ).copy(
             toolUsed = true,
             verificationRequired = true,
             pendingPythonPaths = setOf(
@@ -1035,6 +1222,121 @@ class AgentControllerTest {
     }
 
     @Test
+    fun malformedRequestsToolEnvelopeInsideProseCannotFinishGeneralTask() {
+        val generalTask =
+            TaskState(
+                id = "general-malformed-request",
+                projectId = null,
+                goal = "але ти раніше запускав сервер",
+                currentInstruction =
+                    "але ти раніше запускав сервер",
+                status =
+                    TaskStatus.WAITING_MODEL
+            )
+        val state =
+            controller.initial(generalTask)
+
+        assertEquals(
+            TaskIntent.GENERAL,
+            state.intent
+        )
+
+        val reply =
+            controller.interpret(
+                "Так, можу спробувати. Крок 1: Перевіряю файли. {\"requests\": \"workspace.list\"}",
+                state
+            )
+
+        assertTrue(
+            reply is
+                ControllerInstruction.AskModelAgain
+        )
+        reply as
+            ControllerInstruction.AskModelAgain
+        assertTrue(
+            reply.state.task.status !=
+                TaskStatus.DONE
+        )
+        assertFalse(reply.state.toolUsed)
+        assertEquals(
+            0,
+            reply.state.task.step
+        )
+    }
+
+    @Test
+    fun prosePromiseToRunRegisteredToolCannotFinishWithoutToolResult() {
+        val generalTask =
+            TaskState(
+                id = "general-tool-promise",
+                projectId = null,
+                goal = "але ти раніше запускав сервер",
+                currentInstruction =
+                    "але ти раніше запускав сервер",
+                status =
+                    TaskStatus.WAITING_MODEL
+            )
+        val state =
+            controller.initial(generalTask)
+
+        val reply =
+            controller.interpret(
+                "Я зараз перевірю це через workspace.list.",
+                state
+            )
+
+        assertTrue(
+            reply is
+                ControllerInstruction.AskModelAgain
+        )
+        reply as
+            ControllerInstruction.AskModelAgain
+        assertTrue(
+            reply.feedback.contains(
+                "no TOOL_RESULT"
+            )
+        )
+        assertTrue(
+            reply.state.task.status !=
+                TaskStatus.DONE
+        )
+    }
+
+    @Test
+    fun explanatoryGeneralReplyMayMentionToolWithoutClaimingExecution() {
+        val generalTask =
+            TaskState(
+                id = "general-tool-explanation",
+                projectId = null,
+                goal =
+                    "поясни це простими словами",
+                currentInstruction =
+                    "поясни це простими словами",
+                status =
+                    TaskStatus.WAITING_MODEL
+            )
+        val state =
+            controller.initial(generalTask)
+
+        val reply =
+            controller.interpret(
+                "workspace.list — це read-only інструмент для перегляду доступного workspace.",
+                state
+            )
+
+        assertTrue(
+            reply is
+                ControllerInstruction.Finish
+        )
+        reply as ControllerInstruction.Finish
+        assertEquals(
+            TaskStatus.DONE,
+            reply.state.task.status
+        )
+        assertFalse(reply.state.toolUsed)
+    }
+
+    @Test
     fun publicWebPlainReplyFinishesAfterSuccessfulSourceRead() {
         val webTask = TaskState(
             id = "web-plain-finish",
@@ -1085,6 +1387,133 @@ class AgentControllerTest {
         assertTrue(reply.state.task.status == TaskStatus.DONE)
         assertEquals(0, reply.state.protocolRetries)
         assertTrue(reply.text.contains("важливих новин"))
+    }
+
+    @Test
+    fun fileInspectionPlainReplyFinishesAfterVerifiedRead() {
+        val localTask = TaskState(
+            id = "file-plain-finish",
+            projectId = null,
+            goal =
+                "Продовж роботу над aquarium.html, але на цьому кроці тільки прочитай поточний файл і скажи наступний безпечний крок. Нічого не змінюй.",
+            status = TaskStatus.WAITING_MODEL,
+            maxSteps = 5
+        )
+        var state =
+            controller.initial(localTask)
+
+        assertEquals(
+            TaskIntent.FILE_INSPECTION,
+            state.intent
+        )
+
+        val read =
+            AgentDecision.ToolCall(
+                tool = "file.read",
+                args =
+                    mapOf(
+                        "path" to
+                            "aquarium.html"
+                    )
+            )
+        state =
+            controller.afterTool(
+                state = state,
+                call = read,
+                ok = true,
+                stdout =
+                    "const WATER_Y=8.2; const FLY_GRAVITY=18.0;",
+                stderr = "",
+                error = null
+            ).state
+
+        assertTrue(
+            GoalContractPolicy
+                .allMandatoryPassed(
+                    state.task.goalContract
+                )
+        )
+
+        val reply =
+            controller.interpret(
+                "Файл прочитано. Наступний безпечний крок — продовжити read-only аналіз JS-логіки без змін.",
+                state
+            )
+
+        assertTrue(
+            reply is
+                ControllerInstruction.Finish
+        )
+        reply as ControllerInstruction.Finish
+        assertEquals(
+            TaskStatus.DONE,
+            reply.state.task.status
+        )
+        assertEquals(
+            0,
+            reply.state.protocolRetries
+        )
+        assertTrue(
+            reply.text.contains(
+                "безпечний крок"
+            )
+        )
+    }
+
+    @Test
+    fun fileInspectionPlainReplyCannotBypassPendingFileRead() {
+        val localTask = TaskState(
+            id = "file-plain-pending",
+            projectId = null,
+            goal =
+                "Знайди aquarium.html і прочитай його.",
+            status = TaskStatus.WAITING_MODEL,
+            maxSteps = 5
+        )
+        var state =
+            controller.initial(localTask)
+
+        val list =
+            AgentDecision.ToolCall(
+                tool = "workspace.list"
+            )
+        state =
+            controller.afterTool(
+                state = state,
+                call = list,
+                ok = true,
+                stdout = "aquarium.html",
+                stderr = "",
+                error = null
+            ).state
+
+        assertFalse(
+            GoalContractPolicy
+                .allMandatoryPassed(
+                    state.task.goalContract
+                )
+        )
+
+        val reply =
+            controller.interpret(
+                "Файл знайдено, все готово.",
+                state
+            )
+
+        assertTrue(
+            reply is
+                ControllerInstruction.AskModelAgain
+        )
+        reply as ControllerInstruction.AskModelAgain
+        assertTrue(
+            reply.feedback.contains(
+                "file-content-evidence"
+            )
+        )
+        assertTrue(
+            reply.state.task.status !=
+                TaskStatus.DONE
+        )
     }
 
     @Test
@@ -1296,10 +1725,19 @@ class AgentControllerTest {
             goal = "знайди фото жінки в інтернеті і покажи",
             status = TaskStatus.WAITING_MODEL
         )
-        val state = controller.initial(visualTask).copy(
-            toolUsed = true,
-            visualEvidenceReady = true
-        )
+        val state = controller.afterTool(
+            state = controller.initial(visualTask),
+            call = AgentDecision.ToolCall(
+                tool = "image.search",
+                args = mapOf(
+                    "query" to "woman portrait"
+                )
+            ),
+            ok = true,
+            stdout = """{"display_ready":true,"images":[{"thumbnail_url":"https://upload.wikimedia.org/example.jpg"}]}""",
+            stderr = "",
+            error = null
+        ).state
 
         val instruction = controller.interpret(
             """{"reply":"Ось знайдені фото."}""",
@@ -1505,6 +1943,31 @@ class AgentControllerTest {
             instruction.state.lastNormalizationRule ==
                 "SINGLE_FUNCTION_TOOL_CALL"
         )
+    }
+
+    @Test
+    fun scientificTestQuestionAcceptsPlainConversationalReplyWithoutToolProtocol() {
+        val conversational = TaskState(
+            id = "science-tests",
+            projectId = null,
+            goal = "це перевірено тестами на 100%, і які є методи стимуляції?",
+            status = TaskStatus.WAITING_MODEL
+        )
+        val state = controller.initial(conversational)
+
+        assertEquals(TaskIntent.GENERAL, state.intent)
+        assertFalse(state.toolUsed)
+        assertTrue(state.plan.isEmpty())
+
+        val instruction = controller.interpret(
+            "Ні, у біології майже ніколи не можна говорити про 100% підтвердження; методи залежать від того, що саме стимулюють.",
+            state
+        )
+
+        assertTrue(instruction is ControllerInstruction.Finish)
+        instruction as ControllerInstruction.Finish
+        assertEquals(TaskStatus.DONE, instruction.state.task.status)
+        assertEquals(0, instruction.state.protocolRetries)
     }
 
     @Test
@@ -1782,5 +2245,281 @@ class AgentControllerTest {
         assertTrue(third is ControllerInstruction.Stop)
         assertTrue(third.state.task.status == TaskStatus.FAILED)
     }
+
+
+    @Test
+    fun bareContinueKeepsRootOperationalContractButFreshKernel() {
+        val state =
+            controller.initial(
+                TaskState(
+                    id = "bare-continue-policy",
+                    projectId = null,
+                    goal =
+                        "Онови aquarium.html: виправ фізику.",
+                    currentInstruction =
+                        "продовж",
+                    status =
+                        TaskStatus.WAITING_MODEL
+                )
+            )
+
+        assertEquals(
+            TaskIntent.CODE_WORK,
+            state.intent
+        )
+        val action =
+            state.task.goalContract.criteria
+                .firstOrNull {
+                    it.kind ==
+                        CriterionKind
+                            .CODE_ACTION_EVIDENCE
+                }
+        assertTrue(action != null)
+        assertEquals(
+            "mutating",
+            action?.subject
+        )
+        assertEquals(
+            0,
+            state.task.kernel.observed
+        )
+        assertTrue(
+            state.task.kernel.evidence
+                .isEmpty()
+        )
+    }
+
+@Test
+    fun currentReadOnlyInstructionOverridesOldMutationRootInController() {
+        val state =
+            controller.initial(
+                TaskState(
+                    id = "policy-read-only",
+                    projectId = null,
+                    goal =
+                        "Онови aquarium.html: реалізуй фізику і виправ код.",
+                    currentInstruction =
+                        "На цьому кроці тільки прочитай aquarium.html і нічого не змінюй.",
+                    status =
+                        TaskStatus.WAITING_MODEL
+                )
+            )
+
+        assertEquals(
+            TaskIntent.FILE_INSPECTION,
+            state.intent
+        )
+        assertEquals(
+            listOf(ToolRisk.READ_ONLY),
+            state.task
+                .effectivePolicy
+                .allowedRisks
+        )
+        assertTrue(
+            state.task.goalContract.criteria
+                .none {
+                    it.kind ==
+                        CriterionKind
+                            .CODE_ACTION_EVIDENCE
+                }
+        )
+
+        val denied =
+            controller.interpret(
+                """{"tool":"file.write","args":{"path":"aquarium.html","content":"bad"}}""",
+                state
+            )
+        assertTrue(
+            denied is
+                ControllerInstruction.AskModelAgain
+        )
+        denied as ControllerInstruction.AskModelAgain
+        assertEquals(
+            0,
+            denied.state.task.step
+        )
+        assertEquals(
+            1,
+            denied.state.policyDenials
+        )
+        assertTrue(
+            denied.feedback.contains(
+                "TASK_POLICY_DENIED"
+            )
+        )
+
+        val read =
+            controller.interpret(
+                """{"tool":"file.read","args":{"path":"aquarium.html"}}""",
+                state
+            )
+        assertTrue(
+            read is
+                ControllerInstruction.Execute
+        )
+        read as ControllerInstruction.Execute
+        assertEquals(
+            "file.read",
+            read.call.tool
+        )
+    }
+
+    @Test
+    fun contradictoryCurrentInstructionRequestsClarificationWithoutTool() {
+        val state =
+            controller.initial(
+                TaskState(
+                    id = "policy-ambiguous",
+                    projectId = null,
+                    goal =
+                        "Виправ demo.txt",
+                    currentInstruction =
+                        "Виправ файл, але нічого не змінюй.",
+                    status =
+                        TaskStatus.WAITING_MODEL
+                )
+            )
+
+        assertEquals(
+            TaskPolicyDisposition
+                .NEEDS_CLARIFICATION,
+            state.task
+                .effectivePolicy
+                .disposition
+        )
+
+        val result =
+            controller.interpret(
+                """{"tool":"file.write","args":{"path":"demo.txt","content":"x"}}""",
+                state
+            )
+
+        assertTrue(
+            result is
+                ControllerInstruction.Finish
+        )
+        result as ControllerInstruction.Finish
+        assertEquals(
+            TaskStatus.PARTIAL,
+            result.state.task.status
+        )
+        assertEquals(
+            0,
+            result.state.task.step
+        )
+        assertTrue(
+            result.text.contains(
+                "уточнення",
+                ignoreCase = true
+            )
+        )
+    }
+
+    @Test
+    fun successfulReadReconcilesUnknownWriteInsideSameTaskPolicy() {
+        val write =
+            AgentDecision.ToolCall(
+                tool = "file.write",
+                args =
+                    mapOf(
+                        "path" to
+                            "demo.txt",
+                        "content" to
+                            "hello"
+                    )
+            )
+        val unresolved =
+            PolicyUnresolvedEffect(
+                sourceTaskRef =
+                    "a".repeat(64),
+                tool = "file.write",
+                requestSignature =
+                    ContextKernel.signature(
+                        write
+                    ),
+                targetRef =
+                    java.security.MessageDigest
+                        .getInstance("SHA-256")
+                        .digest(
+                            "demo.txt"
+                                .toByteArray()
+                        )
+                        .joinToString("") {
+                            "%02x".format(
+                                it.toInt() and
+                                    0xff
+                            )
+                        },
+                origin =
+                    HistoricalRecordOrigin
+                        .LOCAL_CURRENT
+            )
+        var state =
+            controller.initial(
+                TaskState(
+                    id = "policy-reconcile",
+                    projectId = null,
+                    goal =
+                        "Онови demo.txt",
+                    currentInstruction =
+                        "Спочатку прочитай demo.txt, потім онови його.",
+                    effectivePolicy =
+                        EffectiveTaskPolicy(
+                            unresolvedEffects =
+                                listOf(
+                                    unresolved
+                                )
+                        ),
+                    status =
+                        TaskStatus.WAITING_MODEL
+                )
+            )
+
+        val blocked =
+            controller.interpret(
+                """{"tool":"file.write","args":{"path":"demo.txt","content":"hello"}}""",
+                state
+            )
+        assertTrue(
+            blocked is
+                ControllerInstruction.AskModelAgain
+        )
+
+        state =
+            controller.afterTool(
+                state = state,
+                call =
+                    AgentDecision.ToolCall(
+                        tool =
+                            "file.read",
+                        args =
+                            mapOf(
+                                "path" to
+                                    "demo.txt"
+                            )
+                    ),
+                ok = true,
+                stdout = "current",
+                stderr = "",
+                error = null
+            ).state
+
+        assertTrue(
+            state.task.effectivePolicy
+                .unresolvedEffects
+                .isEmpty()
+        )
+
+        val allowed =
+            controller.interpret(
+                """{"tool":"file.write","args":{"path":"demo.txt","content":"hello"}}""",
+                state
+            )
+        assertTrue(
+            allowed is
+                ControllerInstruction.Execute
+        )
+    }
+
 
 }

@@ -55,6 +55,7 @@ import com.lumena.android.settings.LumenaPreferences
 import com.lumena.android.settings.NervousSystemStore
 import com.lumena.android.settings.ExperienceMemoryStore
 import com.lumena.android.settings.CoordinatorExperienceStore
+import com.lumena.android.settings.FractalExperienceCanvasStore
 import com.lumena.android.settings.ConstitutionGenomeStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -316,6 +317,10 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
                                 taskId = command.taskId,
                                 limit = 64
                             )
+                        FractalExperienceCanvasStore.ingest(
+                            context = context,
+                            examples = examples
+                        )
                         val constitutionTask = TaskState(
                             id = command.taskId ?: episodeSessionId,
                             projectId = command.sessionId,

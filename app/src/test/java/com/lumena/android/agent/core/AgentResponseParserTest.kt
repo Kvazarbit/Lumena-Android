@@ -1,6 +1,7 @@
 package com.lumena.android.agent.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -38,6 +39,23 @@ class AgentResponseParserTest {
         assertEquals("README.md", parsed.args["path"])
         assertEquals("Inspect project", parsed.reason)
         assertEquals(listOf("inspect", "verify"), parsed.plan)
+    }
+
+    @Test
+    fun causalProbeAnnotationsStayOutsideToolArgs() {
+        val parsed = parser.parse(
+            """{"tool":"file.read","args":{"path":"demo.py"},"reason":"probe","cause_hypothesis":"The observed path state differs","cause_probe_on_success":"rejects","cause_probe_on_failure":"supports"}"""
+        )
+
+        assertTrue(parsed is AgentDecision.ToolCall)
+        parsed as AgentDecision.ToolCall
+        assertEquals(
+            "The observed path state differs",
+            parsed.causeHypothesis
+        )
+        assertEquals("REJECTS", parsed.causeProbeOnSuccess)
+        assertEquals("SUPPORTS", parsed.causeProbeOnFailure)
+        assertFalse(parsed.args.containsKey("cause_hypothesis"))
     }
 
     @Test

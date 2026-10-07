@@ -1,6 +1,7 @@
 package com.lumena.android.ollama
 
 import com.lumena.android.agent.core.AgentController
+import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.ReflexOption
 import com.lumena.android.agent.core.ReflexRuntimeAdvice
 import com.lumena.android.agent.core.TaskState
@@ -16,6 +17,134 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WorkflowRunnerTest {
+    @Test
+    fun causeProbeCallbackReceivesOnlyHashedHypothesisIntent() =
+        runBlocking {
+            val modelCalls = AtomicInteger(0)
+            val hypothesis =
+                "Path state differs"
+            val modelClient =
+                object : ChatModelClient {
+                    override suspend fun chat(
+                        model: String,
+                        messages: List<OllamaMessage>
+                    ): Result<String> =
+                        when (
+                            modelCalls.incrementAndGet()
+                        ) {
+                            1 -> Result.success(
+                                """{"tool":"file.read","args":{"path":"demo.py"},"reason":"inspect"}"""
+                            )
+
+                            2 -> Result.success(
+                                """{"tool":"workspace.list","args":{},"reason":"probe current paths","cause_hypothesis":"Path state differs","cause_probe_on_success":"SUPPORTS","cause_probe_on_failure":"REJECTS"}"""
+                            )
+
+                            else -> Result.success(
+                                """{"partial":true,"summary":"Probe recorded."}"""
+                            )
+                        }
+                }
+
+            val bridge =
+                object : ToolExecutor {
+                    override suspend fun execute(
+                        toolRequest: ToolRequest
+                    ): ToolResult =
+                        if (
+                            toolRequest.tool ==
+                            "file.read"
+                        ) {
+                            ToolResult(
+                                ok = false,
+                                tool =
+                                    toolRequest.tool,
+                                exitCode = 1,
+                                error =
+                                    "No such file",
+                                failureClass =
+                                    "STATE_DRIFT",
+                                retryable = false,
+                                dependency =
+                                    "filesystem"
+                            )
+                        } else {
+                            ToolResult(
+                                ok = true,
+                                tool =
+                                    toolRequest.tool,
+                                exitCode = 0,
+                                stdout =
+                                    "demo_project/"
+                            )
+                        }
+                }
+
+            val seenHashes =
+                mutableListOf<String>()
+            val task =
+                TaskState(
+                    id = "cause-probe-flow",
+                    projectId = null,
+                    goal =
+                        "Перевір файл demo.py",
+                    status =
+                        TaskStatus.WAITING_MODEL
+                )
+            val control =
+                AgentController()
+                    .initial(task)
+                    .copy(
+                        preflightCompleted =
+                            true
+                    )
+
+            val outcome =
+                WorkflowRunner(
+                    modelClient =
+                        modelClient,
+                    bridge = bridge,
+                    model = "fixture",
+                    onCauseProbeExperience = {
+                            _,
+                            _,
+                            _,
+                            intent,
+                            _ ->
+                        intent
+                            ?.hypothesisHash
+                            ?.let(seenHashes::add)
+                    }
+                ).run(
+                    history =
+                        listOf(
+                            OllamaMessage(
+                                "user",
+                                task.goal
+                            )
+                        ),
+                    task = task,
+                    control = control
+                )
+
+            assertTrue(
+                outcome is
+                    WorkflowOutcome.Finished
+            )
+            assertEquals(
+                listOf(
+                    ContextKernel
+                        .hash(hypothesis)
+                        .take(24)
+                ),
+                seenHashes
+            )
+            assertFalse(
+                seenHashes.single()
+                    .contains(hypothesis)
+            )
+        }
+
     @Test
     fun contextTelemetryIsPublishedBeforeAndAfterModelCall() = runBlocking {
         val estimated = ModelContextUsage(

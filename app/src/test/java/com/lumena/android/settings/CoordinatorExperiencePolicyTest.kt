@@ -1,5 +1,7 @@
 package com.lumena.android.settings
 
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -494,6 +496,138 @@ class CoordinatorExperiencePolicyTest {
         assertTrue(backfill.any { it.id == "legacy-1" })
         assertTrue(backfill.any { it.id == "legacy-100" })
         assertFalse(backfill.any { it.id == "unverified" })
+    }
+
+
+    @Test
+    fun recoveryPreservesStructuredFailureMetadataFromVerifiedToolResult() {
+        val failed = CoordinatorEpisodeEvent(
+            id = "structured-fail",
+            sessionId = "structured-session",
+            taskId = "structured-session",
+            tool = "python.run",
+            target = "script=missing.py",
+            ok = false,
+            experienceId = "ev-structured-fail",
+            at = 100L,
+            surprise = 0.9,
+            outcomeKnown = true,
+            failureClass = "INVALID_INPUT",
+            errorCode = "PYTHON_SCRIPT_REQUIRED",
+            retryable = true,
+            dependency = "tool-schema"
+        )
+        val inspected = CoordinatorEpisodeEvent(
+            id = "structured-inspect",
+            sessionId = "structured-session",
+            taskId = "structured-session",
+            tool = "workspace.list",
+            target = "",
+            ok = true,
+            experienceId = "ev-structured-inspect",
+            at = 200L,
+            surprise = 0.8
+        )
+        val recovered = CoordinatorEpisodeEvent(
+            id = "structured-ok",
+            sessionId = "structured-session",
+            taskId = "structured-session",
+            tool = "python.run",
+            target = "script=missing.py",
+            ok = true,
+            experienceId = "ev-structured-ok",
+            at = 300L,
+            surprise = 1.0
+        )
+
+        val state = listOf(failed, inspected, recovered)
+            .fold(CoordinatorEpisodeState()) { acc, event ->
+                CoordinatorExperiencePolicy.record(acc, event)
+            }
+
+        val example = CoordinatorExperiencePolicy
+            .allVerifiedExamples(state)
+            .first { it.kind == CoordinatorExampleKind.RECOVERY }
+
+        assertEquals(
+            listOf("INVALID_INPUT", null, null),
+            example.failureClasses
+        )
+        assertEquals(
+            listOf("PYTHON_SCRIPT_REQUIRED", null, null),
+            example.errorCodes
+        )
+        assertEquals(
+            listOf(true, null, null),
+            example.retryableFlags
+        )
+        assertEquals(
+            listOf("tool-schema", null, null),
+            example.dependencies
+        )
+    }
+
+
+    @Test
+    fun preStructuredMetadataCoordinatorJsonDecodesWithSafeDefaults() {
+        val json = """
+            {
+              "version": 2,
+              "events": [
+                {
+                  "id": "legacy-event",
+                  "sessionId": "legacy-session",
+                  "taskId": "legacy-task",
+                  "tool": "python.run",
+                  "target": "script=legacy.py",
+                  "ok": false,
+                  "experienceId": "legacy-evidence",
+                  "at": 100,
+                  "surprise": 0.9,
+                  "modelId": "legacy-model",
+                  "scopeHash": "legacy-scope",
+                  "outcomeKnown": true
+                }
+              ],
+              "learnedExamples": [
+                {
+                  "id": "legacy-example",
+                  "kind": "RECOVERY",
+                  "sourceSessionHash": "legacy-task",
+                  "tools": ["python.run", "python.run"],
+                  "targets": ["script=legacy.py", "script=legacy.py"],
+                  "evidenceIds": ["legacy-evidence"],
+                  "updatedAt": 200,
+                  "surprise": 1.0,
+                  "text": "legacy recovery",
+                  "contributorModelIds": ["legacy-model"],
+                  "scopeHash": "legacy-scope",
+                  "outcomes": [false, true]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val adapter = Moshi.Builder()
+            .add(KotlinJsonAdapterFactory())
+            .build()
+            .adapter(CoordinatorEpisodeState::class.java)
+        val decoded = requireNotNull(adapter.fromJson(json))
+
+        val event = decoded.events.single()
+        assertTrue(event.failureClass == null)
+        assertTrue(event.errorCode == null)
+        assertTrue(event.retryable == null)
+        assertTrue(event.dependency == null)
+        assertTrue(event.expectedOutcome == null)
+        assertTrue(event.observedOutcome == null)
+        assertTrue(event.outcomeDelta == null)
+
+        val example = decoded.learnedExamples.single()
+        assertTrue(example.failureClasses.isEmpty())
+        assertTrue(example.errorCodes.isEmpty())
+        assertTrue(example.retryableFlags.isEmpty())
+        assertTrue(example.dependencies.isEmpty())
     }
 
 }

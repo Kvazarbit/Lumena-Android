@@ -6,16 +6,19 @@ import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.AgentDecision
 import com.lumena.android.agent.core.ControllerInstruction
 import com.lumena.android.agent.core.FailureEvent
+import com.lumena.android.agent.core.GoalContext
 import com.lumena.android.agent.core.ReflexCandidateSet
 import com.lumena.android.agent.core.ReflexKernel
 import com.lumena.android.agent.core.ReflexRuntimeAdvice
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
+import com.lumena.android.agent.core.EffectiveTaskPolicyCompiler
 import com.lumena.android.agent.core.ToolRegistry
 import com.lumena.android.agent.core.ToolRisk
 import com.lumena.android.agent.core.TaskIntentRouter
 import com.lumena.android.agent.local.PlannedTool
 import com.lumena.android.agent.local.PlannerDecision
+import com.lumena.android.agent.local.CauseProbeExecutionIntent
 import com.lumena.android.agent.local.ToolExecutor
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
@@ -77,6 +80,13 @@ class WorkflowRunner(
         TaskState
     ) -> ReflexRuntimeAdvice? = { _, _, _ -> null },
     private val onToolExperience: (TaskState, ToolRequest, ToolResult, Long) -> Unit = { _, _, _, _ -> },
+    private val onCauseProbeExperience: (
+        TaskState,
+        ToolRequest,
+        ToolResult,
+        CauseProbeExecutionIntent?,
+        Long
+    ) -> Unit = { _, _, _, _, _ -> },
     private val checkpoint: suspend (AgentControlState) -> Unit = {}
 ) {
     suspend fun run(
@@ -97,13 +107,51 @@ class WorkflowRunner(
         var protocolTurns = 0
         publish(state, onState)
 
-        val intentProfile = TaskIntentRouter.route(state.task.goal)
+        val intentProfile =
+            TaskIntentRouter.route(
+                state.task.effectivePolicy
+            )
         if (!state.preflightCompleted && state.task.step == 0) {
             onProgress(
                 "INTENT · ${intentProfile.intent} · confidence=${intentProfile.confidence}"
             )
 
-            val preflight = intentProfile.preflight
+            val preflightCandidate =
+                intentProfile.preflight
+            val preflightDecision =
+                preflightCandidate?.let {
+                    EffectiveTaskPolicyCompiler
+                        .validateTool(
+                            state.task
+                                .effectivePolicy,
+                            AgentDecision.ToolCall(
+                                tool = it.tool,
+                                args = it.args,
+                                reason =
+                                    it.reason
+                            )
+                        )
+                }
+            val preflight =
+                preflightCandidate
+                    ?.takeIf {
+                        preflightDecision
+                            ?.allowed != false
+                    }
+            if (
+                preflightCandidate != null &&
+                preflight == null
+            ) {
+                onProgress(
+                    "PREFLIGHT SKIPPED BY TASK POLICY · " +
+                        preflightCandidate.tool +
+                        " · " +
+                        preflightDecision
+                            ?.reason
+                            .orEmpty()
+                            .take(500)
+                )
+            }
             if (preflight == null) {
                 state = state.copy(preflightCompleted = true)
                 publish(state, onState)
@@ -409,7 +457,25 @@ class WorkflowRunner(
                             reason = instruction.call.reason.ifBlank {
                                 "Agent requested ${instruction.call.tool}"
                             }
-                        )
+                        ),
+                        taskPolicy =
+                            state.task
+                                .effectivePolicy
+                    ).copy(
+                        causeProbeIntent =
+                            instruction.call.causeHypothesis
+                                ?.takeIf(String::isNotBlank)
+                                ?.let { hypothesis ->
+                                    CauseProbeExecutionIntent(
+                                        hypothesisHash =
+                                            ContextKernel.hash(hypothesis)
+                                                .take(24),
+                                        onSuccess =
+                                            instruction.call.causeProbeOnSuccess,
+                                        onFailure =
+                                            instruction.call.causeProbeOnFailure
+                                    )
+                                }
                     )
 
                     if (!planned.allowed) {
@@ -474,7 +540,14 @@ class WorkflowRunner(
                             collectedImages += image
                         }
                     }
-                    recordExperience(state.task, planned.request, result, startedNs, onProgress)
+                    recordExperience(
+                        state.task,
+                        planned.request,
+                        result,
+                        startedNs,
+                        onProgress,
+                        planned.causeProbeIntent
+                    )
 
                     val transition = controller.afterTool(
                         state = state,
@@ -608,7 +681,14 @@ class WorkflowRunner(
             pending.plan.request,
             rawResult
         )
-        recordExperience(pending.control.task, pending.plan.request, result, startedNs, onProgress)
+        recordExperience(
+            pending.control.task,
+            pending.plan.request,
+            result,
+            startedNs,
+            onProgress,
+            pending.plan.causeProbeIntent
+        )
 
         val call = AgentDecision.ToolCall(
             tool = pending.plan.request.tool,
@@ -781,10 +861,11 @@ class WorkflowRunner(
             constitutionalGuidance = constitutionalGuidance,
             verifiedEvidence = verifiedEvidence
         )
-        val compactGoal = state.task.goal
-            .replace(Regex("[\\r\\n]+"), " ")
-            .trim()
-            .take(1_000)
+        val compactGoal =
+            GoalContext.clip(
+                state.task.goal,
+                1_000
+            )
         val compactLastResult = state.task.lastResult
             ?.replace(Regex("[\\r\\n]+"), " ")
             ?.trim()
@@ -952,16 +1033,50 @@ class WorkflowRunner(
         task = state.task.copy(status = TaskStatus.EXECUTING, kernel = ContextKernel.before(
             state.task.kernel, AgentDecision.ToolCall(request.tool, request.args))))
 
-    private fun recordExperience(task: TaskState, request: ToolRequest, result: ToolResult,
-                                 startedNs: Long, onProgress: (String) -> Unit) {
+    private fun recordExperience(
+        task: TaskState,
+        request: ToolRequest,
+        result: ToolResult,
+        startedNs: Long,
+        onProgress: (String) -> Unit,
+        causeProbeIntent: CauseProbeExecutionIntent? = null
+    ) {
         if (result.outcomeUnknown) {
             onProgress("UNKNOWN OUTCOME · результат не врахований як успіх або невдача")
             return
         }
+
+        val elapsedMs =
+            ((System.nanoTime() - startedNs) / 1_000_000)
+                .coerceAtLeast(0)
+
         try {
-            onToolExperience(task, request, result, ((System.nanoTime() - startedNs) / 1_000_000).coerceAtLeast(0))
+            onToolExperience(
+                task,
+                request,
+                result,
+                elapsedMs
+            )
         } catch (error: Exception) {
-            onProgress("EXPERIENCE NOT SAVED · ${error.message.orEmpty().take(300)}")
+            onProgress(
+                "EXPERIENCE NOT SAVED · " +
+                    error.message.orEmpty().take(300)
+            )
+        }
+
+        try {
+            onCauseProbeExperience(
+                task,
+                request,
+                result,
+                causeProbeIntent,
+                elapsedMs
+            )
+        } catch (error: Exception) {
+            onProgress(
+                "CAUSE PROBE NOT SAVED · " +
+                    error.message.orEmpty().take(300)
+            )
         }
     }
 

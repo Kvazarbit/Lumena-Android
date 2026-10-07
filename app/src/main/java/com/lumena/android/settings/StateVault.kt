@@ -8,6 +8,8 @@ import android.util.AtomicFile
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
+import com.lumena.android.agent.core.HistoricalRecordOrigin
+import com.lumena.android.agent.core.HistoricalSessionMemory
 import com.lumena.android.agent.core.TaskStatus
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -63,11 +65,59 @@ object StateVault {
     private fun error(c: Context, e: Throwable) {
         prefs(c).edit().putString("status", "Копію НЕ збережено: ${e.message}").apply()
     }
-    private fun safeSession(s: LocalSessionSnapshot) = s.copy(pending = null,
+    private fun safeSession(
+        s: LocalSessionSnapshot
+    ) = s.copy(
+        pending = null,
         task = s.task?.let { t ->
-            if (t.status in setOf(TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.CANCELLED)) t
-            else t.copy(status = TaskStatus.CANCELLED, errors = (t.errors + "Відновлено з копії; автоматичне продовження вимкнено").takeLast(8))
-        })
+            val importedPolicy =
+                t.effectivePolicy.copy(
+                    unresolvedEffects =
+                        t.effectivePolicy
+                            .unresolvedEffects
+                            .map {
+                                it.copy(
+                                    origin =
+                                        HistoricalRecordOrigin
+                                            .IMPORTED_ADVISORY
+                                )
+                            }
+                )
+            if (
+                t.status in setOf(
+                    TaskStatus.DONE,
+                    TaskStatus.FAILED,
+                    TaskStatus.CANCELLED
+                )
+            ) {
+                t.copy(
+                    effectivePolicy =
+                        importedPolicy,
+                    executionOrigin =
+                        HistoricalRecordOrigin
+                            .IMPORTED_ADVISORY
+                )
+            } else {
+                t.copy(
+                    effectivePolicy =
+                        importedPolicy,
+                    executionOrigin =
+                        HistoricalRecordOrigin
+                            .IMPORTED_ADVISORY,
+                    status = TaskStatus.CANCELLED,
+                    errors =
+                        (
+                            t.errors +
+                                "Відновлено з копії; автоматичне продовження вимкнено"
+                            ).takeLast(8)
+                )
+            }
+        },
+        historicalFacts =
+            HistoricalSessionMemory.markImported(
+                s.historicalFacts
+            )
+    )
     private fun preferenceBytes(c: Context): ByteArray {
         val groups = prefKeys.mapValues { (group, keys) ->
             c.getSharedPreferences(group, Context.MODE_PRIVATE).all.filterKeys { it in keys }.mapValues { (_, v) ->
