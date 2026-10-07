@@ -362,6 +362,75 @@ class WorkThreadMemoryTest {
     }
 
     @Test
+    fun bareContinuePreservesReadOnlyPolicyThroughWorkThreadResolution() {
+        val root = """
+            Продовж розробку aquarium.html з поточної версії.
+            На цьому кроці тільки знайди і прочитай поточний aquarium.html.
+            Нічого не змінюй і не використовуй file.write, file.patch або python.run.
+        """.trimIndent()
+        val started =
+            WorkThreadMemory.resolve(
+                text = root,
+                state = WorkThreadState()
+            )
+        val continued =
+            WorkThreadMemory.resolve(
+                text = "продовж",
+                state = started.state
+            )
+
+        assertTrue(continued.continued)
+
+        val policy =
+            EffectiveTaskPolicyCompiler
+                .compile(
+                    rootGoal =
+                        continued.goal,
+                    currentInstruction =
+                        "продовж"
+                )
+
+        assertEquals(
+            listOf(ToolRisk.READ_ONLY),
+            policy.allowedRisks
+        )
+        assertEquals(
+            TaskIntent.FILE_INSPECTION,
+            TaskIntentRouter
+                .route(policy)
+                .intent
+        )
+        assertFalse(
+            EffectiveTaskPolicyCompiler
+                .validateTool(
+                    policy,
+                    AgentDecision.ToolCall(
+                        "file.patch",
+                        mapOf(
+                            "path" to "aquarium.html",
+                            "old" to "x",
+                            "new" to "y"
+                        )
+                    )
+                )
+                .allowed
+        )
+        assertFalse(
+            EffectiveTaskPolicyCompiler
+                .validateTool(
+                    policy,
+                    AgentDecision.ToolCall(
+                        "python.run",
+                        mapOf(
+                            "script" to "verify_aquarium.py"
+                        )
+                    )
+                )
+                .allowed
+        )
+    }
+
+    @Test
     fun oneOffFileInspectionDoesNotCreateWorkAnchor() {
         val resolved =
             WorkThreadMemory.resolve(
