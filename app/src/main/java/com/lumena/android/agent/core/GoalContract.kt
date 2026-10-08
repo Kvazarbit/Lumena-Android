@@ -225,7 +225,7 @@ object GoalContractPolicy {
                     val accepted =
                         criterion.subject
                             .split("|")
-                            .map(String::trim)
+                            .map { it.trim() }
                             .filter(String::isNotBlank)
                             .toSet()
                     if (
@@ -518,7 +518,7 @@ object GoalContractPolicy {
         val lower = goal.lowercase()
         val marketplace = listOf(
             "olx", "оголош", "ogłosz", "marketplace", "classified"
-        ).any(lower::contains)
+        ).any { lower.contains(it) }
         val watchJob =
             listOf(
                 "ваканс", "робот", "praca", "job", "ofert pracy"
