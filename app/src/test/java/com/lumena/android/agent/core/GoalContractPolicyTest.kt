@@ -112,6 +112,34 @@ class GoalContractPolicyTest {
     }
 
     @Test
+    fun marketplaceDiscoveryCanSatisfyMarketplaceSourceCriterionWithoutPretendingDirectRead() {
+        var contract = GoalContractPolicy.initial(
+            intent = TaskIntent.PUBLIC_WEB,
+            requiredTools = emptySet(),
+            visualRequired = false,
+            goal = "Знайди на OLX оголошення про роботу в Legionowo"
+        )
+        val call = AgentDecision.ToolCall(
+            tool = "marketplace.search",
+            args = mapOf("query" to "praca Legionowo")
+        )
+        contract = recorded(
+            contract,
+            call,
+            true
+        ).first
+
+        val source = contract.criteria
+            .first { it.id == "source-content-evidence" }
+        assertEquals(CriterionStatus.PASSED, source.status)
+        assertEquals(
+            VerificationStrength.TOOL_RESULT,
+            source.evidence.single().strength
+        )
+        assertTrue(GoalContractPolicy.allMandatoryPassed(contract))
+    }
+
+    @Test
     fun directoryListingGoalDoesNotInventFileContentCriterion() {
         val contract = GoalContractPolicy.initial(
             intent = TaskIntent.FILE_INSPECTION,
