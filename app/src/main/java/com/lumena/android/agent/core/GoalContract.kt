@@ -101,7 +101,12 @@ object GoalContractPolicy {
             criteria += AcceptanceCriterion(
                 id = "source-content-evidence",
                 kind = CriterionKind.SOURCE_CONTENT_EVIDENCE,
-                subject = "web.read|http.get|http.json"
+                subject =
+                    if (isMarketplaceGoal(goal)) {
+                        "marketplace.search"
+                    } else {
+                        "web.read|http.get|http.json"
+                    }
             )
         }
 
@@ -216,26 +221,39 @@ object GoalContractPolicy {
                         criterion
                     }
 
-                CriterionKind.SOURCE_CONTENT_EVIDENCE ->
+                CriterionKind.SOURCE_CONTENT_EVIDENCE -> {
+                    val accepted =
+                        criterion.subject
+                            .split("|")
+                            .map(String::trim)
+                            .filter(String::isNotBlank)
+                            .toSet()
                     if (
                         ok &&
-                        canonical in setOf(
-                            "web.read",
-                            "http.get",
-                            "http.json"
-                        ) &&
+                        canonical in accepted &&
                         toolEvidence != null
                     ) {
                         pass(
                             criterion,
-                            toolEvidence.copy(
-                                strength =
-                                    VerificationStrength.INDEPENDENT_TOOL_RESULT
-                            )
+                            if (
+                                canonical in setOf(
+                                    "web.read",
+                                    "http.get",
+                                    "http.json"
+                                )
+                            ) {
+                                toolEvidence.copy(
+                                    strength =
+                                        VerificationStrength.INDEPENDENT_TOOL_RESULT
+                                )
+                            } else {
+                                toolEvidence
+                            }
                         )
                     } else {
                         criterion
                     }
+                }
 
                 CriterionKind.FILE_CONTENT_EVIDENCE ->
                     if (
@@ -494,6 +512,22 @@ object GoalContractPolicy {
             "zawartość",
             "przeczytaj"
         ).any { lower.contains(it) }
+    }
+
+    private fun isMarketplaceGoal(goal: String): Boolean {
+        val lower = goal.lowercase()
+        val marketplace = listOf(
+            "olx", "оголош", "ogłosz", "marketplace", "classified"
+        ).any(lower::contains)
+        val watchJob =
+            listOf(
+                "ваканс", "робот", "praca", "job", "ofert pracy"
+            ).any(lower::contains) &&
+                listOf(
+                    "слідку", "стеж", "монітор", "monitor", "watch",
+                    "powiad", "нові ваканс", "nowe ofert"
+                ).any(lower::contains)
+        return marketplace || watchJob
     }
 
     private fun requiresToolEvidence(
