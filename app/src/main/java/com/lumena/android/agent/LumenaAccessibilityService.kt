@@ -30,6 +30,9 @@ class LumenaAccessibilityService : AccessibilityService() {
 
         @Volatile var lastChatGptUpdatedAt: Long = 0L
             private set
+
+        @Volatile var lastChatGptGeneratingAt: Long = 0L
+            private set
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -114,7 +117,11 @@ class LumenaAccessibilityService : AccessibilityService() {
     fun isChatGptGenerating(): Boolean {
         val root = rootInActiveWindow ?: return false
         if (root.packageName?.toString() != CHATGPT_PACKAGE) return false
-        return isChatGptGenerating(root)
+        val generating = isChatGptGenerating(root)
+        if (generating) {
+            lastChatGptGeneratingAt = System.currentTimeMillis()
+        }
+        return generating
     }
 
     private fun isChatGptGenerating(root: AccessibilityNodeInfo): Boolean =
@@ -312,8 +319,12 @@ class LumenaAccessibilityService : AccessibilityService() {
     private fun captureChatGptIfVisible() {
         val root = rootInActiveWindow ?: return
         if (root.packageName?.toString() != CHATGPT_PACKAGE) return
+        val now = System.currentTimeMillis()
+        if (isChatGptGenerating(root)) {
+            lastChatGptGeneratingAt = now
+        }
         lastChatGptSnapshot = snapshotOf(root)
-        lastChatGptUpdatedAt = System.currentTimeMillis()
+        lastChatGptUpdatedAt = now
     }
 
     private fun snapshotOf(root: AccessibilityNodeInfo?): ScreenSnapshot = ScreenSnapshot(
