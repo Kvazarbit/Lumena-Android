@@ -490,11 +490,12 @@ object TaskIntentRouter {
 
     private fun isMarketplaceSearch(lower: String): Boolean {
         val marketplaceSubject = listOf(
-            "olx", "оголош", "ogłosz", "marketplace", "classified"
+            "olx", "олх", "оголош", "огалаш", "ogłosz", "oglosz",
+            "marketplace", "classified"
         ).any { containsTerm(lower, it) }
 
         val listingAction = listOf(
-            "знайд", "пошук", "шукай", "подив", "глянь", "перевір",
+            "знайд", "пошук", "шукай", "подив", "падив", "глянь", "перевір",
             "find", "search", "watch", "monitor",
             "znajd", "wyszuk", "sprawd", "śled", "sled",
             "нов", "nowe", "ofert", "ваканс", "робот", "praca", "job"
