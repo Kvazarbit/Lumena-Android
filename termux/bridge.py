@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.27
+Lumena Termux Bridge v0.28
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -58,6 +58,9 @@ LAYA_SOURCE_COMMIT = "941e64863193c1290bffece6c22f8ac828dffecd"
 LAYA_REQUIRED_FILES = ("model.safetensors", "rl_agent_config.json", "tokenizer.json", "config.json")
 CONTEXT_CACHE_FILE = STATE_DIR / "context_snapshot.json"
 SEARCH_DIAGNOSTICS_FILE = STATE_DIR / "web_search_diagnostics.json"
+MARKETPLACE_WATCHES_FILE = STATE_DIR / "marketplace_watches.json"
+MARKETPLACE_WATCH_LOCK = threading.RLock()
+MARKETPLACE_POLLING_IDS: set[str] = set()
 READ_ROOTS_FILE = Path(
     os.environ.get(
         "LUMENA_READ_ROOTS_FILE",
@@ -1211,6 +1214,606 @@ def web_search(
     return result
 
 
+
+def _marketplace_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "tak", "yes"}
+
+
+def _marketplace_tokens(value: str) -> list[str]:
+    stop = {
+        "olx", "www", "pl", "praca", "pracy", "job", "jobs", "oferta", "oferty",
+        "ogloszenie", "ogloszenia", "ogłoszenie", "ogłoszenia", "marketplace",
+        "знайди", "знайти", "пошукай", "шукай", "подивись", "глянь",
+        "робота", "роботу", "вакансія", "вакансії", "нові", "нове",
+        "find", "search", "watch", "monitor", "nowe", "znajdz", "znajdź",
+    }
+    tokens: list[str] = []
+    for raw in re.findall(r"[\w-]+", value.lower(), flags=re.UNICODE):
+        token = raw.strip("_-.")
+        if len(token) < 3 or token in stop:
+            continue
+        if token not in tokens:
+            tokens.append(token)
+    return tokens[:16]
+
+
+def _olx_pl_listing_identity(raw_url: str) -> tuple[str, str] | None:
+    try:
+        parsed = urllib.parse.urlsplit(str(raw_url or "").strip())
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    if host not in {"olx.pl", "www.olx.pl"}:
+        return None
+    if not parsed.path.lower().startswith("/d/oferta/"):
+        return None
+    clean_url = urllib.parse.urlunsplit(
+        ("https", "www.olx.pl", parsed.path, "", "")
+    )
+    match = re.search(r"-ID([A-Za-z0-9]+)\.html$", parsed.path, flags=re.IGNORECASE)
+    listing_id = (
+        "olx-pl:" + match.group(1)
+        if match
+        else "olx-pl:" + hashlib.sha256(clean_url.encode()).hexdigest()[:16]
+    )
+    return listing_id, clean_url
+
+
+def _olx_pl_page_url(raw_url: str) -> str | None:
+    try:
+        parsed = urllib.parse.urlsplit(str(raw_url or "").strip())
+    except ValueError:
+        return None
+    host = (parsed.hostname or "").lower()
+    if host not in {"olx.pl", "www.olx.pl"}:
+        return None
+    return urllib.parse.urlunsplit(
+        ("https", "www.olx.pl", parsed.path, parsed.query, "")
+    )
+
+
+def _marketplace_job_requested(query: str, category: str) -> bool:
+    lower = (query + " " + category).lower()
+    return category in {"job", "jobs", "praca", "work"} or any(
+        cue in lower
+        for cue in (
+            "praca", "pracy", "ваканс", "робот", "job", "zatrud",
+            "pracownik", "stanowisk", "ofert pracy",
+        )
+    )
+
+
+def marketplace_search(
+    args: dict[str, Any],
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    provider = str(args.get("provider") or "olx-pl").strip().lower()
+    if provider not in {"olx-pl", "olx.pl"}:
+        raise ValueError("marketplace.search v1 supports only provider=olx-pl")
+
+    query = " ".join(str(args.get("query") or "").split())
+    location = " ".join(str(args.get("location") or "").split())
+    category = " ".join(str(args.get("category") or "all").split()).lower()
+    if not query or len(query) > 240:
+        raise ValueError("marketplace.search query must contain 1..240 characters")
+    if len(location) > 120 or len(category) > 64:
+        raise ValueError("marketplace.search location/category is too long")
+
+    limit = _bounded_int(args.get("limit"), 12, 1, 20)
+    period = str(args.get("time_range") or "month").strip().lower()
+    if period not in {"day", "week", "month", "year"}:
+        raise ValueError("marketplace.search time_range must be day, week, month or year")
+
+    job_requested = _marketplace_job_requested(query, category)
+    subject = " ".join(part for part in (location, query) if part).strip()
+    variants: list[str] = []
+
+    def add_variant(value: str) -> None:
+        compact = " ".join(value.split())[:400]
+        if compact and compact not in variants:
+            variants.append(compact)
+
+    if job_requested:
+        add_variant(f'site:olx.pl/d/oferta/ {subject} praca')
+        add_variant(f'site:olx.pl/d/oferta/ {subject} zatrudnię')
+        add_variant(f'site:olx.pl/d/oferta/ {subject} pracownik')
+    else:
+        add_variant(f'site:olx.pl/d/oferta/ {subject}')
+        add_variant(f'site:olx.pl/d/oferta/ {query} {location}')
+
+    query_tokens = _marketplace_tokens(query)
+    location_tokens = _marketplace_tokens(location)
+    job_hints = (
+        "praca", "pracownik", "zatrud", "stanowisk", "magazyn",
+        "kierowca", "serwisant", "technik", "sprzedaw", "produkc",
+        "sprząt", "kelner", "recepcj", "operator",
+    )
+
+    raw_results: list[dict[str, Any]] = []
+    attempts: list[dict[str, Any]] = []
+    search_queries: list[str] = []
+    for index, search_query in enumerate(variants[:3]):
+        search_queries.append(search_query)
+        result = web_search(
+            {
+                "query": search_query,
+                "limit": "8",
+                "time_range": period,
+            },
+            request_id=(
+                f"{request_id}:marketplace:{index}"
+                if request_id
+                else None
+            ),
+        )
+        if not result.get("ok"):
+            attempts.append({
+                "query": search_query,
+                "error": str(result.get("error") or "search failed")[:240],
+            })
+            continue
+        try:
+            payload = json.loads(str(result.get("stdout") or "{}"))
+        except json.JSONDecodeError:
+            attempts.append({
+                "query": search_query,
+                "error": "web.search returned unreadable JSON",
+            })
+            continue
+        for item in payload.get("results") or []:
+            if isinstance(item, dict):
+                raw_results.append(item)
+
+    items_by_id: dict[str, dict[str, Any]] = {}
+    discovery_pages: list[dict[str, str]] = []
+    for item in raw_results:
+        raw_url = str(item.get("url") or "")
+        title = " ".join(str(item.get("title") or "").split())[:220]
+        snippet = " ".join(str(item.get("snippet") or "").split())[:500]
+        if not raw_url or not title:
+            continue
+
+        identity = _olx_pl_listing_identity(raw_url)
+        if identity is None:
+            page_url = _olx_pl_page_url(raw_url)
+            if page_url and not any(row["url"] == page_url for row in discovery_pages):
+                discovery_pages.append({
+                    "title": title,
+                    "url": page_url,
+                    "snippet": snippet,
+                })
+            continue
+
+        listing_id, clean_url = identity
+        haystack = urllib.parse.unquote(
+            f"{title} {snippet} {clean_url}"
+        ).lower()
+        query_hits = [token for token in query_tokens if token in haystack]
+        location_hits = [token for token in location_tokens if token in haystack]
+        has_job_hint = any(hint in haystack for hint in job_hints)
+
+        if query_tokens or location_tokens:
+            if not query_hits and not location_hits and not (job_requested and has_job_hint):
+                continue
+
+        score = (
+            len(query_hits)
+            + 2 * len(location_hits)
+            + (2 if job_requested and has_job_hint else 0)
+        )
+        candidate = {
+            "id": listing_id,
+            "title": title,
+            "url": clean_url,
+            "snippet": snippet,
+            "match_score": score,
+            "query_hits": query_hits,
+            "location_hits": location_hits,
+            "job_hint": bool(job_requested and has_job_hint),
+            "published": item.get("published"),
+        }
+        previous = items_by_id.get(listing_id)
+        if previous is None or candidate["match_score"] > previous["match_score"]:
+            items_by_id[listing_id] = candidate
+
+    items = sorted(
+        items_by_id.values(),
+        key=lambda row: (-int(row.get("match_score") or 0), row["title"].lower()),
+    )[:limit]
+
+    payload = {
+        "provider": "olx-pl",
+        "market": "PL",
+        "currency": "PLN",
+        "mode": "search-index-fallback",
+        "query": query,
+        "location": location or None,
+        "category": category,
+        "time_range": period,
+        "checked_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "items": items,
+        "item_count": len(items),
+        "discovery_pages": discovery_pages[:8],
+        "search_queries": search_queries,
+        "attempts": attempts,
+        "direct_olx_access": False,
+        "evidence": (
+            "OLX.pl direct HTML/API access returned HTTP 403 from this phone, so v1 uses "
+            "public search-index discovery only. Titles/snippets are untrusted discovery evidence; "
+            "a discovered URL does not prove that an offer is still active or that its details are current. "
+            "For watches, 'new' means first seen by this watcher, not necessarily newly published on OLX."
+        ),
+    }
+    return _web_result(payload)
+
+
+def _marketplace_load_watch_state() -> dict[str, Any]:
+    with MARKETPLACE_WATCH_LOCK:
+        if not MARKETPLACE_WATCHES_FILE.exists():
+            return {"version": 1, "watches": []}
+        try:
+            data = json.loads(
+                MARKETPLACE_WATCHES_FILE.read_text(
+                    encoding="utf-8",
+                    errors="strict",
+                )
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Marketplace watch state is unreadable: {type(exc).__name__}") from exc
+        if not isinstance(data, dict) or not isinstance(data.get("watches"), list):
+            raise ValueError("Marketplace watch state has invalid schema")
+        return data
+
+
+def _marketplace_save_watch_state(state: dict[str, Any]) -> None:
+    with MARKETPLACE_WATCH_LOCK:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = MARKETPLACE_WATCHES_FILE.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        try:
+            tmp.chmod(0o600)
+        except OSError:
+            pass
+        tmp.replace(MARKETPLACE_WATCHES_FILE)
+        try:
+            MARKETPLACE_WATCHES_FILE.chmod(0o600)
+        except OSError:
+            pass
+
+
+def _marketplace_watch_public(watch: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": watch.get("id"),
+        "provider": watch.get("provider"),
+        "query": watch.get("query"),
+        "location": watch.get("location"),
+        "category": watch.get("category"),
+        "interval_minutes": watch.get("interval_minutes"),
+        "notify": bool(watch.get("notify")),
+        "enabled": bool(watch.get("enabled", True)),
+        "created_at": watch.get("created_at"),
+        "last_checked_at": watch.get("last_checked_at"),
+        "next_check_at": watch.get("next_check_at"),
+        "seen_count": len(watch.get("seen_ids") or []),
+        "last_count": int(watch.get("last_count") or 0),
+        "last_new_count": int(watch.get("last_new_count") or 0),
+        "recent_new_items": (watch.get("recent_new_items") or [])[:20],
+        "last_error": watch.get("last_error"),
+        "notification_status": watch.get("notification_status"),
+    }
+
+
+def _marketplace_notify(watch: dict[str, Any], new_items: list[dict[str, Any]]) -> str:
+    if not new_items or not bool(watch.get("notify")):
+        return "disabled"
+    command = shutil.which("termux-notification")
+    if not command:
+        return "termux-notification-unavailable"
+
+    title = f"Lumena: {len(new_items)} new OLX listing(s)"
+    first_titles = [str(item.get("title") or "").strip() for item in new_items[:3]]
+    content = " | ".join(value for value in first_titles if value)[:900]
+    try:
+        completed = subprocess.run(
+            [
+                command,
+                "--id",
+                f"lumena-{str(watch.get('id') or 'marketplace')[:40]}",
+                "--title",
+                title,
+                "--content",
+                content or "New marketplace listings discovered",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+    except Exception as exc:
+        return f"notification-error:{type(exc).__name__}"
+    return "sent" if completed.returncode == 0 else f"notification-exit-{completed.returncode}"
+
+
+def marketplace_watch_list(args: dict[str, Any] | None = None) -> dict[str, Any]:
+    state = _marketplace_load_watch_state()
+    payload = {
+        "watches": [
+            _marketplace_watch_public(watch)
+            for watch in state.get("watches") or []
+            if isinstance(watch, dict)
+        ],
+        "watch_count": len(state.get("watches") or []),
+        "background_polling": "active while the Lumena Termux bridge process is running",
+        "notification_command_available": bool(shutil.which("termux-notification")),
+    }
+    return _web_result(payload)
+
+
+def marketplace_watch_create(
+    args: dict[str, Any],
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    query = " ".join(str(args.get("query") or "").split())
+    if not query or len(query) > 240:
+        raise ValueError("marketplace.watch.create query must contain 1..240 characters")
+
+    provider = str(args.get("provider") or "olx-pl").strip().lower()
+    if provider not in {"olx-pl", "olx.pl"}:
+        raise ValueError("marketplace.watch.create v1 supports only provider=olx-pl")
+    location = " ".join(str(args.get("location") or "").split())[:120]
+    category = " ".join(str(args.get("category") or "jobs").split()).lower()[:64]
+    interval = _bounded_int(args.get("interval_minutes"), 60, 30, 1440)
+    notify = _marketplace_bool(args.get("notify"), True)
+
+    baseline_result = marketplace_search(
+        {
+            "provider": "olx-pl",
+            "query": query,
+            "location": location,
+            "category": category,
+            "limit": str(_bounded_int(args.get("limit"), 20, 1, 20)),
+            "time_range": str(args.get("time_range") or "month"),
+        },
+        request_id=request_id,
+    )
+    baseline = json.loads(str(baseline_result.get("stdout") or "{}"))
+    items = baseline.get("items") or []
+    now = datetime.now().astimezone()
+    watch_id = "mw-" + secrets.token_hex(6)
+    watch = {
+        "id": watch_id,
+        "provider": "olx-pl",
+        "query": query,
+        "location": location,
+        "category": category,
+        "interval_minutes": interval,
+        "notify": notify,
+        "enabled": True,
+        "created_at": now.isoformat(timespec="seconds"),
+        "last_checked_at": now.isoformat(timespec="seconds"),
+        "next_check_at": (now.timestamp() + interval * 60),
+        "seen_ids": [str(item.get("id")) for item in items if item.get("id")][:1000],
+        "last_count": len(items),
+        "last_new_count": 0,
+        "recent_new_items": [],
+        "last_error": None,
+        "notification_status": (
+            "ready" if notify and shutil.which("termux-notification")
+            else "termux-notification-unavailable" if notify
+            else "disabled"
+        ),
+    }
+
+    state = _marketplace_load_watch_state()
+    watches = [
+        row for row in state.get("watches") or []
+        if isinstance(row, dict)
+    ]
+    watches.append(watch)
+    state["version"] = 1
+    state["watches"] = watches[-64:]
+    _marketplace_save_watch_state(state)
+
+    return _web_result({
+        "created": _marketplace_watch_public(watch),
+        "baseline_item_count": len(items),
+        "baseline_items": items[:10],
+        "note": (
+            "The current result set is the baseline and is not reported as new. "
+            "Future checks compare first-seen listing ids. Background polling runs only while "
+            "the Termux bridge process is alive."
+        ),
+    })
+
+
+def marketplace_watch_remove(args: dict[str, Any]) -> dict[str, Any]:
+    watch_id = str(args.get("watch_id") or "").strip()
+    if not watch_id:
+        raise ValueError("marketplace.watch.remove requires watch_id")
+    state = _marketplace_load_watch_state()
+    before = [
+        row for row in state.get("watches") or []
+        if isinstance(row, dict)
+    ]
+    after = [row for row in before if str(row.get("id")) != watch_id]
+    if len(after) == len(before):
+        raise ValueError(f"Unknown marketplace watch: {watch_id}")
+    state["watches"] = after
+    _marketplace_save_watch_state(state)
+    return _web_result({"removed": watch_id, "watch_count": len(after)})
+
+
+def marketplace_watch_poll(
+    args: dict[str, Any],
+    request_id: str | None = None,
+    *,
+    background: bool = False,
+) -> dict[str, Any]:
+    watch_id = str(args.get("watch_id") or "").strip()
+    if not watch_id:
+        raise ValueError("marketplace.watch.poll requires watch_id")
+
+    with MARKETPLACE_WATCH_LOCK:
+        if watch_id in MARKETPLACE_POLLING_IDS:
+            return _web_result({
+                "watch_id": watch_id,
+                "busy": True,
+                "new_count": 0,
+                "new_items": [],
+            })
+        MARKETPLACE_POLLING_IDS.add(watch_id)
+
+    try:
+        state = _marketplace_load_watch_state()
+        watches = [
+            row for row in state.get("watches") or []
+            if isinstance(row, dict)
+        ]
+        watch = next(
+            (row.copy() for row in watches if str(row.get("id")) == watch_id),
+            None,
+        )
+        if watch is None:
+            raise ValueError(f"Unknown marketplace watch: {watch_id}")
+
+        result = marketplace_search(
+            {
+                "provider": str(watch.get("provider") or "olx-pl"),
+                "query": str(watch.get("query") or ""),
+                "location": str(watch.get("location") or ""),
+                "category": str(watch.get("category") or "jobs"),
+                "limit": "20",
+                "time_range": "month",
+            },
+            request_id=request_id,
+        )
+        payload = json.loads(str(result.get("stdout") or "{}"))
+        items = payload.get("items") or []
+        seen = [str(value) for value in watch.get("seen_ids") or [] if value]
+        seen_set = set(seen)
+        new_items = [
+            item for item in items
+            if str(item.get("id") or "") and str(item.get("id")) not in seen_set
+        ]
+
+        for item in items:
+            item_id = str(item.get("id") or "")
+            if item_id and item_id not in seen_set:
+                seen.append(item_id)
+                seen_set.add(item_id)
+        seen = seen[-1000:]
+
+        now = datetime.now().astimezone()
+        notification_status = _marketplace_notify(watch, new_items)
+        watch.update({
+            "last_checked_at": now.isoformat(timespec="seconds"),
+            "next_check_at": now.timestamp() + int(watch.get("interval_minutes") or 60) * 60,
+            "seen_ids": seen,
+            "last_count": len(items),
+            "last_new_count": len(new_items),
+            "recent_new_items": (
+                [
+                    {
+                        **item,
+                        "first_seen_at": now.isoformat(timespec="seconds"),
+                    }
+                    for item in new_items
+                ] +
+                list(watch.get("recent_new_items") or [])
+            )[:20],
+            "last_error": None,
+            "notification_status": notification_status,
+        })
+
+        fresh_state = _marketplace_load_watch_state()
+        fresh_watches = [
+            row for row in fresh_state.get("watches") or []
+            if isinstance(row, dict)
+        ]
+        replaced = False
+        updated_watches: list[dict[str, Any]] = []
+        for row in fresh_watches:
+            if str(row.get("id")) == watch_id:
+                updated_watches.append(watch)
+                replaced = True
+            else:
+                updated_watches.append(row)
+        if not replaced:
+            raise ValueError(f"Marketplace watch disappeared during poll: {watch_id}")
+        fresh_state["watches"] = updated_watches
+        _marketplace_save_watch_state(fresh_state)
+
+        return _web_result({
+            "watch": _marketplace_watch_public(watch),
+            "new_count": len(new_items),
+            "new_items": new_items[:20],
+            "background": background,
+            "evidence": payload.get("evidence"),
+        })
+    finally:
+        with MARKETPLACE_WATCH_LOCK:
+            MARKETPLACE_POLLING_IDS.discard(watch_id)
+
+
+def _marketplace_watch_record_error(watch_id: str, error: str) -> None:
+    try:
+        state = _marketplace_load_watch_state()
+        changed = False
+        for row in state.get("watches") or []:
+            if isinstance(row, dict) and str(row.get("id")) == watch_id:
+                now = datetime.now().astimezone()
+                row["last_checked_at"] = now.isoformat(timespec="seconds")
+                row["next_check_at"] = now.timestamp() + int(row.get("interval_minutes") or 60) * 60
+                row["last_error"] = error[:500]
+                changed = True
+                break
+        if changed:
+            _marketplace_save_watch_state(state)
+    except Exception:
+        pass
+
+
+def _marketplace_watch_loop() -> None:
+    while True:
+        try:
+            state = _marketplace_load_watch_state()
+            now = time.time()
+            due = [
+                str(row.get("id"))
+                for row in state.get("watches") or []
+                if (
+                    isinstance(row, dict)
+                    and bool(row.get("enabled", True))
+                    and str(row.get("id") or "")
+                    and float(row.get("next_check_at") or 0) <= now
+                )
+            ]
+            for watch_id in due[:8]:
+                try:
+                    marketplace_watch_poll(
+                        {"watch_id": watch_id},
+                        request_id=None,
+                        background=True,
+                    )
+                except Exception as exc:
+                    _marketplace_watch_record_error(
+                        watch_id,
+                        f"{type(exc).__name__}: {exc}",
+                    )
+        except Exception:
+            pass
+        time.sleep(30)
+
+
+
 def web_read(args: dict[str, Any]) -> dict[str, Any]:
     raw_url = str(args.get("url", "")).strip()
     try:
@@ -1594,6 +2197,8 @@ READ_ONLY_BATCH_TOOLS = {
     "http.get",
     "web.search",
     "web.read",
+    "marketplace.search",
+    "marketplace.watch.list",
     "image.search",
     "context.snapshot",
     "process.status",
@@ -2341,7 +2946,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + alias for alias, root in READONLY_ALIASES.items() if root.exists()) or '(none)'}\n"
                 f"read_roots_config={READ_ROOTS_FILE}\n"
-                f"version=0.27\n"
+                f"version=0.28\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
                 f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
@@ -2393,6 +2998,21 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
     if tool == "web.read":
         return web_read(args)
+
+    if tool == "marketplace.search":
+        return marketplace_search(args, request_id=request_id)
+
+    if tool == "marketplace.watch.list":
+        return marketplace_watch_list(args)
+
+    if tool == "marketplace.watch.create":
+        return marketplace_watch_create(args, request_id=request_id)
+
+    if tool == "marketplace.watch.poll":
+        return marketplace_watch_poll(args, request_id=request_id)
+
+    if tool == "marketplace.watch.remove":
+        return marketplace_watch_remove(args)
 
     if tool == "image.search":
         return image_search(args)
@@ -2740,11 +3360,16 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     _mark_interrupted_search_from_previous_run()
-    print("Lumena Termux Bridge v0.27")
+    print("Lumena Termux Bridge v0.28")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")
     print("Only 127.0.0.1 is bound; the bridge is not exposed to Wi-Fi.")
+    threading.Thread(
+        target=_marketplace_watch_loop,
+        name="lumena-marketplace-watch",
+        daemon=True,
+    ).start()
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
 
 
