@@ -1448,6 +1448,11 @@ def marketplace_search(
             "For watches, 'new' means first seen by this watcher, not necessarily newly published on OLX."
         ),
     }
+    if not raw_results and attempts and len(attempts) >= len(search_queries):
+        return _web_result(
+            payload,
+            "Marketplace discovery unavailable after all indexed-search attempts failed.",
+        )
     return _web_result(payload)
 
 
@@ -1511,8 +1516,10 @@ def _marketplace_watch_public(watch: dict[str, Any]) -> dict[str, Any]:
 
 
 def _marketplace_notify(watch: dict[str, Any], new_items: list[dict[str, Any]]) -> str:
-    if not new_items or not bool(watch.get("notify")):
+    if not bool(watch.get("notify")):
         return "disabled"
+    if not new_items:
+        return "no-new-items"
     command = shutil.which("termux-notification")
     if not command:
         return "termux-notification-unavailable"
@@ -1569,7 +1576,7 @@ def marketplace_watch_create(
     if provider not in {"olx-pl", "olx.pl"}:
         raise ValueError("marketplace.watch.create v1 supports only provider=olx-pl")
     location = " ".join(str(args.get("location") or "").split())[:120]
-    category = " ".join(str(args.get("category") or "jobs").split()).lower()[:64]
+    category = " ".join(str(args.get("category") or "all").split()).lower()[:64]
     interval = _bounded_int(args.get("interval_minutes"), 60, 30, 1440)
     notify = _marketplace_bool(args.get("notify"), True)
 
@@ -1584,6 +1591,8 @@ def marketplace_watch_create(
         },
         request_id=request_id,
     )
+    if not baseline_result.get("ok"):
+        return baseline_result
     baseline = json.loads(str(baseline_result.get("stdout") or "{}"))
     items = baseline.get("items") or []
     now = datetime.now().astimezone()
@@ -1695,6 +1704,8 @@ def marketplace_watch_poll(
             },
             request_id=request_id,
         )
+        if not result.get("ok"):
+            raise ValueError(str(result.get("error") or "Marketplace discovery failed"))
         payload = json.loads(str(result.get("stdout") or "{}"))
         items = payload.get("items") or []
         seen = [str(value) for value in watch.get("seen_ids") or [] if value]
