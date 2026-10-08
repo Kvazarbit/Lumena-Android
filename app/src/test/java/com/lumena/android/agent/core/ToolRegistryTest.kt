@@ -120,6 +120,38 @@ class ToolRegistryTest {
     }
 
     @Test
+    fun marketplaceSearchIsReadOnlyButWatchCreationNeedsApproval() {
+        val search = ToolRegistry.validate(
+            AgentDecision.ToolCall(
+                "marketplace.search",
+                mapOf("query" to "praca Legionowo")
+            )
+        )
+        assertTrue(search.allowed)
+        assertFalse(search.requiresConfirmation)
+
+        val missingWatchQuery = ToolRegistry.validate(
+            AgentDecision.ToolCall("marketplace.watch.create", emptyMap())
+        )
+        assertFalse(missingWatchQuery.allowed)
+
+        val createWatch = ToolRegistry.validate(
+            AgentDecision.ToolCall(
+                "marketplace.watch.create",
+                mapOf("query" to "serwisant Legionowo")
+            )
+        )
+        assertTrue(createWatch.allowed)
+        assertTrue(createWatch.requiresConfirmation)
+
+        val list = ToolRegistry.validate(
+            AgentDecision.ToolCall("marketplace.watch.list")
+        )
+        assertTrue(list.allowed)
+        assertFalse(list.requiresConfirmation)
+    }
+
+    @Test
     fun explicitAliasCanonicalizesWithoutFuzzyMatching() {
         assertEquals("git.status", ToolRegistry.canonicalize("git_status"))
         assertEquals("mystery-status", ToolRegistry.canonicalize("mystery-status"))
