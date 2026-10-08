@@ -480,6 +480,7 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
             val mayScan = CompanionRequestLifecycle.shouldAutoScan(
                 isGenerating = service?.isChatGptGenerating() == true,
                 lastUpdatedAtMs = LumenaAccessibilityService.lastChatGptUpdatedAt,
+                lastGeneratingAtMs = LumenaAccessibilityService.lastChatGptGeneratingAt,
                 nowMs = now
             )
             if (mayScan) {
