@@ -1550,6 +1550,58 @@ Provider id і market/locale мають бути явними частинами
 
 Реалізація має використовувати дозволений/документований інтерфейс або легітимний browser/web workflow; не залежати від прихованого нестабільного endpoint як від єдиного джерела.
 
+### Jobs / marketplace watch: подія нового оголошення
+
+Після phone evidence 2026-10-08 додати provider-neutral механізм спостереження за новими оголошеннями, який не залежить від Companion Safe Auto.
+
+Поточне verified grounding:
+- прямий OLX Polska доступ із Bridge блокується CloudFront (`403`), тому OLX лишається best-effort provider без обходу access controls;
+- `Pracuj.pl` для `serwisant + Legionowo` віддає HTTP `200`, а локальний парсер підтвердив повний HTML (~654 KB) і 58 concrete job-offer URL з embedded metadata;
+- це показує, що для `jobs-pl` можна мати прямий provider, а OLX використовувати як додаткове джерело, коли воно доступне.
+
+Цільовий pipeline:
+1. `WorkManager` запускає bounded periodic poll (орієнтир 10–15 хв, не частіше без окремої причини).
+2. Provider (`pracuj-pl`, `olx-pl`, пізніше інші) повертає нормалізовані listing records зі stable provider listing id.
+3. `MarketplaceWatcher` порівнює snapshot із локальним `seen` state і дедуплікує за `(provider, listing_id)`.
+4. Перша поява нового id породжує локальну подію `marketplace.new_item`.
+5. Event bus може незалежно fan-out у:
+   - Android notification;
+   - Context Genome / evidence trail;
+   - Lumena local rule/agent trigger;
+   - optional local HTTP webhook;
+   - майбутній безпечний ChatGPT handoff, але **не** через Companion auto-scan/autogrant.
+
+Мінімальна schema події:
+    {
+      "event": "marketplace.new_item",
+      "provider": "pracuj-pl",
+      "listing_id": "1005117695",
+      "title": "Technik serwisu",
+      "location": "Warszawa",
+      "url": "https://www.pracuj.pl/...",
+      "first_seen_at": "2026-10-08T21:25:00+02:00"
+    }
+
+Семантика `new`:
+- `new` = **first seen by this watcher**, а не гарантована дата публікації;
+- publication/update time додається окремо лише коли provider реально її повертає;
+- повторний poll того самого id не створює дубль події;
+- зміна важливих полів може породжувати окрему майбутню `marketplace.item_changed` подію.
+
+Runtime/надійність:
+- scheduler має жити в Android `WorkManager`, а не лише у Termux Bridge process, щоб переживати закриття застосунку та відновлюватись після reboot;
+- Bridge/provider process запускається on-demand і не є єдиним джерелом таймера;
+- локальний `seen` state має бути crash-safe та versioned;
+- notification delivery не є доказом того, що оголошення ще активне: перед дією потрібна revalidation;
+- жодних CAPTCHA/CloudFront/rate-limit bypass.
+
+Acceptance criteria:
+- cold start/reboot не губить watcher state;
+- один і той самий listing id породжує одну `marketplace.new_item` подію;
+- новий synthetic fixture id у тесті породжує подію та notification payload;
+- phone e2e: додати watch → отримати baseline → підкласти/побачити новий id → verified notification/event → повторний poll без дубля;
+- Companion Safe Auto може бути вимкнений, а watch усе одно працює автономно.
+
 ### ToolGate / authority
 
 Marketplace connectors не отримують спеціальної довіри:
