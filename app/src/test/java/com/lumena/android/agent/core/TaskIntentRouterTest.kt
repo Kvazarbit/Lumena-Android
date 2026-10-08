@@ -121,6 +121,30 @@ class TaskIntentRouterTest {
     }
 
     @Test
+    fun olxPolandSearchUsesMarketplacePreflight() {
+        val profile = TaskIntentRouter.route(
+            "Знайди на OLX оголошення про роботу сервіcантом у Legionowo"
+        )
+
+        assertEquals(TaskIntent.PUBLIC_WEB, profile.intent)
+        assertEquals("marketplace.search", profile.preflight?.tool)
+        assertTrue(profile.preflight?.mandatory == true)
+        assertEquals("jobs", profile.preflight?.args?.get("category"))
+        assertTrue("marketplace.watch.create" in profile.recommendedTools)
+    }
+
+    @Test
+    fun ongoingJobWatchRoutesToMarketplaceEvenWithoutOlxWord() {
+        val profile = TaskIntentRouter.route(
+            "Слідкуй за новими вакансіями сервісанта в Legionowo"
+        )
+
+        assertEquals(TaskIntent.PUBLIC_WEB, profile.intent)
+        assertEquals("marketplace.search", profile.preflight?.tool)
+        assertEquals("jobs", profile.preflight?.args?.get("category"))
+    }
+
+    @Test
     fun publicWebIntentDoesNotInventAUrlPreflight() {
         val profile = TaskIntentRouter.route(
             "перевір актуальну інформацію на цьому сайті https://example.com"
