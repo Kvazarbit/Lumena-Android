@@ -1499,3 +1499,89 @@ Constitution + Laya only after measured benefit
 - [state-vault-and-signing.uk.md](state-vault-and-signing.uk.md)
 
 Цей roadmap має оновлюватися тільки після verified implementation/phone evidence. Планові пункти не переводяться в DONE лише через commit або CI.
+
+---
+
+## Phase 12 — MCP / External Marketplace Connectors
+
+**Статус:** PLAN.
+
+### Поточний evidence snapshot
+
+Станом на 2026-10-08:
+- підключений OLX MCP реально відповідає, але це **OLX India** (`olx.in`, індійські location ids, INR);
+- smoke-check `search_location("Mumbai")` повернув валідні Mumbai / Navi Mumbai;
+- пошук у Plugin Directory за `OLX`, `Poland classifieds`, `Polish marketplace` не знайшов окремого OLX Polska connector/plugin;
+- тому OLX India **не можна** використовувати як provider для польського ринку.
+
+Цей snapshot — не назавжди істинна конфігурація: перед реалізацією/релізом повторно перевірити Plugin Directory та доступні MCP.
+
+### Ціль
+
+Зробити provider-neutral шар зовнішніх marketplace-джерел, щоб Lumena могла шукати реальні оголошення для проєктів/закупівель без прив'язки до одного сервісу.
+
+Мінімальний контракт:
+- `marketplace.capabilities` — ринок, категорії, фільтри, валюта, підтримувані дії;
+- `marketplace.location.resolve`;
+- `marketplace.category.resolve`;
+- `marketplace.filters.get`;
+- `marketplace.search`;
+- `marketplace.listing.get`.
+
+Provider id і market/locale мають бути явними частинами evidence. Lumena не повинна непомітно підміняти OLX Polska на OLX India або інший marketplace.
+
+### OLX Polska adapter
+
+Якщо окремий офіційний/доступний MCP для OLX Polska не з'явиться, зробити окремий read-only adapter `olx-pl`.
+
+Перший scope:
+1. Польські location/category resolution.
+2. Schema discovery для доступних фільтрів.
+3. Пошук оголошень з price/category/location/sort та provider-supported filters.
+4. Отримання деталей конкретного оголошення.
+5. Provenance: provider, URL/listing id, час отримання, застосовані фільтри, market=PL, currency=PLN.
+6. Чесний no-result ladder: поступово послаблювати лише ті constraints, які явно позначені як relaxable; не вигадувати результати.
+
+Перший реліз **read-only**:
+- без публікації/редагування оголошень;
+- без надсилання повідомлень продавцям;
+- без login/session automation;
+- без обходу CAPTCHA, rate limits або інших access controls.
+
+Реалізація має використовувати дозволений/документований інтерфейс або легітимний browser/web workflow; не залежати від прихованого нестабільного endpoint як від єдиного джерела.
+
+### ToolGate / authority
+
+Marketplace connectors не отримують спеціальної довіри:
+- discovery/search/read → `READ_ONLY`;
+- будь-яка майбутня дія, що щось публікує, змінює, купує або надсилає → окремий mutating/action tool + explicit confirmation;
+- imported connector experience лише advisory; provider/market/schema треба перевіряти локально;
+- модельний текст або snippet не є доказом існування/ціни оголошення без verified connector/tool result.
+
+### Language robustness перед connector routing
+
+Marketplace intent не повинен ламатися через звичайні орфографічні помилки або синоніми користувача.
+
+Потрібен bounded normalizer/fuzzy layer для:
+- `олх / olx`;
+- назв міст/категорій;
+- дій типу `знайди / пошукай / подивись / глянь`;
+- невеликих edit-distance помилок.
+
+Fuzzy matching може допомагати лише у routing/discovery. Воно не повинно мовчки перетворювати невпевнений текст на mutating/purchase/contact дію.
+
+### Acceptance gate
+
+Перед позначенням `olx-pl` як usable:
+- provider/market mismatch test: India connector не може задовольнити PL запит;
+- location resolution для Warszawa/Legionowo;
+- category + filter discovery;
+- щонайменше один реальний read-only listing search;
+- listing detail fetch за id/URL;
+- typo/synonym routing regression;
+- zero-result relaxation test без вигаданих listings;
+- provenance/evidence у Diagnostics;
+- no write/contact authority в ToolGate.
+
+Після проходження gate provider можна включити як read-only source для Lumena project procurement/research.
+
