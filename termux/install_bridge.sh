@@ -57,6 +57,11 @@ Optional local learned System-1 (Laya):
   $STATE/install_laya_system1.sh model
   $STATE/install_laya_system1.sh start
 
+Optional local notifications for marketplace watches:
+  pkg install termux-api
+The watch itself still works without termux-notification; new items remain visible through
+marketplace.watch.list. Background polling runs while the bridge process is alive.
+
 Lumena can now start the bridge automatically when a local tool is first used.
 Manual start still works with:
   python "$STATE/bridge.py"
