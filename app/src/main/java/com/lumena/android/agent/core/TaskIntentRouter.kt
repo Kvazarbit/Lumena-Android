@@ -173,6 +173,32 @@ object TaskIntentRouter {
             )
         }
 
+        if (isMarketplaceSearch(lower)) {
+            return TaskIntentProfile(
+                intent = TaskIntent.PUBLIC_WEB,
+                confidence = 92,
+                recommendedTools = listOf(
+                    "marketplace.search",
+                    "marketplace.watch.list",
+                    "marketplace.watch.create",
+                    "marketplace.watch.poll",
+                    "marketplace.watch.remove",
+                    "web.search"
+                ),
+                guidance = "Use marketplace.search for Polish listing discovery. For ongoing monitoring, create a marketplace.watch only after explicit approval; watches poll in the Termux bridge while it is running. OLX.pl direct HTML/API access may be blocked, so v1 can return indexed discovery evidence rather than verified listing detail.",
+                preflight = IntentPreflight(
+                    tool = "marketplace.search",
+                    args = mapOf(
+                        "query" to marketplaceSearchQuery(normalized),
+                        "category" to if (isJobMarketplaceSearch(lower)) "jobs" else "all"
+                    ),
+                    reason = "Search the configured Polish marketplace provider before making current listing claims.",
+                    mandatory = true
+                ),
+                minimumToolSteps = 4
+            )
+        }
+
         if (isPublicWeb(lower)) {
             return TaskIntentProfile(
                 intent = TaskIntent.PUBLIC_WEB,
@@ -437,6 +463,50 @@ object TaskIntentRouter {
             "open", "перевір", "inspect", "list", "список", "де ", "where"
         )
         return fileTerms.any { containsTerm(lower, it) } && actionTerms.any { containsTerm(lower, it) }
+    }
+
+    private fun marketplaceSearchQuery(goal: String): String {
+        var query = goal
+            .replace(Regex("[\\r\\n\\t]+"), " ")
+            .replace(Regex("\\s{2,}"), " ")
+            .trim()
+
+        val leading = Regex(
+            "(?iu)^(?:знайди|знайти|пошукай|шукай|подивись|глянь|найди|find|search|znajdź|wyszukaj|sprawdź)\\s+"
+        )
+        query = query.replace(leading, "")
+        return query
+            .trim()
+            .trim(' ', '.', ',', ':', ';', '-', '—')
+            .take(240)
+            .ifBlank { goal.trim().take(240) }
+    }
+
+    private fun isJobMarketplaceSearch(lower: String): Boolean =
+        listOf(
+            "ваканс", "робот", "праця", "praca", "ofert pracy",
+            "job", "jobs", "zatrud", "stanowisk"
+        ).any { containsTerm(lower, it) }
+
+    private fun isMarketplaceSearch(lower: String): Boolean {
+        val marketplaceSubject = listOf(
+            "olx", "оголош", "ogłosz", "marketplace", "classified"
+        ).any { containsTerm(lower, it) }
+
+        val listingAction = listOf(
+            "знайд", "пошук", "шукай", "подив", "глянь", "перевір",
+            "find", "search", "watch", "monitor",
+            "znajd", "wyszuk", "sprawd", "śled", "sled",
+            "нов", "nowe", "ofert", "ваканс", "робот", "praca", "job"
+        ).any { containsTerm(lower, it) }
+
+        val watchCue = listOf(
+            "автомат", "слідку", "стеж", "монітор", "monitor", "watch",
+            "powiad", "śled", "sled", "нові ваканс", "nowe ofert"
+        ).any { containsTerm(lower, it) }
+
+        return (marketplaceSubject && listingAction) ||
+            (watchCue && isJobMarketplaceSearch(lower))
     }
 
     private fun isPublicWeb(lower: String): Boolean {
