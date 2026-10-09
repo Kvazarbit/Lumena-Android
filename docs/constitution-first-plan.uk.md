@@ -1,6 +1,7 @@
 # Конституція спершу: план розвитку Lumena
 
 **Статус документа:** handoff для власника і наступних моделей. Створено 2026-10-09.
+Етап 2 (модулі) реалізовано в коді на `feature/modules-v1` (0.12.26), див. нижче.
 Етап 1 реалізовано в коді на гілці `feature/constitution-charter-v1` (app `0.12.25` / versionCode `51`),
 але на телефоні ще не перевірено. Решта етапів — PLAN.
 
@@ -112,52 +113,109 @@ Lumena — жива операційна система: зовнішній ко
 
 ---
 
-## Етап 2 — Межа ядро / модулі (2–3 тижні)
+## Етап 2 — Межа ядро / модулі  ✅ код / ⏳ телефон
 
-Закриває gap ART-14.
+Закриває більшу частину gap ART-14. Реалізовано на гілці `feature/modules-v1` (app `0.12.26` /
+versionCode `52`). На телефоні ще не перевірено.
 
-### Контракт модуля
+### Контракт модуля (реалізований)
 
-`agent/core/LumenaModule.kt`:
+`app/src/main/java/com/lumena/android/agent/core/LumenaModule.kt`:
 
 ```kotlin
-data class ModuleTool(val name: String, val risk: ToolRisk, val evidenceKind: String)
-data class ModuleIntent(val id: String, val cues: List<String>, val tools: List<String>)
+data class ModuleTool(val spec: ToolSpec, val capabilities: Set<ToolCapability>, val aliases: Set<String>)
 data class ModuleManifest(
-    val id: String, val version: String, val title: String,
-    val tools: List<ModuleTool>, val intents: List<ModuleIntent>,
-    val stateFiles: List<String>,          // реєструються в StateArchive
-    val diagnosticsSection: String          // напр. "[MODULE_MARKETPLACE]"
+    val id: String, val version: String, val title: String, val description: String,
+    val tools: List<ModuleTool>, val stateFiles: List<String>
 )
 interface LumenaModule {
     val manifest: ModuleManifest
-    fun validateEvidence(tool: String, result: ToolResult): ModuleEvidenceVerdict
-    fun diagnostics(context: Context): List<String>
+    fun route(normalized: String, lower: String): TaskIntentProfile? = null   // слот після file inspection, до public web
+    fun sourceEvidenceTools(goal: String): List<String>? = null              // джерело для GoalContract
+    fun publicWebTools(): List<String> = emptyList()
+    fun publicWebGuidance(): String? = null
 }
-object ModuleRegistry { /* register, enabled(context), kill switch */ }
+object ModuleRegistry { all(); enabled(); isEnabled(id); setDisabled(ids); withDisabled(ids) {}; violations(); accept() }
 ```
 
-Інваріанти, які перевіряє ядро:
+Модулі живуть у `app/src/main/java/com/lumena/android/modules/`, у порядку маршрутизації:
 
-- модуль не може знизити ризик інструмента відносно `ToolRegistry`. Його "read-only" — лише заява;
-- імена інструментів унікальні, а файли стану належать лише одному модулю;
-- вимкнений модуль не маршрутизує, не виконує і не впливає на GoalContract.
+| id | Що робить | Інструменти |
+|---|---|---|
+| `mcp` | пошук через зовнішні MCP-провайдери (лише `readOnlyHint=true`) | `mcp.search` |
+| `marketplace` | пошук OLX.pl через індекс, вартові в Termux | `marketplace.search`, `marketplace.watch.*` |
+| `listing-attention` | відбір push-сповіщень OLX, 👍/👎 | — (Android-служба) |
 
-### Переїзд
+### Що перевіряє ядро (fail closed)
 
-1. Маршрутизацію marketplace/job (коміт `f5ce04a` у `TaskIntentRouter`) перенести в
-   `modules/marketplace` як `ModuleIntent`.
-2. Критерії marketplace/MCP у `GoalContract` перенести у `validateEvidence` модуля, а ядро лишає
-   загальний механізм типізованих доказів.
-3. `termux/bridge.py` (3854 рядки) розрізати на `termux/modules/{marketplace,mcp}.py` за тим самим
-   allowlist. Наявні `test_marketplace_tools.py` і `test_mcp_search.py` — тести модулів.
-4. `listing/*` — перший Android-модуль: listener, сповіщення, store, панель.
+Модуль, який порушує будь-яке правило, не вмикається взагалі:
 
-### Тести і gate
+- id валідний і унікальний;
+- інструмент чи аліас модуля не може підмінити інструмент чи аліас ядра або іншого модуля;
+- заява `READ_ONLY` дійсна лише з можливостями `READ_STATE`/`NETWORK`. Модуль, що каже
+  "read-only", але може писати чи виконувати код, ядро відхиляє;
+- зміна робочої папки (`workspaceMutationEffect`) потребує `WRITE_WORKSPACE`;
+- файли стану належать лише одному модулю й мають бути в `StateArchive`.
 
-- `KernelWithoutModulesTest`: порожній реєстр, тести ядра зелені, в `ToolRegistry` лише інструменти ядра.
-- `ModuleCannotDowngradeRiskTest`, `DisabledModuleIsInertTest`.
-- Телефон: кожен модуль вимикається в Tools, а базові задачі Lumena працюють.
+Коли модуль вимкнено:
+
+- його інструментів немає в `ToolRegistry`: `validate` їх блокує, і вони не потрапляють у промпт;
+- вкладений запит через `inspect.batch` блокується як `TASK_POLICY_UNKNOWN_TOOL`;
+- `TaskIntentRouter` не маршрутизує на нього, а рецепти інших модулів відфільтровують його інструменти;
+- `GoalContract` повертається до доказу ядра `web.read|http.get|http.json`;
+- `listing-attention` не читає і не зберігає сповіщення.
+
+Що змінилось у ядрі:
+
+- `ToolRegistry`, `TaskIntentRouter` і `GoalContract` більше не містять жодного слова `marketplace`/`mcp`/`olx`;
+- тест `kernelSourcesNameNoModuleTools` не дає цьому повернутися;
+- поки модулі ввімкнені, поведінка рядок у рядок та сама: інструкції й рецепти перенесено дослівно.
+
+### Власнику
+
+- Tools → **Модулі**: вимикач для кожного модуля, версія, інструменти, і чи ядро відхилило якийсь модуль.
+- Вимикачі зберігаються в `SharedPreferences("lumena_modules")`, тобто лише множина вимкнених.
+  Новий модуль стартує ввімкненим, і застосовуються вимикачі ще до старту будь-якої служби
+  (`LumenaApplication`).
+- Diagnostics: розділ `[MODULES]`.
+
+### Тести
+
+`ModuleKernelBoundaryTest`:
+
+- ядро з нулем модулів;
+- повернення рецептів після ввімкнення;
+- вимкнення одного модуля прибирає його з рецепту іншого;
+- обхід через `inspect.batch`;
+- хибна заява read-only;
+- підміна інструментів і аліасів ядра;
+- дубль id чи інструмента;
+- можливості модульних інструментів;
+- файли стану в StateVault;
+- чистота коду ядра.
+
+### Етап 2b — bridge (PLAN)
+
+`termux/bridge.py` лишається монолітом. Інструменти модулів і фоновий watch-цикл marketplace живуть
+у ньому і не знають про вимикач у застосунку. Виконання блокує ядро, бо застосунок не надішле
+інструмент вимкненого модуля, але вартові далі опитують у фоні.
+
+План:
+
+1. Розрізати на `termux/modules/{marketplace,mcp}.py` за тим самим allowlist; `bridge.py` додає свою
+   теку в `sys.path`, а `install_bridge.sh` копіює теку модулів.
+2. Вимикач для bridge: інструмент ядра `modules.sync` (READ_ONLY → bridge), яким застосунок
+   передає множину вимкнених модулів, і тоді watch-цикл зупиняється.
+3. Наявні `test_marketplace_tools.py` і `test_mcp_search.py` стають тестами модулів.
+
+### Phone gate етапу 2
+
+1. Tools → Модулі показує 3 модулі, і порушень немає.
+2. Вимкнути `marketplace` і попросити "знайди на OLX роботу в Legionowo". Lumena не викликає
+   `marketplace.search` і чесно працює через веб або каже, що модуль вимкнено.
+3. Увімкнути назад: той самий запит іде через `marketplace.search`.
+4. Вимкнути `listing-attention`: нові сповіщення OLX не з'являються в панелі відбору.
+5. Diagnostics `[MODULES]` відображає ці стани.
 
 ---
 
@@ -251,7 +309,7 @@ Phase 4 з roadmap.
 
 ```text
 Етап 0 (організаційний) ─┐
-Етап 1 Хартія ✅ код ────┼─→ Етап 2 Модулі ─┐
+Етап 1 Хартія ✅ код ────┼─→ Етап 2 Модулі ✅ код (2b bridge) ─┐
                          └─→ Етап 3 Вимір ──┴─→ Етап 4 Процедура законів ─→ Етап 5 Всесвітня
 Етап 6 — лише як модулі, паралельно, без змін ядра
 ```

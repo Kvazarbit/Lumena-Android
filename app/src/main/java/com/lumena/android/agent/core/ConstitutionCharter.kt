@@ -266,9 +266,15 @@ object ConstitutionCharter {
             statement = "A module adds capabilities but never authority; the kernel verifies a module's read-only claim and works with every module disabled.",
             rationale = "MCP, OLX та інші — змінні модулі. Ядро (повноваження, докази, конституція) не може залежати від того, який модуль підключено.",
             enforcement = CharterEnforcement.PARTIAL,
-            enforcementPoints = listOf("ToolRegistry", "termux/bridge.py"),
-            testRefs = listOf("ToolRegistryTest.marketplaceSearchIsReadOnlyButWatchCreationNeedsApproval"),
-            gap = "Немає контракту модуля і реєстру; немає тесту «ядро з нулем модулів». Етап 2 плану."
+            enforcementPoints = listOf("ModuleRegistry", "ToolRegistry", "EffectiveTaskPolicyCompiler"),
+            testRefs = listOf(
+                "ModuleKernelBoundaryTest.kernelWorksWithEveryModuleDisabled",
+                "ModuleKernelBoundaryTest.readOnlyClaimMustMatchReadOnlyCapabilities",
+                "ModuleKernelBoundaryTest.moduleCannotShadowKernelToolsOrAliases",
+                "ModuleKernelBoundaryTest.disabledModuleToolCannotRideInsideInspectBatch",
+                "ModuleKernelBoundaryTest.kernelSourcesNameNoModuleTools"
+            ),
+            gap = "termux/bridge.py ще моноліт: інструменти модулів і фоновий watch-цикл marketplace живуть у ньому й не знають про вимикач у застосунку (виконання блокує ядро). Розділення bridge — етап 2b плану."
         )
     )
 

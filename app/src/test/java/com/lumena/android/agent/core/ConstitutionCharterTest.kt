@@ -163,6 +163,6 @@ class ConstitutionCharterTest {
     }
 
     private companion object {
-        const val CHARTER_LOCK = "2ee04ec70ff98bf5"
+        const val CHARTER_LOCK = "44ef4c47b90d03a9"
     }
 }

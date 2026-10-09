@@ -1761,3 +1761,5 @@ v1 читає лише push збереженого пошуку з застос�
 (app `0.12.25` / versionCode `51`), не phone-verified. Подальші етапи (межа ядро/модулі, вимір користі пам'яті,
 процедура ухвалення законів через holdout для кожного правила, всесвітня конституція) — PLAN.
 Детально: [constitution-first-plan.uk.md](constitution-first-plan.uk.md).
+
+Етап 2 (межа ядро/модулі: `LumenaModule`, `ModuleRegistry`, модулі `mcp` / `marketplace` / `listing-attention`, вимикачі в Tools) IMPLEMENTED на `feature/modules-v1` (app `0.12.26` / versionCode `52`), не phone-verified; розділення `bridge.py` — етап 2b (PLAN).
