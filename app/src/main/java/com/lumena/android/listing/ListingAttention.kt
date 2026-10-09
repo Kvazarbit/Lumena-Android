@@ -27,7 +27,9 @@ data class ListingNotice(
     val text: String,
     val postedAt: Long,
     /** Public page of the listing, when the source provides one. */
-    val url: String? = null
+    val url: String? = null,
+    /** When Lumena saw it; independent of a site's publication/republication date. */
+    val observedAt: Long = postedAt
 )
 
 enum class ListingDecision {
@@ -322,7 +324,7 @@ object ListingAttentionPolicy {
         val title = notice.title.trim().take(MAX_TITLE)
         val text = notice.text.trim().take(MAX_TEXT)
         if (title.isEmpty() && text.isEmpty()) return ListingIngestResult(state, null, duplicate = false)
-        val now = notice.postedAt
+        val now = notice.observedAt
         val retained = state.records.filter { now - it.seenAt <= RETENTION_MS }
 
         val key = ListingText.key(notice.source, ListingText.normalize("$title $text", fold = true))
