@@ -5,6 +5,7 @@ import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.local.ToolResult
 import com.lumena.android.model.ScreenSnapshot
 import com.lumena.android.agent.core.ConstitutionCapsule
+import com.lumena.android.agent.core.ConstitutionCharter
 import com.lumena.android.agent.core.CoreDna
 import com.lumena.android.settings.PortableKernelPolicy
 import com.squareup.moshi.Moshi
@@ -48,6 +49,7 @@ object CompanionProtocol {
         Coordinator contract: ${COORDINATOR_CONTRACT_VERSION}
         Core DNA: ${CoreDna.VERSION}
         Constitution capsule: ${ConstitutionCapsule.VERSION}
+        Constitution charter: ${ConstitutionCharter.VERSION} (${ConstitutionCharter.hash()})
 
         The phone is the execution authority. GPT-Lumena-Koordynator may plan and request tools,
         but Lumena's ToolRegistry/ToolGate/confirmation rules decide what may actually execute.
@@ -101,7 +103,7 @@ object CompanionProtocol {
         The Lumena app repository may appear as @Lumena-Android and is read-only to inspection tools.
         Lumena may auto-run registry-marked read-only tools when Safe Auto is enabled.
         Mutating or executable tools still require explicit user approval.
-    """.trimIndent()
+    """.trimIndent() + "\n\n" + ConstitutionCharter.prompt()
 
     fun parse(snapshot: ScreenSnapshot?): CompanionCommand? {
         if (snapshot == null) return null
