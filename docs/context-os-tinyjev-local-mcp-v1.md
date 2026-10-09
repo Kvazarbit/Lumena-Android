@@ -147,13 +147,43 @@ The provider interface must remain stable so model replacement does not affect p
 
 ### Stage E — MCP transport
 
-Current Local MCP is in-process by design.
+Current Local MCP remains in-process by design.
 
-A later adapter may expose:
+A bounded external **MCP search broker** is now implemented in the Termux bridge as `mcp.search`:
 
-- local stdio-compatible endpoint
-- loopback-only Streamable HTTP
-- remote MCP client connections
+- Streamable HTTP / JSON-RPC over public HTTPS only;
+- provider configuration is local in `~/.lumena/mcp_search_providers.json`;
+- credentials are referenced by environment-variable name (`auth_env`), not embedded in the config or returned in evidence;
+- the broker performs `initialize -> notifications/initialized -> tools/list -> tools/call`;
+- automatic tool selection requires MCP `annotations.readOnlyHint=true`;
+- compatible query arguments are mapped from declared `inputSchema`;
+- unknown required arguments fail closed rather than being guessed;
+- external MCP output is treated as untrusted evidence, never as permission or completion proof;
+- explicit user requests such as “знайди через MCP …” route to `mcp.search`; ordinary web and marketplace search keep their existing fallbacks.
+
+Example local configuration:
+
+```json
+{
+  "providers": [
+    {
+      "id": "jobs-provider",
+      "url": "https://example-mcp-provider.example/mcp",
+      "search_tool": "search_jobs",
+      "auth_env": "JOBS_MCP_TOKEN"
+    }
+  ]
+}
+```
+
+This does **not** reuse credentials from ChatGPT plugins/connectors. Lumena needs its own MCP endpoint and credentials on the phone.
+
+Still later / separate work:
+
+- local stdio-compatible client/provider transport;
+- loopback-only Streamable HTTP exposure of Lumena's own Local MCP;
+- general remote MCP execution beyond the read-only search broker;
+- OAuth/account connection UX.
 
 Any transport layer must remain outside the authority path and preserve existing confirmation/policy checks.
 
