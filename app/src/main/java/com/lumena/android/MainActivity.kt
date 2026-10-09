@@ -60,6 +60,7 @@ import com.lumena.android.llama.EmbeddedLlamaRuntime
 import com.lumena.android.settings.HistoryTreeStore
 import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.settings.LumenaPreferences
+import com.lumena.android.ui.ListingWatchPanel
 import com.lumena.android.ui.StateVaultPanel
 import com.lumena.android.settings.StateVault
 import com.lumena.android.ui.AgentWorkDrawer
@@ -314,6 +315,7 @@ class MainActivity : ComponentActivity() {
         Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("Tools", style = MaterialTheme.typography.headlineMedium)
             StateVaultPanel(agentBusy)
+            ListingWatchPanel(refreshToken)
             Text("Android control, Termux bridge and diagnostics")
             Text(if (LumenaAccessibilityService.instance != null) "Accessibility: connected" else "Accessibility: service not connected")
             Button(onClick = { openAccessibilitySettings() }) { Text("Open Accessibility settings") }
