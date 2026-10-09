@@ -187,6 +187,53 @@ Still later / separate work:
 
 Any transport layer must remain outside the authority path and preserve existing confirmation/policy checks.
 
+### Stage E.1 — robustness gate before phone acceptance
+
+**Handoff snapshot (2026-10-09):** external `mcp.search` is implemented on
+`feature/olx-pl-watch-v1`; exact-head `f4377a3e70011dcf0509beaeb0be3523b906769e`
+passed Android CI **#2042 SUCCESS**. App target is `0.12.23` / versionCode `49`;
+Termux Bridge target is `0.29`. This is code/CI evidence only; real external MCP phone
+e2e is still pending.
+
+Do not create another parallel MCP client. Continue this implementation and close these gates:
+
+1. **Bounded typo normalizer for routing cues only.** Support common user mistakes such as
+   `черз mcp`, `через мср`, `чирез MCP`, `мсп пошук`, `ваквнсії`, `роботі`, and
+   mixed-script `МCP` / `mсp`. Do not globally autocorrect arbitrary query text, names or URLs.
+2. **Authority invariant.** Fuzzy/typo recognition may select only a read-only discovery route.
+   It never grants permission, changes ToolRisk, bypasses ToolGate, or turns ambiguous text into
+   contact/apply/buy/send/write execution.
+3. **Negation cases.** `не використовуй MCP` / `не шукай через MCP` must not produce an
+   MCP preflight.
+4. **MCP selection safety.** Automatic selection still requires
+   `annotations.readOnlyHint=true`; absent/false is rejected even when the tool name says search.
+5. **Schema safety.** Unknown required inputSchema args fail closed; the model must not invent
+   tenant/account/permission values.
+6. **Evidence semantics.** MCP result text remains untrusted evidence; provider/tool/protocol
+   provenance must survive fallback and no failed call may become `ok=true` or completion proof.
+
+Required mutation suite must explicitly mutate the MCP path, not only the existing recovery
+kernels. At minimum kill mutants for:
+
+- removing/permissivizing the `readOnlyHint=true` gate;
+- accepting unknown required schema args;
+- rerouting an explicit MCP search to ordinary web/general;
+- removing MCP-routing-word cleanup from the provider query;
+- dropping/changing provider provenance;
+- converting MCP failure into success;
+- allowing GoalContract to pass without a successful MCP tool result;
+- widening `inspect.batch` to a non-read-only MCP/action path.
+
+A mutant counts as killed only by an actual assertion failure. Compile, timeout or infrastructure
+failure is not mutation proof. Prefer a dedicated `scripts/mutation_mcp_probe.py` (one mutant at
+a time, restore exact original bytes) or extend the existing mutation harness with equivalent
+isolation.
+
+Phone acceptance requires: current exact-head CI green, owner-signed app + Bridge 0.29+, a real
+configured MCP endpoint, one clean MCP search, at least five typo/mixed-script equivalents, one
+negated case, one server tool with `readOnlyHint=false`, honest MCP-unavailable fallback/partial,
+and diagnostics showing provider/tool/protocol provenance with no authority regression.
+
 ## Go / no-go gates
 
 TinyJev should gain more autonomy only when replay/phone tests show:
