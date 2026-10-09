@@ -118,9 +118,10 @@ object ListingNoticeExtractor {
     const val OLX_PL_PACKAGE = "pl.tablica"
     private const val CATEGORY_MESSAGE = "msg"
 
+    // Privacy boundary: package-name substring matching accepted unrelated apps
+    // (including foreign-market packages). Only explicitly verified IDs belong here.
     fun isWatchedSource(packageName: String): Boolean =
-        packageName == OLX_PL_PACKAGE ||
-            packageName.lowercase(Locale.ROOT).contains("olx")
+        packageName == OLX_PL_PACKAGE
 
     /** Chat with sellers or buyers is private; it is neither scored nor stored. */
     fun isPrivateMessage(raw: ListingRawCapture): Boolean =
