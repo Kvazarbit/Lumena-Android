@@ -44,7 +44,7 @@ class PreferenceBenchmarkTest(unittest.TestCase):
         self.assertEqual("EXPLORATORY_NOT_PROMOTION_PROOF", report["status"])
 
     def test_explicit_feedback_only(self):
-        for wrong in ("", "neutral", "0", None):
+        for wrong in ("", "neutral", "0", 0, True, False, None):
             with self.assertRaises(ValueError):
                 self.parse([row("Title", "Description", wrong)])
         self.assertEqual([1, 0, 1, 0], [
