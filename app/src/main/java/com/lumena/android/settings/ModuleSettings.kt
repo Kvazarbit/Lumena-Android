@@ -5,30 +5,29 @@ import com.lumena.android.agent.core.BridgeCompatibility
 import com.lumena.android.agent.core.ModuleRegistry
 
 /**
- * Owner's module switches. Only the set of DISABLED module ids is stored, so a
- * newly shipped module starts enabled and the kernel never depends on this
- * file. Not part of StateVault: a lost switch only re-enables a module.
+ * Owner's module switches. A missing preference fails closed for sensitive
+ * notification-reading modules. The user can explicitly enable them.
+ * Not part of StateVault: restoring an archive cannot silently enable access.
  */
 object ModuleSettings {
     private const val PREFS = "lumena_modules"
     private const val KEY_DISABLED = "disabled"
     private const val KEY_BRIDGE_VERSION = "bridge_version"
+    val DEFAULT_DISABLED = setOf("listing-attention")
 
     fun disabled(context: Context): Set<String> =
         context.applicationContext
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getStringSet(KEY_DISABLED, emptySet())
+            .getStringSet(KEY_DISABLED, DEFAULT_DISABLED)
             .orEmpty()
             .toSet()
 
-    /** Applies the stored switches and the last seen bridge version to the running kernel. */
+    /** Owner switches persist; an old bridge version is NOT execution authority. */
     fun apply(context: Context) {
         ModuleRegistry.setDisabled(disabled(context))
-        BridgeCompatibility.observe(
-            context.applicationContext
-                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getString(KEY_BRIDGE_VERSION, null)
-        )
+        // Even when the last process saw v0.29, an out-of-band Termux update
+        // may have downgraded the bridge. Wait for a fresh health observation.
+        BridgeCompatibility.invalidateObservation()
     }
 
     /** Called with the version from each successful bridge `health`. */

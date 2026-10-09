@@ -111,9 +111,49 @@ class PracujSourceTest {
             "https://www.pracuj.pl/praca/kierowca-kat-b;kw/lomianki;wp?rd=25",
             PracujSource.searchUrl(PracujSearch("Łomianki", 25, "Kierowca kat. B"))
         )
-        assertEquals(
-            "https://www.pracuj.pl/praca/legionowo;wp?rd=100",
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
             PracujSource.searchUrl(PracujSearch("  ", 500, ""))
-        )
+        }
     }
+    @Test fun cyrillicCityAliasesWorkButUnknownNamesFailClosed() {
+        assertEquals(
+            "https://www.pracuj.pl/praca/warszawa;wp?rd=10",
+            PracujSource.searchUrl(PracujSearch("Варшава", 10, ""))
+        )
+        assertEquals(
+            "https://www.pracuj.pl/praca/legionowo;wp?rd=0",
+            PracujSource.searchUrl(PracujSearch("Легіоново", 0, ""))
+        )
+        listOf("НевідомеМісто", "Москва", "Wаrszawa").forEach { name ->
+            org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+                PracujSource.searchUrl(PracujSearch(name, 0, ""))
+            }
+        }
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            PracujSource.searchUrl(PracujSearch("Legionowo", 10, "зварювальник"))
+        }
+    }
+
+    @Test fun groupedOfferWithTwoWorkplacesKeepsBothDistinctLinks() {
+        val extra = """},{"partitionId":99,"offerAbsoluteUri":"https://www.pracuj.pl/praca/warszawa,oferta,99","displayWorkplace":"Warszawa""""
+        val many = fixture.replace(
+            """"displayWorkplace":"Legionowo"}]""",
+            """"displayWorkplace":"Legionowo"$extra}]"""
+        )
+        val parsed = PracujSource.parse(many, now) as PracujPage.Offers
+        val forklift = parsed.notices.filter { it.title.startsWith("Magazynier") }
+        assertEquals(2, forklift.size)
+        assertTrue(forklift.any { "Legionowo" in it.text })
+        assertTrue(forklift.any { "Warszawa" in it.text })
+        assertTrue(forklift.map { it.url }.distinct().size == 2)
+    }
+
+    @Test fun firstSeenAndPublicationTimeAreDifferentForPracuj() {
+        val first = offers().first()
+        assertEquals(Instant.parse("2026-10-09T07:47:00Z").toEpochMilli(), first.postedAt)
+        assertEquals(now, first.observedAt)
+        val recorded = ListingAttentionPolicy.ingest(ListingAttentionState(), first).record!!
+        assertEquals(now, recorded.seenAt)
+    }
+
 }

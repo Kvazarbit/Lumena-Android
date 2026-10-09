@@ -14,6 +14,9 @@ import org.junit.Test
  * kernel works with every module disabled.
  */
 class ModuleKernelBoundaryTest {
+    @org.junit.Before fun installKnownBridgeForTest() { BridgeCompatibility.observe("0.29") }
+    @org.junit.After fun clearBridgeAfterTest() { BridgeCompatibility.clearForTests() }
+
     private val olxGoal = "Знайди на OLX оголошення про роботу в Legionowo"
     private val mcpGoal = "знайди через MCP вакансії сервісанта в Legionowo"
     private val webGoal = "знайди в інтернеті новини про Gemma"
@@ -127,6 +130,23 @@ class ModuleKernelBoundaryTest {
         assertTrue(ModuleRegistry.violations(listOf(shadow)).any { "shadows a kernel tool" in it })
         assertTrue(ModuleRegistry.violations(listOf(alias)).any { "alias file_read collides" in it })
         assertTrue(ModuleRegistry.accept(listOf(shadow, alias)).isEmpty())
+    }
+
+    @Test fun sameModuleCannotDuplicateItsOwnToolsOrAliases() {
+        val duplicateTool = module(
+            "duplicator",
+            readOnlyTool("one.read", ToolCapability.READ_STATE),
+            readOnlyTool("one.read", ToolCapability.READ_STATE)
+        )
+        val duplicateAlias = module(
+            "aliasdup",
+            readOnlyTool("one.read", ToolCapability.READ_STATE, aliases = setOf("same_alias")),
+            readOnlyTool("two.read", ToolCapability.READ_STATE, aliases = setOf("same_alias"))
+        )
+        listOf(duplicateTool, duplicateAlias).forEach { bad ->
+            assertTrue(ModuleRegistry.violations(listOf(bad)).any { "inside manifest" in it })
+            assertTrue(ModuleRegistry.accept(listOf(bad)).isEmpty())
+        }
     }
 
     @Test fun secondModuleClaimingTheSameToolOrIdIsRefused() {

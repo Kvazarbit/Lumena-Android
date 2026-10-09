@@ -8,7 +8,8 @@ package com.lumena.android.agent.core
  * in `health`; a module whose minimum bridge is newer than the OBSERVED one is
  * unavailable, so Lumena never routes to tools the phone does not have.
  *
- * An unknown version never blocks: only an observed older bridge does.
+ * Unknown or stale observations are not proof of compatibility. Probe health
+ * before exposing bridge-dependent module tools, then revalidate on execution.
  */
 object BridgeCompatibility {
     private val HEALTH_VERSION = Regex("""(?m)^version=(\d+(?:\.\d+)*)\s*$""")
@@ -46,9 +47,15 @@ object BridgeCompatibility {
 
     fun satisfies(required: String?): Boolean {
         if (required == null) return true
-        val seen = observed ?: return true
-        return (compare(seen, required) ?: return true) >= 0
+        val seen = observed ?: return false
+        return (compare(seen, required) ?: return false) >= 0
     }
+
+    /** Clear outdated compatibility claims after process start or failed health. */
+    fun invalidateObservation() { observed = null }
+
+    /** Test isolation delegates to the same fail-closed invalidation path. */
+    internal fun clearForTests() { invalidateObservation() }
 
     /** Runs [block] as if [version] had been observed, then restores the previous value. */
     fun <T> withObserved(version: String?, block: () -> T): T {

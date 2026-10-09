@@ -48,7 +48,10 @@ object ListingAttentionStore {
         if (!ListingNoticeExtractor.isWatchedSource(raw.source) || ListingNoticeExtractor.isPrivateMessage(raw)) {
             return@synchronized emptyList()
         }
-        var state = ListingAttentionPolicy.capture(load(context), raw)
+        val before = load(context)
+        var state = if (ListingCaptureSettings.isEnabled(context)) {
+            ListingAttentionPolicy.capture(before, raw)
+        } else before
         val added = mutableListOf<ListingRecord>()
         ListingNoticeExtractor.extract(raw).forEach { notice ->
             val result = ListingAttentionPolicy.ingest(state, notice)

@@ -27,7 +27,9 @@ data class ListingNotice(
     val text: String,
     val postedAt: Long,
     /** Public page of the listing, when the source provides one. */
-    val url: String? = null
+    val url: String? = null,
+    /** When Lumena saw it; independent of a site's publication/republication date. */
+    val observedAt: Long = postedAt
 )
 
 enum class ListingDecision {
@@ -118,9 +120,10 @@ object ListingNoticeExtractor {
     const val OLX_PL_PACKAGE = "pl.tablica"
     private const val CATEGORY_MESSAGE = "msg"
 
+    // Privacy boundary: package-name substring matching accepted unrelated apps
+    // (including foreign-market packages). Only explicitly verified IDs belong here.
     fun isWatchedSource(packageName: String): Boolean =
-        packageName == OLX_PL_PACKAGE ||
-            packageName.lowercase(Locale.ROOT).contains("olx")
+        packageName == OLX_PL_PACKAGE
 
     /** Chat with sellers or buyers is private; it is neither scored nor stored. */
     fun isPrivateMessage(raw: ListingRawCapture): Boolean =
@@ -321,11 +324,22 @@ object ListingAttentionPolicy {
         val title = notice.title.trim().take(MAX_TITLE)
         val text = notice.text.trim().take(MAX_TEXT)
         if (title.isEmpty() && text.isEmpty()) return ListingIngestResult(state, null, duplicate = false)
-        val now = notice.postedAt
+        val now = notice.observedAt
         val retained = state.records.filter { now - it.seenAt <= RETENTION_MS }
 
+        // A site-provided stable URL identifies the same job across poll cycles.
+        // A salary edit, refresh date, or a second poll after 48 h is not a
+        // newly discovered job. Keep its original first-seen timestamp.
+        val canonicalUrl = notice.url?.takeIf { it.isNotBlank() }
+        if (canonicalUrl != null && retained.any {
+                it.source == notice.source && it.url == canonicalUrl
+            }) {
+            return ListingIngestResult(state, null, duplicate = true)
+        }
+
         val key = ListingText.key(notice.source, ListingText.normalize("$title $text", fold = true))
-        if (retained.any { it.contentKey == key && abs(now - it.seenAt) <= DUPLICATE_WINDOW_MS }) {
+        if (canonicalUrl == null &&
+            retained.any { it.contentKey == key && abs(now - it.seenAt) <= DUPLICATE_WINDOW_MS }) {
             return ListingIngestResult(state, null, duplicate = true)
         }
 
@@ -390,8 +404,9 @@ object ListingAttentionPolicy {
             probability >= DIGEST_AT -> ListingDecision.DIGEST
             else -> ListingDecision.QUIET
         }
+        val identityKey = canonicalUrl?.let { ListingText.key(notice.source, it) } ?: key
         val record = ListingRecord(
-            id = "$key@$now",
+            id = "$identityKey@$now",
             contentKey = key,
             source = notice.source,
             title = title,

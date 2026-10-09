@@ -130,14 +130,18 @@ object ModuleRegistry {
         val kernelAliases = ToolRegistry.kernelAliasNames()
         val earlierNames = earlier.flatMap { e -> e.manifest.tools.flatMap { it.aliases + it.spec.name } }.toSet()
         val earlierFiles = earlier.flatMap { it.manifest.stateFiles }.toSet()
+        val localNames = mutableSetOf<String>()
+        val localFiles = mutableSetOf<String>()
 
         if (!ID_PATTERN.matches(m.id)) problems += "${m.id}: invalid module id"
         if (earlier.any { it.manifest.id == m.id }) problems += "${m.id}: duplicate module id"
         m.tools.forEach { tool ->
             val name = tool.spec.name
+            if (!localNames.add(name)) problems += "${m.id}: duplicate tool or alias $name inside manifest"
             if (name in kernelNames || name in kernelAliases) problems += "${m.id}: $name shadows a kernel tool"
             if (name in earlierNames) problems += "${m.id}: $name is already owned by another module"
             tool.aliases.forEach { alias ->
+                if (!localNames.add(alias)) problems += "${m.id}: duplicate tool or alias $alias inside manifest"
                 if (alias in kernelNames || alias in kernelAliases || alias in earlierNames) {
                     problems += "${m.id}: alias $alias collides"
                 }
@@ -154,6 +158,7 @@ object ModuleRegistry {
             }
         }
         m.stateFiles.forEach { file ->
+            if (!localFiles.add(file)) problems += "${m.id}: duplicate state file $file inside manifest"
             if (file in earlierFiles) problems += "${m.id}: state file $file is owned by another module"
         }
         return problems

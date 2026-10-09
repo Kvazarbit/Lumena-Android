@@ -75,18 +75,30 @@ fun PracujWatchSection(onChanged: () -> Unit = {}) {
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
     )
-    Text(PracujSource.searchUrl(current().search), style = MaterialTheme.typography.labelSmall)
+    val searchUrl = runCatching { PracujSource.searchUrl(current().search) }
+    Text(
+        searchUrl.getOrElse { "Помилка вводу: ${it.message.orEmpty()}" },
+        style = MaterialTheme.typography.labelSmall,
+        color = if (searchUrl.isFailure) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+    )
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = {
-            PracujWatch.save(context, current())
-            status = PracujWatch.status(context)
-            onChanged()
-        }) { Text("Зберегти") }
-        OutlinedButton(onClick = {
-            PracujWatch.save(context, current())
-            PracujWatch.runNow(context)
-            onChanged()
-        }) { Text("Перевірити зараз") }
+        Button(
+            enabled = searchUrl.isSuccess,
+            onClick = {
+                PracujWatch.save(context, current())
+                status = PracujWatch.status(context)
+                onChanged()
+            }
+        ) { Text("Зберегти") }
+        OutlinedButton(
+            enabled = searchUrl.isSuccess,
+            onClick = {
+                PracujWatch.save(context, current())
+                PracujWatch.runNow(context)
+                status = PracujWatch.status(context)
+                onChanged()
+            }
+        ) { Text("Перевірити зараз") }
     }
     val at = if (status.at > 0) DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(status.at)) else ""
     Text(

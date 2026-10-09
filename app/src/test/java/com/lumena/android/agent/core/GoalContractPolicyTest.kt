@@ -8,6 +8,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GoalContractPolicyTest {
+    @org.junit.Before fun installKnownBridgeForTest() { BridgeCompatibility.observe("0.29") }
+    @org.junit.After fun clearBridgeAfterTest() { BridgeCompatibility.clearForTests() }
+
     private fun recorded(
         contract: GoalContract,
         call: AgentDecision.ToolCall,

@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-${{ github.event_name }}-${{ github.ref }}
+  # Same-repository draft PRs also trigger push; avoid duplicate SDK/native builds.
+  group: android-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -271,6 +272,10 @@ jobs:
           bash -n termux/install_bridge.sh
           bash -n termux/ollama_sidecar.sh
           bash -n scripts/sync_llama_cpp.sh
+      - name: Validate PC preference benchmark and mutant source anchors
+        run: |
+          python -m unittest discover -s scripts -p 'test_listing_preference_benchmark.py' -v
+          python scripts/mutation_module_probe.py --dry-run
       - name: Sync pinned llama.cpp source
         run: bash scripts/sync_llama_cpp.sh
       - name: Install Android SDK packages
@@ -283,6 +288,8 @@ jobs:
         run: gradle --max-workers=2 testDebugUnitTest
       - name: Probe recovery guard mutations
         run: python scripts/mutation_recovery_probe.py
+      - name: Probe MCP and module/listing mutations
+        run: python scripts/mutation_module_probe.py
       - name: Build unsigned release APK
         run: gradle --max-workers=2 assembleRelease
       - name: Verify embedded native library

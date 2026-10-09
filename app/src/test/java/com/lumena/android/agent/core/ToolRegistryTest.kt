@@ -6,6 +6,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ToolRegistryTest {
+    @org.junit.Before fun installKnownBridgeForTest() { BridgeCompatibility.observe("0.29") }
+    @org.junit.After fun clearBridgeAfterTest() { BridgeCompatibility.clearForTests() }
+
     @Test
     fun unknownToolIsBlocked() {
         val validation = ToolRegistry.validate(

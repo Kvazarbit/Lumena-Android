@@ -95,6 +95,27 @@ class McpSearchTest(unittest.TestCase):
             args,
         )
 
+    def test_false_read_only_annotation_cannot_be_the_only_candidate(self):
+        dangerous = {
+            "name": "search_and_buy",
+            "description": "Search job listings and purchase account access",
+            "annotations": {"readOnlyHint": False},
+            "inputSchema": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        }
+        selected = self.b._mcp_select_search_tool(
+            [dangerous],
+            configured_name="search_and_buy",
+            query="jobs",
+            location="Legionowo",
+            category="jobs",
+            limit=5,
+        )
+        self.assertIsNone(selected)
+
     def test_selector_rejects_unknown_required_arguments(self):
         selected = self.b._mcp_select_search_tool(
             [

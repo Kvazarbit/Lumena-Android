@@ -41,13 +41,35 @@ class BridgeCompatibilityTest {
         assertNull(BridgeCompatibility.compare("abc", "0.29"))
     }
 
-    @Test fun unknownBridgeNeverBlocksButObservedOldBridgeDoes() {
+    @Test fun unknownBridgeBlocksUntilHealthAndObservedOldBridgeDoes() {
         BridgeCompatibility.withObserved(null) {
-            assertTrue(BridgeCompatibility.satisfies("0.29"))
+            assertFalse(BridgeCompatibility.satisfies("0.29"))
         }
         BridgeCompatibility.withObserved("0.27") {
             assertFalse(BridgeCompatibility.satisfies("0.28"))
             assertTrue(BridgeCompatibility.satisfies(null))
+        }
+    }
+
+    @Test fun unknownBridgeDoesNotOfferExternalMcpOrMarketplaceTools() {
+        BridgeCompatibility.withObserved(null) {
+            assertFalse(ModuleRegistry.isEnabled("mcp"))
+            assertFalse(ModuleRegistry.isEnabled("marketplace"))
+            assertNull(ToolRegistry.get("mcp.search"))
+            assertNull(ToolRegistry.get("marketplace.search"))
+            assertTrue(ModuleRegistry.isEnabled("listing-attention"))
+        }
+    }
+
+    @Test fun failedOrStaleObservationMustBeInvalidatedUntilNewHealth() {
+        BridgeCompatibility.withObserved("0.29") {
+            assertTrue(BridgeCompatibility.satisfies("0.29"))
+            BridgeCompatibility.invalidateObservation()
+            assertNull(BridgeCompatibility.observedVersion())
+            assertFalse(BridgeCompatibility.satisfies("0.29"))
+            BridgeCompatibility.observe("0.28")
+            assertTrue(BridgeCompatibility.satisfies("0.28"))
+            assertFalse(BridgeCompatibility.satisfies("0.29"))
         }
     }
 
