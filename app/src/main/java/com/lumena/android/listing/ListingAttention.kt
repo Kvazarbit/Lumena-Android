@@ -327,6 +327,16 @@ object ListingAttentionPolicy {
         val now = notice.observedAt
         val retained = state.records.filter { now - it.seenAt <= RETENTION_MS }
 
+        // A site-provided stable URL identifies the same job across poll cycles.
+        // A salary edit, refresh date, or a second poll after 48 h is not a
+        // newly discovered job. Keep its original first-seen timestamp.
+        val canonicalUrl = notice.url?.takeIf { it.isNotBlank() }
+        if (canonicalUrl != null && retained.any {
+                it.source == notice.source && it.url == canonicalUrl
+            }) {
+            return ListingIngestResult(state, null, duplicate = true)
+        }
+
         val key = ListingText.key(notice.source, ListingText.normalize("$title $text", fold = true))
         if (retained.any { it.contentKey == key && abs(now - it.seenAt) <= DUPLICATE_WINDOW_MS }) {
             return ListingIngestResult(state, null, duplicate = true)
