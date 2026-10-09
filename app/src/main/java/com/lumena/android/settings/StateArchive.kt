@@ -23,7 +23,8 @@ object StateArchive {
         "lumena_constitution_genome.json", "lumena_coordinator_experience.json",
         "lumena_evidence_graph.json", "lumena_adaptive_web_research.json",
         "lumena_tinyjev_calibration.json", "lumena_laya_shadow_v1.json", "lumena_portable_kernel.json",
-        "lumena_nervous_system_v1.json", "lumena_fractal_experience_canvas_v1.json")
+        "lumena_nervous_system_v1.json", "lumena_fractal_experience_canvas_v1.json",
+        "lumena_listing_attention_v1.json")
     val databases = setOf("lumena_context_genome.db", "lumena_landscape.db")
     val allowed = files.map { "files/$it" }.toSet() + databases.map { "databases/$it" } + "preferences.json"
     private val adapter = Moshi.Builder().add(KotlinJsonAdapterFactory()).build().adapter(StateArchiveManifest::class.java)
