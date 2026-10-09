@@ -14,6 +14,9 @@ import org.junit.Test
  * kernel works with every module disabled.
  */
 class ModuleKernelBoundaryTest {
+    @org.junit.Before fun installKnownBridgeForTest() { BridgeCompatibility.observe("0.29") }
+    @org.junit.After fun clearBridgeAfterTest() { BridgeCompatibility.clearForTests() }
+
     private val olxGoal = "Знайди на OLX оголошення про роботу в Legionowo"
     private val mcpGoal = "знайди через MCP вакансії сервісанта в Legionowo"
     private val webGoal = "знайди в інтернеті новини про Gemma"
