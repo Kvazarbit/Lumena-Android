@@ -1,5 +1,12 @@
 # Lumena Cognitive Exoskeleton Roadmap
 
+> **2026-10-09 — PC-first/Opus audit hardening handoff:** [детальний план, 10 дефектів,
+> 11 mutation probes, privacy/typo/Pracuj/Bridge acceptance та блокування
+> перенесення неперевірених 24 оцінок на телефон](pc-preference-evaluation-and-module-hardening.uk.md).
+> Робоча гілка: `feature/pc-eval-modules-hardening-v1`, stable не змінювати.
+> Реальні 24 labels (6 👎 водіям) поки відомі лише агреговано; їх не вигадувати.
+
+
 Стан документа: 2026-09-30.  
 Поточна canary-лінія: `0.12.14-ci1552`, versionCode 40, Bridge 0.27.  
 Цей документ є дорожньою картою. Позначка **PLAN** не означає, що функція вже реалізована або підтверджена на телефоні.
