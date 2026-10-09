@@ -338,7 +338,8 @@ object ListingAttentionPolicy {
         }
 
         val key = ListingText.key(notice.source, ListingText.normalize("$title $text", fold = true))
-        if (retained.any { it.contentKey == key && abs(now - it.seenAt) <= DUPLICATE_WINDOW_MS }) {
+        if (canonicalUrl == null &&
+            retained.any { it.contentKey == key && abs(now - it.seenAt) <= DUPLICATE_WINDOW_MS }) {
             return ListingIngestResult(state, null, duplicate = true)
         }
 
