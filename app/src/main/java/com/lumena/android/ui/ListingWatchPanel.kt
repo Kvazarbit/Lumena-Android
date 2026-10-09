@@ -14,6 +14,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
 import com.lumena.android.listing.ListingAlerts
+import com.lumena.android.agent.core.ModuleRegistry
+import com.lumena.android.modules.ListingAttentionModule
 import com.lumena.android.listing.ListingAttentionPolicy
 import com.lumena.android.listing.ListingAttentionState
 import com.lumena.android.listing.ListingDecision
@@ -51,6 +53,9 @@ fun ListingWatchPanel(refreshToken: Int) {
                     "Рідкісне приватне оголошення під ваші навички — гучне сповіщення; постійний набір — тиша. " +
                     "Навик вчиться тільки з ваших 👍/👎."
             )
+            if (!ModuleRegistry.isEnabled(ListingAttentionModule.ID)) {
+                Text("Модуль вимкнено в розділі «Модулі»: сповіщення OLX ігноруються і нічого не зберігається.")
+            }
             Text(if (listenerOn) "Доступ до сповіщень: увімкнено" else "Доступ до сповіщень: вимкнено — Lumena не бачить OLX")
             OutlinedButton(onClick = {
                 context.startActivity(

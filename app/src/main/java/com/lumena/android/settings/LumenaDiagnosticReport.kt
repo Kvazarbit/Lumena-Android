@@ -3,6 +3,7 @@ package com.lumena.android.settings
 import android.content.Context
 import android.os.Build
 import com.lumena.android.agent.core.ConstitutionCharter
+import com.lumena.android.agent.core.ModuleRegistry
 import com.lumena.android.agent.core.HistoricalRecordOrigin
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.local.TermuxBridgeClient
@@ -467,6 +468,17 @@ object LumenaDiagnosticFormatter {
                 appendLine("partial=${charter.partial}")
                 appendLine("pending=${charter.pending}")
             }
+            appendLine()
+
+            appendLine("[MODULES]")
+            ModuleRegistry.all().forEach { module ->
+                appendLine(
+                    "${module.manifest.id}=v${module.manifest.version}" +
+                        " enabled=${ModuleRegistry.isEnabled(module.manifest.id)}" +
+                        " tools=${module.manifest.tools.size}"
+                )
+            }
+            appendLine("violations=${ModuleRegistry.violations().size}")
             appendLine()
 
             appendLine("[CONSTITUTION_GENOME]")

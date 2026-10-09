@@ -12,6 +12,8 @@ import android.service.notification.StatusBarNotification
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.lumena.android.settings.ListingAttentionStore
+import com.lumena.android.agent.core.ModuleRegistry
+import com.lumena.android.modules.ListingAttentionModule
 import java.util.concurrent.Executors
 
 /** One background thread for all listing work: notification callbacks must stay fast. */
@@ -40,6 +42,8 @@ class ListingNotificationListener : NotificationListenerService() {
     }
 
     private fun handle(sbn: StatusBarNotification) {
+        // A disabled module reads and stores nothing.
+        if (!ModuleRegistry.isEnabled(ListingAttentionModule.ID)) return
         if (!ListingNoticeExtractor.isWatchedSource(sbn.packageName)) return
         val raw = rawCapture(sbn)
         if (ListingNoticeExtractor.isPrivateMessage(raw)) return
