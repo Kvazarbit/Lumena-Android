@@ -21,6 +21,7 @@ import com.lumena.android.listing.ListingAttentionState
 import com.lumena.android.listing.ListingDecision
 import com.lumena.android.listing.ListingRecord
 import com.lumena.android.settings.ListingAttentionStore
+import com.lumena.android.settings.ListingCaptureSettings
 import kotlinx.coroutines.*
 import kotlin.math.roundToInt
 
@@ -35,6 +36,7 @@ fun ListingWatchPanel(refreshToken: Int) {
     var listenerOn by remember { mutableStateOf(false) }
     var alertsOn by remember { mutableStateOf(false) }
     var showRaw by remember { mutableStateOf(false) }
+    var captureRaw by remember { mutableStateOf(ListingCaptureSettings.isEnabled(context)) }
     val askAlerts = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { tick++ }
 
     LaunchedEffect(refreshToken, tick) {
@@ -77,6 +79,15 @@ fun ListingWatchPanel(refreshToken: Int) {
                 }) { Text("Дозволити сповіщення Lumena") }
             }
             OutlinedButton(onClick = { tick++ }) { Text("Оновити") }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Зберігати сирі OLX push для калібрування (окремий дозвіл, типово вимкнено)",
+                    modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                Switch(checked = captureRaw, onCheckedChange = { on ->
+                    ListingCaptureSettings.setEnabled(context, on)
+                    captureRaw = on
+                    tick++
+                })
+            }
             PracujWatchSection { tick++ }
             error?.let { Text("Стан не прочитано: $it") }
 
