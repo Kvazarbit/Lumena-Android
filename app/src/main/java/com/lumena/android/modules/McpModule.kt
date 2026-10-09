@@ -31,7 +31,9 @@ object McpModule : LumenaModule {
                 setOf(ToolCapability.READ_STATE, ToolCapability.NETWORK),
                 setOf("mcp_search")
             )
-        )
+        ),
+        // mcp.search arrived in Termux bridge 0.29.
+        requiresBridge = "0.29"
     )
 
     override fun route(normalized: String, lower: String): TaskIntentProfile? {

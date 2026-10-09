@@ -27,7 +27,9 @@ data class ModuleManifest(
     val description: String,
     val tools: List<ModuleTool> = emptyList(),
     /** App-private files this module owns; each must be in StateArchive. */
-    val stateFiles: List<String> = emptyList()
+    val stateFiles: List<String> = emptyList(),
+    /** Oldest Termux bridge that has this module's tools; null when it needs no bridge. */
+    val requiresBridge: String? = null
 )
 
 interface LumenaModule {
@@ -68,7 +70,17 @@ object ModuleRegistry {
 
     fun all(): List<LumenaModule> = BuiltInModules.all
 
-    fun enabled(): List<LumenaModule> = accepted.filter { it.manifest.id !in disabledIds }
+    /** Accepted, switched on by the owner, and supported by the installed bridge. */
+    fun enabled(): List<LumenaModule> = accepted.filter {
+        it.manifest.id !in disabledIds && BridgeCompatibility.satisfies(it.manifest.requiresBridge)
+    }
+
+    /** Why a module the owner left on cannot run on this phone; null when it can. */
+    fun unavailableReason(module: LumenaModule): String? {
+        val required = module.manifest.requiresBridge ?: return null
+        if (BridgeCompatibility.satisfies(required)) return null
+        return "потрібен Termux bridge ≥ $required, на телефоні ${BridgeCompatibility.observedVersion()}"
+    }
 
     fun isEnabled(id: String): Boolean = enabled().any { it.manifest.id == id }
 

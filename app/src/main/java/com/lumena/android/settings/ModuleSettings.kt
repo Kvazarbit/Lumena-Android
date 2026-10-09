@@ -1,6 +1,7 @@
 package com.lumena.android.settings
 
 import android.content.Context
+import com.lumena.android.agent.core.BridgeCompatibility
 import com.lumena.android.agent.core.ModuleRegistry
 
 /**
@@ -11,6 +12,7 @@ import com.lumena.android.agent.core.ModuleRegistry
 object ModuleSettings {
     private const val PREFS = "lumena_modules"
     private const val KEY_DISABLED = "disabled"
+    private const val KEY_BRIDGE_VERSION = "bridge_version"
 
     fun disabled(context: Context): Set<String> =
         context.applicationContext
@@ -19,9 +21,23 @@ object ModuleSettings {
             .orEmpty()
             .toSet()
 
-    /** Applies the stored switches to the running kernel. */
+    /** Applies the stored switches and the last seen bridge version to the running kernel. */
     fun apply(context: Context) {
         ModuleRegistry.setDisabled(disabled(context))
+        BridgeCompatibility.observe(
+            context.applicationContext
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_BRIDGE_VERSION, null)
+        )
+    }
+
+    /** Called with the version from each successful bridge `health`. */
+    fun rememberBridgeVersion(context: Context, version: String) {
+        context.applicationContext
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_BRIDGE_VERSION, version)
+            .apply()
     }
 
     fun setEnabled(context: Context, id: String, enabled: Boolean) {

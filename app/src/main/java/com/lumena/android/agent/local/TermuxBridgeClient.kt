@@ -2,6 +2,8 @@ package com.lumena.android.agent.local
 
 import android.content.Context
 import com.lumena.android.settings.LumenaPreferences
+import com.lumena.android.settings.ModuleSettings
+import com.lumena.android.agent.core.BridgeCompatibility
 import com.lumena.android.agent.core.BridgeTransportPolicy
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -65,9 +67,17 @@ class TermuxBridgeClient(
             }
         }
         val first = executeOnce(toolRequest)
-        return if (first.transportFailure && BridgeTransportPolicy.canRetry(toolRequest.tool)) {
+        val result = if (first.transportFailure && BridgeTransportPolicy.canRetry(toolRequest.tool)) {
             executeOnce(toolRequest).result
         } else first.result
+        if (toolRequest.tool == "health" && result.ok) {
+            // The installed bridge decides which modules can run on this phone.
+            BridgeCompatibility.versionFromHealth(result.stdout)?.let { version ->
+                BridgeCompatibility.observe(version)
+                context?.let { ModuleSettings.rememberBridgeVersion(it, version) }
+            }
+        }
+        return result
     }
 
     private data class Attempt(val result: ToolResult, val transportFailure: Boolean = false)

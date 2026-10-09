@@ -51,7 +51,9 @@ object MarketplaceModule : LumenaModule {
                 setOf(ToolCapability.READ_STATE),
                 setOf("marketplace_watch_remove")
             )
-        )
+        ),
+        // marketplace.* arrived in Termux bridge 0.28.
+        requiresBridge = "0.28"
     )
 
     override fun route(normalized: String, lower: String): TaskIntentProfile? {
