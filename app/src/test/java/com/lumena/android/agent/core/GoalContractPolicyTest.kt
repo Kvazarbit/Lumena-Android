@@ -112,6 +112,34 @@ class GoalContractPolicyTest {
     }
 
     @Test
+    fun explicitMcpSearchCanSatisfyMcpSourceCriterionWithoutPretendingIndependentRead() {
+        var contract = GoalContractPolicy.initial(
+            intent = TaskIntent.PUBLIC_WEB,
+            requiredTools = emptySet(),
+            visualRequired = false,
+            goal = "Знайди через MCP вакансії сервісанта в Legionowo"
+        )
+        val call = AgentDecision.ToolCall(
+            tool = "mcp.search",
+            args = mapOf("query" to "serwisant Legionowo")
+        )
+        contract = recorded(
+            contract,
+            call,
+            true
+        ).first
+
+        val source = contract.criteria
+            .first { it.id == "source-content-evidence" }
+        assertEquals(CriterionStatus.PASSED, source.status)
+        assertEquals(
+            VerificationStrength.TOOL_RESULT,
+            source.evidence.single().strength
+        )
+        assertTrue(GoalContractPolicy.allMandatoryPassed(contract))
+    }
+
+    @Test
     fun marketplaceDiscoveryCanSatisfyMarketplaceSourceCriterionWithoutPretendingDirectRead() {
         var contract = GoalContractPolicy.initial(
             intent = TaskIntent.PUBLIC_WEB,
