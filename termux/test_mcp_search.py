@@ -172,6 +172,34 @@ class McpSearchTest(unittest.TestCase):
         self.assertEqual("req-mcp-1", data["request_id"])
         call.assert_called_once()
 
+    def test_inspect_batch_accepts_mcp_search_as_read_only(self):
+        fixture = {
+            "ok": True,
+            "exitCode": 0,
+            "stdout": json.dumps({
+                "mode": "mcp",
+                "provider": "fixture",
+                "content": ["result"],
+            }),
+            "stderr": "",
+            "error": None,
+        }
+        with patch.object(self.b, "mcp_search", return_value=fixture) as search:
+            result = self.b.inspect_batch({
+                "requests": [
+                    {
+                        "tool": "mcp.search",
+                        "args": {"query": "serwisant Legionowo"},
+                    }
+                ]
+            })
+
+        self.assertTrue(result["ok"], result)
+        payload = json.loads(result["stdout"])
+        self.assertEqual("mcp.search", payload["results"][0]["tool"])
+        self.assertTrue(payload["results"][0]["ok"])
+        search.assert_called_once()
+
     def test_config_never_embeds_bearer_token_and_uses_env_reference(self):
         self.b.MCP_SEARCH_CONFIG_FILE.write_text(
             json.dumps(
