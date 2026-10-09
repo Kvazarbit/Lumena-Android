@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.28
+Lumena Termux Bridge v0.29
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -634,7 +634,7 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
         headers={
             "Accept": "application/json",
             "Accept-Encoding": "identity",
-            "User-Agent": "LumenaBridge/0.25",
+            "User-Agent": "LumenaBridge/0.29",
             "Cache-Control": "no-cache",
         },
     )
@@ -694,7 +694,7 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
         headers={
             "Accept": "text/html,text/plain,application/json,application/xml,text/xml,application/xhtml+xml;q=0.9,*/*;q=0.1",
             "Accept-Encoding": "identity",
-            "User-Agent": "LumenaBridge/0.25",
+            "User-Agent": "LumenaBridge/0.29",
             "Cache-Control": "no-cache",
         },
     )
@@ -770,7 +770,7 @@ def _web_fetch(
             raise ValueError("Redirect loop")
         visited.add(url)
         request = urllib.request.Request(url, headers={
-            "User-Agent": "LumenaBridge/0.25", "Accept-Encoding": "identity",
+            "User-Agent": "LumenaBridge/0.29", "Accept-Encoding": "identity",
             "Accept": "text/html,application/json,text/plain;q=0.9", **(headers or {}),
         })
         try:
@@ -2405,7 +2405,7 @@ def _wikimedia_image_search(
         headers={
             "Accept": "application/json",
             "Accept-Encoding": "identity",
-            "User-Agent": "LumenaBridge/0.25 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.29 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -2477,7 +2477,7 @@ def _openverse_image_search(
         method="GET",
         headers={
             "Accept": "application/json",
-            "User-Agent": "LumenaBridge/0.25 (local Android assistant)",
+            "User-Agent": "LumenaBridge/0.29 (local Android assistant)",
             "Cache-Control": "no-cache",
         },
     )
@@ -3419,7 +3419,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + alias for alias, root in READONLY_ALIASES.items() if root.exists()) or '(none)'}\n"
                 f"read_roots_config={READ_ROOTS_FILE}\n"
-                f"version=0.28\n"
+                f"version=0.29\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
                 f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
@@ -3739,7 +3739,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.25"
+    server_version = "LumenaBridge/0.29"
     protocol_version = "HTTP/1.1"
 
     def setup(self) -> None:
