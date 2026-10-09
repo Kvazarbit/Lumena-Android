@@ -1738,3 +1738,17 @@ experience — advisory only; phone і current Git head лишаються execu
 
 Після проходження gate provider можна включити як read-only source для Lumena project procurement/research.
 
+
+### Listing attention v1 — навик відбору оголошень за push OLX
+
+**Статус:** IMPLEMENTED на `feature/listing-attention-v1` (app `0.12.24` / versionCode `50`), не phone-verified.
+Деталі, ваги, інваріанти і phone acceptance: [listing-attention-v1.uk.md](listing-attention-v1.uk.md).
+
+Чому окремий шлях: `marketplace.search` через пошуковий індекс структурно не бачить оголошень,
+які живуть ~15 хвилин, а саме їх шукає власник (рідкісний приватний запит під його навички).
+v1 читає лише push збереженого пошуку з застосунку OLX на телефоні власника (`NotificationListenerService`):
+без скрейпінгу, без обходу CloudFront, без зберігання приватного чату.
+
+Інваріант навчання: модель змінюється тільки від явних 👍/👎 власника; ingest/alert/власний score
+її не змінюють (`ingestingAndAlertingNeverTeachTheSkill`). Корисність доводиться влучністю тривог
+і лічильником пропущених у панелі Tools, а не кількістю кроків навчання.
