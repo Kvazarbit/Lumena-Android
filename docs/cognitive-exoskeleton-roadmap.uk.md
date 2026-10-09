@@ -1622,6 +1622,107 @@ Marketplace intent не повинен ламатися через звичай�
 
 Fuzzy matching може допомагати лише у routing/discovery. Воно не повинно мовчки перетворювати невпевнений текст на mutating/purchase/contact дію.
 
+### MCP robustness / mutation + typo gate — handoff для наступних моделей
+
+**Стан на 2026-10-09:** реалізація зовнішнього read-only MCP search broker уже є на
+`feature/olx-pl-watch-v1`; exact-head `f4377a3e70011dcf0509beaeb0be3523b906769e` пройшов
+Android CI **#2042 SUCCESS**. У коді вже є `mcp.search`, MCP
+`initialize -> notifications/initialized -> tools/list -> tools/call`, schema mapping,
+`readOnlyHint=true` gate, explicit MCP routing, GoalContract source evidence і
+`inspect.batch` support. Версії для цього циклу: app `0.12.23` / versionCode `49`,
+Bridge `0.29`.
+
+Це **не phone acceptance і не DONE**: реальний зовнішній MCP provider на телефоні ще
+не пройшов повний e2e, а нова MCP-логіка ще не має окремого mutation + typo/fuzz gate.
+
+#### Реалізаційний план: bounded language normalization
+
+Додати окремий pure/deterministic normalizer для **routing/discovery cues**, а не для
+довільної зміни змісту запиту. Він має:
+- розпізнавати `MCP` і bounded близькі форми/змішану кирилицю-латиницю, напр.
+  `мср`, `мсп`, `МCP`, `mсp`, без глобальної автокорекції всього тексту;
+- розпізнавати невеликі помилки у search verbs: `черз`, `чирез`, `пошукай`,
+  `найди`, `знайди`, `глянь`, але не переписувати довільні імена/URL;
+- толерувати типові помилки в job/marketplace cues, напр. `ваквнсії`, `роботі`,
+  коли контекст уже вказує на пошук;
+- застосовувати fuzzy/edit-distance лише до короткого allow-list словника routing cues;
+- передавати в пошуковий provider очищений subject/query, але зберігати raw input у
+  task/evidence context для аудиту.
+
+Критичний інваріант: fuzzy layer може тільки допомогти вибрати **read-only discovery
+route**. Він ніколи не додає permission, не змінює `ToolRisk`, не обходить ToolGate і
+не може перетворити невпевнений текст на write/contact/buy/apply/send дію.
+
+#### Обов'язковий typo/adversarial corpus
+
+До regression suite додати щонайменше такі реальні класи вводу:
+- `знайди черз mcp вакансіі`;
+- `знайди через мср вакансії сервісанта в Legionowo`;
+- `пошукай чирез MCP`;
+- `ваквнсії в Легіоново`;
+- `найди через mcp роботі`;
+- `мсп пошук`;
+- mixed-script: `МCP`, `mсp`;
+- синоніми: `знайди / пошукай / подивись / глянь / найди / wyszukaj / znajdź`.
+
+Для кожного corpus case перевіряти не лише intent, а й:
+- canonical tool/preflight;
+- очищений search query;
+- відсутність вигаданих URL/provider ids;
+- незмінність authority/confirmation policy;
+- однаковий semantics class для clean і typo form, коли неоднозначності немає.
+
+#### Negative / authority tests
+
+Обов'язково мати контрприклади:
+- `не використовуй MCP`, `не шукай через MCP` **не** повинні створювати MCP preflight;
+- typo біля назви mutating/action tool не може дати йому read-only authority;
+- MCP tool без `annotations.readOnlyHint=true` не auto-select-иться;
+- `readOnlyHint=false` залишається rejected навіть якщо назва містить `search/find`;
+- невідомий required `inputSchema` arg -> fail closed, без здогадування;
+- auth/config/provider mismatch -> структурований failure, не pseudo-success;
+- зовнішній MCP prose/result не стає permission або completion proof;
+- provider/market provenance не губиться при fallback.
+
+#### MCP-specific mutation testing
+
+Розширити mutation harness окремими мутантами для нового MCP шляху. Мінімум:
+1. `readOnlyHint == true` -> permissive/removed: тест мусить **вбити мутант**.
+2. unknown required schema arg fail-closed -> ignored/defaulted: мутант мусить бути killed.
+3. explicit `MCP` route -> ordinary web/general route: routing regression мусить впасти.
+4. query cleanup видалено: тест мусить побачити, що `через MCP` потрапило в provider query.
+5. provider provenance/id перевизначено або загублено: evidence test мусить впасти.
+6. MCP failure помилково повертає `ok=true`: failure semantics test мусить впасти.
+7. GoalContract приймає MCP source без successful tool result: completion test мусить впасти.
+8. `inspect.batch` допускає не-read-only MCP/action path: authority test мусить впасти.
+
+Mutation run зараховується тільки коли JUnit/Python assertion реально вбив мутант;
+compile/infrastructure/timeout failure не вважається успішним mutation proof.
+
+Рекомендована реалізація: або розширити `scripts/mutation_recovery_probe.py`, або зробити
+окремий `scripts/mutation_mcp_probe.py`, який ставить один mutant за раз і відновлює
+оригінальні bytes після кожного run.
+
+#### Phone acceptance для MCP robustness
+
+Перед позначенням MCP search як phone-usable:
+1. exact-head CI green;
+2. owner-signed app `0.12.23+` і Bridge `0.29+` встановлені на телефон;
+3. підключений реальний MCP endpoint через локальну config/credential reference;
+4. clean request `знайди через MCP ...` дає verified `mcp.search`;
+5. щонайменше 5 typo/mixed-script варіантів дають той самий read-only route;
+6. negated MCP request не запускає MCP;
+7. server tool із `readOnlyHint=false` не виконується автоматично;
+8. MCP unavailable -> чесний fallback/partial, без fabricated result;
+9. Diagnostics/evidence містять provider/tool/protocol provenance;
+10. повторний phone diagnostic не показує authority regression.
+
+#### Handoff rule
+
+Наступна модель повинна починати з поточного branch/HEAD і цього gate, а не створювати
+ще один паралельний MCP implementation. Stable branch не змінювати. Imported/старий
+experience — advisory only; phone і current Git head лишаються execution/state authority.
+
 ### Acceptance gate
 
 Перед позначенням `olx-pl` як usable:
