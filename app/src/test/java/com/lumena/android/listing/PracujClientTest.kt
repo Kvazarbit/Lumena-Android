@@ -17,14 +17,18 @@ class PracujClientTest {
     @Test fun unknownContentLengthCannotExceedBound() {
         val stream = object : InputStream() {
             var calls = 0
+            var remaining = 16 * 1024
             override fun read(): Int {
                 calls++
-                return 65
+                return if (remaining-- > 0) 65 else -1
             }
             override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
                 calls++
-                java.util.Arrays.fill(buffer, offset, offset + length, 65.toByte())
-                return length
+                if (remaining <= 0) return -1
+                val count = minOf(remaining, length)
+                remaining -= count
+                java.util.Arrays.fill(buffer, offset, offset + count, 65.toByte())
+                return count
             }
         }
         assertThrows(IllegalStateException::class.java) {
