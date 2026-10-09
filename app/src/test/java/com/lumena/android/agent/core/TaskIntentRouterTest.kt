@@ -129,6 +129,10 @@ class TaskIntentRouterTest {
         assertEquals(TaskIntent.PUBLIC_WEB, profile.intent)
         assertEquals("mcp.search", profile.preflight?.tool)
         assertTrue(profile.preflight?.mandatory == true)
+        assertEquals(
+            "вакансії сервісанта в Legionowo",
+            profile.preflight?.args?.get("query")
+        )
         assertTrue("web.search" in profile.recommendedTools)
         assertTrue("marketplace.search" in profile.recommendedTools)
     }
