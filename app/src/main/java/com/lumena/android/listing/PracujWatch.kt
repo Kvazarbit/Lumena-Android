@@ -95,6 +95,14 @@ object PracujWatch {
             .apply()
     }
 
+    /** A changed search is a new baseline, not 50 fresh job alerts. */
+    internal fun needsBaseline(context: Context, url: String): Boolean =
+        prefs(context).getString("baselined_url", null) != url
+
+    internal fun markBaselined(context: Context, url: String) {
+        prefs(context).edit().putString("baselined_url", url).apply()
+    }
+
     private fun connected() =
         Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
@@ -172,7 +180,10 @@ class PracujWatchWorker(
             return Result.success()
         }
         val config = PracujWatch.load(app)
-        val url = PracujSource.searchUrl(config.search)
+        val url = runCatching { PracujSource.searchUrl(config.search) }.getOrElse { failure ->
+            PracujWatch.recordStatus(app, "некоректні параметри: ${failure.message}")
+            return Result.success()
+        }
         val html = withContext(Dispatchers.IO) { PracujClient.fetch(url) }.getOrElse { failure ->
             PracujWatch.recordStatus(app, "помилка: ${failure.message}")
             // No retry: a failed or limited site is not hammered; the next period tries again.
@@ -181,15 +192,21 @@ class PracujWatchWorker(
         when (val page = PracujSource.parse(html, System.currentTimeMillis())) {
             is PracujPage.Blocked -> PracujWatch.recordStatus(app, "зупинено: ${page.reason}")
             is PracujPage.Offers -> {
+                val firstForSearch = PracujWatch.needsBaseline(app, url)
                 val records = withContext(Dispatchers.IO) {
-                    runCatching { ListingAttentionStore.ingestNotices(app, page.notices) }.getOrDefault(emptyList())
+                    runCatching { ListingAttentionStore.ingestNotices(app, page.notices) }
+                }.getOrElse { failure ->
+                    PracujWatch.recordStatus(app, "помилка збереження: ${failure.message}")
+                    return Result.success()
                 }
-                val alerts = records.filter { it.decision == ListingDecision.ALERT }
-                // A first run can see 50 offers; at most a few loud alerts, the rest stay in the panel.
+                // Mark the first complete parse as baseline only after successful persistence.
+                if (firstForSearch) PracujWatch.markBaselined(app, url)
+                val alerts = if (firstForSearch) emptyList() else records.filter { it.decision == ListingDecision.ALERT }
                 alerts.take(MAX_ALERTS_PER_RUN).forEach { record -> runCatching { ListingAlerts.post(app, record, null) } }
                 PracujWatch.recordStatus(
                     app,
-                    "на сторінці ${page.notices.size}, нових ${records.size}, тривог ${alerts.size}"
+                    if (firstForSearch) "початкова база: ${page.notices.size} вакансій, без тривог"
+                    else "на сторінці ${page.notices.size}, нових ${records.size}, тривог ${alerts.size}"
                 )
             }
         }
