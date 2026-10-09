@@ -45,11 +45,18 @@ def features(title: str, description: str) -> dict[str, float]:
 
 
 def safe_label(value: Any) -> int:
-    # Never use bool(value): bool("👎") would incorrectly become a positive label.
-    if value in (1, "+1", "👍", "up", "useful", True):
-        return 1
-    if value in (-1, "-1", "👎", "down", "not_useful", False):
-        return 0
+    # Python treats 0 == False and 1 == True; never let that coerce labels.
+    if type(value) is int:
+        if value == 1:
+            return 1
+        if value == -1:
+            return 0
+    if isinstance(value, str):
+        v = value.strip().casefold()
+        if v in ("+1", "1", "👍", "up", "useful"):
+            return 1
+        if v in ("-1", "👎", "down", "not_useful"):
+            return 0
     raise ValueError("feedback must be explicit 👍/👎 (+1/-1), never inferred")
 
 
