@@ -121,6 +121,19 @@ class TaskIntentRouterTest {
     }
 
     @Test
+    fun explicitMcpSearchUsesMcpPreflight() {
+        val profile = TaskIntentRouter.route(
+            "Знайди через MCP вакансії сервісанта в Legionowo"
+        )
+
+        assertEquals(TaskIntent.PUBLIC_WEB, profile.intent)
+        assertEquals("mcp.search", profile.preflight?.tool)
+        assertTrue(profile.preflight?.mandatory == true)
+        assertTrue("web.search" in profile.recommendedTools)
+        assertTrue("marketplace.search" in profile.recommendedTools)
+    }
+
+    @Test
     fun olxPolandSearchUsesMarketplacePreflight() {
         val profile = TaskIntentRouter.route(
             "Знайди на OLX оголошення про роботу сервіcантом у Legionowo"
