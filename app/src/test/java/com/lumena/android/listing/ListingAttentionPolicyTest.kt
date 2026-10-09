@@ -230,7 +230,9 @@ class ListingAttentionPolicyTest {
         assertEquals(listOf("Kierowca osobisty", "Pomoc przy remoncie"), ListingNoticeExtractor.extract(inbox).map { it.title })
         assertTrue(ListingNoticeExtractor.extract(inbox.copy(groupSummary = true)).isEmpty())
         assertTrue(ListingNoticeExtractor.extract(inbox.copy(source = "com.whatsapp")).isEmpty())
-        assertTrue(ListingNoticeExtractor.isWatchedSource("com.olx.southasia"))
+        assertFalse(ListingNoticeExtractor.isWatchedSource("com.olx.southasia"))
+        assertFalse(ListingNoticeExtractor.isWatchedSource("org.example.olx.spoof"))
+        assertTrue(ListingNoticeExtractor.isWatchedSource("pl.tablica"))
         assertFalse(ListingNoticeExtractor.isWatchedSource("com.lumena.android"))
 
         val single = ListingNoticeExtractor.extract(ListingRawCapture(source, title = " Kierowca ", text = " Legionowo ", at = t0))
