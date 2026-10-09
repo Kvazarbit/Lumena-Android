@@ -59,6 +59,25 @@ class McpSearchCueTest {
         assertEquals("вакансії", McpSearchCue.searchQuery(goal))
     }
 
+    @Test fun laterExplicitDenialCancelsPreviouslyRequestedMcpSearch() {
+        BridgeCompatibility.withObserved("0.29") {
+            listOf(
+                "знайди через MCP вакансії, але не використовуй MCP",
+                "знайди через MCP вакансії; не шукай через MCP",
+                "знайди через MCP роботу. Не використовуй MCP"
+            ).forEach { goal ->
+                assertFalse(goal, McpSearchCue.searchRequested(goal))
+                assertFalse(goal, TaskIntentRouter.route(goal).preflight?.tool == "mcp.search")
+                assertNull(goal, McpModule.sourceEvidenceTools(goal))
+            }
+        }
+    }
+
+    @Test fun mentionOfMcpInAnHttpsPathIsNotProtocolRoutingConsent() {
+        val goal = "знайди інформацію за адресою https://example.org/api/mcp"
+        assertFalse(McpSearchCue.searchRequested(goal))
+    }
+
     @Test fun protocolWithoutSearchSubjectMustNotIssueMcpCall() {
         BridgeCompatibility.withObserved("0.29") {
             val profile = TaskIntentRouter.route("мсп пошук")
