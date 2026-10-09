@@ -61,6 +61,18 @@ class BridgeCompatibilityTest {
         }
     }
 
+    @Test fun failedOrStaleObservationMustBeInvalidatedUntilNewHealth() {
+        BridgeCompatibility.withObserved("0.29") {
+            assertTrue(BridgeCompatibility.satisfies("0.29"))
+            BridgeCompatibility.invalidateObservation()
+            assertNull(BridgeCompatibility.observedVersion())
+            assertFalse(BridgeCompatibility.satisfies("0.29"))
+            BridgeCompatibility.observe("0.28")
+            assertTrue(BridgeCompatibility.satisfies("0.28"))
+            assertFalse(BridgeCompatibility.satisfies("0.29"))
+        }
+    }
+
     @Test fun garbageNeverOverwritesAnObservedVersion() {
         BridgeCompatibility.withObserved("0.29") {
             BridgeCompatibility.observe("not-a-version")
