@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-${{ github.event_name }}-${{ github.ref }}
+  # Same-repository draft PRs also trigger push; avoid duplicate SDK/native builds.
+  group: android-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
