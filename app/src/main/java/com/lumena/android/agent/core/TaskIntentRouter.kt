@@ -188,7 +188,7 @@ object TaskIntentRouter {
                 guidance = "Use mcp.search first when the user explicitly asks for MCP-backed search. The MCP broker auto-selects only external tools that declare readOnlyHint=true. If no compatible MCP provider is configured or the MCP search fails, fall back to web.search/marketplace.search and report the limitation instead of inventing results.",
                 preflight = IntentPreflight(
                     tool = "mcp.search",
-                    args = mapOf("query" to publicSearchQuery(normalized)),
+                    args = mapOf("query" to mcpSearchQuery(normalized)),
                     reason = "Honor the explicit MCP search request through a configured read-only MCP provider before using ordinary web fallback.",
                     mandatory = true
                 ),
@@ -252,6 +252,23 @@ object TaskIntentRouter {
             recommendedTools = emptyList(),
             guidance = "No deterministic operational recipe matched; let the model reason under the normal tool policy."
         )
+    }
+
+    private fun mcpSearchQuery(goal: String): String {
+        var query = publicSearchQuery(goal)
+        query = query.replace(
+            Regex(
+                "(?iu)\\b(?:через|via|przez|using|за\\s+допомогою)\\s+" +
+                    "(?:mcp|model\\s+context\\s+protocol)\\b"
+            ),
+            " "
+        )
+        return query
+            .replace(Regex("\\s{2,}"), " ")
+            .trim()
+            .trim(' ', '.', ',', ':', ';', '-', '—')
+            .take(240)
+            .ifBlank { publicSearchQuery(goal) }
     }
 
     private fun publicSearchQuery(goal: String): String {
