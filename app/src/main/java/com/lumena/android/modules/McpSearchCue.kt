@@ -31,20 +31,36 @@ internal object McpSearchCue {
         return i + 1
     }
 
-    private fun positiveHits(text: String): List<MatchResult> =
-        protocol.findAll(text).filter { hit ->
+    private data class Mention(val match: MatchResult, val requested: Boolean)
+
+    // Respect the latest explicit directive, including a later prohibition.
+    // Do not borrow a search verb from the next clause or an MCP-looking URL.
+    private fun directives(text: String): List<Mention> =
+        protocol.findAll(text).mapNotNull { hit ->
             val start = clauseStart(text, hit.range.first)
             val prefix = text.substring(start, hit.range.first).takeLast(150).trim()
-            val local = text.substring(start, minOf(text.length, hit.range.last + 100))
-            searchAction.containsMatchIn(local) && !negative.containsMatchIn(prefix)
+            val end = text.indexOfAny(charArrayOf(',', ';', '.', '!', '?', '\n'), hit.range.last + 1)
+                .let { if (it < 0) text.length else it }
+            val local = text.substring(start, end)
+            val preceding = text.getOrNull(hit.range.first - 1)
+            if (preceding == '/' || preceding == '=' || preceding == '?') {
+                null
+            } else if (negative.containsMatchIn(prefix)) {
+                Mention(hit, false)
+            } else if (searchAction.containsMatchIn(local)) {
+                Mention(hit, true)
+            } else {
+                null
+            }
         }.toList()
 
-    /** A negated mention is never a positive permission or an MCP recipe. */
-    fun searchRequested(raw: String): Boolean = positiveHits(raw.take(3000)).isNotEmpty()
+    /** A later negated MCP instruction overrides earlier positive mentions. */
+    fun searchRequested(raw: String): Boolean =
+        directives(raw.take(3000)).lastOrNull()?.requested == true
 
     fun searchQuery(raw: String): String {
         val text = raw.take(3000)
-        val active = positiveHits(text).lastOrNull()
+        val active = directives(text).lastOrNull()?.takeIf { it.requested }?.match
         // When one clause forbids MCP and a later one positively requests it,
         // do not send the earlier negative clause as search-provider query text.
         val current = active?.let { text.substring(clauseStart(text, it.range.first)) } ?: text
