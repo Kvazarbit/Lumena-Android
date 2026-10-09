@@ -61,8 +61,8 @@ whether they pass narrow technical gates.
 | #1 OLX broad package matching | exact allow-list `pl.tablica`; foreign/spoof ID rejected in `ListingAttentionPolicyTest`; raw storage separate opt-in | verify actual installed OLX package/channel & private-chat format on phone; expand allow-list only by evidence |
 | #2 Pracuj network | redirect/retry disabled, fixed host HTTPS, streaming 4 MiB cap; `PracujClientTest` | Android/network phone check |
 | #3 MCP typo/negation | `McpSearchCue` bounded cue recognition; `McpSearchCueTest` covers `мср`, `мсп`, mixed scripts, negation, query cleanup | phone e2e with real configured MCP provider; robustness extension |
-| #4 mutation | `scripts/mutation_module_probe.py`: 11 isolated mutants, exact-byte restore, only assertion failures accepted | exact-head mutation CI success |
-| #5 unknown Bridge | `BridgeCompatibility` requires observed compatible version; negative tests; UI already runs `health` on resume | cold phone startup and downgrade test |
+| #4 mutation | `scripts/mutation_module_probe.py`: 12 isolated mutants, exact-byte restore, only assertion failures accepted | exact-head mutation CI success |
+| #5 unknown Bridge | `BridgeCompatibility` requires fresh observed compatible version; cached last-run version is not trusted; failed/malformed health invalidates observation; negative tests | cold phone startup and downgrade test |
 | #6 duplicate manifest | `ModuleRegistry` rejects duplicate tool/alias/state ID inside one module; tests | phone modules panel check |
 | #7 sensitive defaults | absent settings disable notification-reading module; raw OLX push capture has separate default-OFF consent toggle | owner opt-in and no silent re-enable after reset/restore |
 | #8 Cyrillic city | explicit Варшава/Легіоново aliases; unsupported scripts cause visible error, not silent Legionowo; tests | typed input in phone Compose |
@@ -94,7 +94,7 @@ results. The wakeup is Android WorkManager, no Termux dependency.
 
 1. `UNIT`: Python synthetic PC suite; Kotlin routing/network/privacy tests;
    Termux MCP broker tests.
-2. `MUTATION`: `python scripts/mutation_module_probe.py`, 11 source mutants,
+2. `MUTATION`: `python scripts/mutation_module_probe.py`, 12 source mutants,
    each killed by a named assertion; compile/infrastructure timeouts are FAIL.
 3. `CI`: green exact-head job(s) for these changes, not a prior unrelated run.
 4. `PC_REAL_DATA`: original 24 user-rated examples; report counts and
