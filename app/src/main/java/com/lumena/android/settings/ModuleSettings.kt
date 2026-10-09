@@ -22,14 +22,12 @@ object ModuleSettings {
             .orEmpty()
             .toSet()
 
-    /** Applies the stored switches and the last seen bridge version to the running kernel. */
+    /** Owner switches persist; an old bridge version is NOT execution authority. */
     fun apply(context: Context) {
         ModuleRegistry.setDisabled(disabled(context))
-        BridgeCompatibility.observe(
-            context.applicationContext
-                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getString(KEY_BRIDGE_VERSION, null)
-        )
+        // Even when the last process saw v0.29, an out-of-band Termux update
+        // may have downgraded the bridge. Wait for a fresh health observation.
+        BridgeCompatibility.invalidateObservation()
     }
 
     /** Called with the version from each successful bridge `health`. */
