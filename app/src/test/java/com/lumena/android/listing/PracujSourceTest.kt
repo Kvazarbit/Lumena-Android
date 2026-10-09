@@ -124,7 +124,7 @@ class PracujSourceTest {
             "https://www.pracuj.pl/praca/legionowo;wp?rd=0",
             PracujSource.searchUrl(PracujSearch("Легіоново", 0, ""))
         )
-        listOf("НевідомеМісто", "Москва").forEach { name ->
+        listOf("НевідомеМісто", "Москва", "Wаrszawa").forEach { name ->
             org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
                 PracujSource.searchUrl(PracujSearch(name, 0, ""))
             }
