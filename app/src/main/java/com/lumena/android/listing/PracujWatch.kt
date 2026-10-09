@@ -15,6 +15,8 @@ import com.lumena.android.modules.ListingAttentionModule
 import com.lumena.android.modules.PracujModule
 import com.lumena.android.settings.ListingAttentionStore
 import java.util.concurrent.TimeUnit
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -102,30 +104,55 @@ object PracujWatch {
 
 /** One read of the public search page; never retried, never disguised. */
 internal object PracujClient {
-    private const val MAX_BYTES = 4L * 1024 * 1024
-    private val client = OkHttpClient.Builder()
+    private const val MAX_BYTES = 4 * 1024 * 1024
+    internal val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .callTimeout(45, TimeUnit.SECONDS)
+        // A server redirect must not send a request to an unrelated domain.
+        .followRedirects(false)
+        .followSslRedirects(false)
         .retryOnConnectionFailure(false)
         .build()
+
+    /** Bound actual bytes, not only Content-Length (which can be unknown). */
+    internal fun readBounded(stream: InputStream, limit: Int = MAX_BYTES): ByteArray {
+        require(limit in 1..MAX_BYTES)
+        val out = ByteArrayOutputStream()
+        val buffer = ByteArray(8192)
+        while (true) {
+            val n = stream.read(buffer)
+            if (n < 0) break
+            check(out.size().toLong() + n <= limit) { "сторінка завелика" }
+            out.write(buffer, 0, n)
+        }
+        return out.toByteArray()
+    }
 
     fun fetch(url: String): Result<String> = runCatching {
         val request = Request.Builder()
             .url(url)
-            .header("User-Agent", "Mozilla/5.0 (Linux; Android) Lumena (personal job alerts, low frequency)")
+            .header("User-Agent", "Lumena/0.12 (personal job alerts; no automation disguise)")
             .header("Accept-Language", "pl-PL,pl;q=0.9")
             .build()
+        check(request.url.scheme == "https" && request.url.host == "www.pracuj.pl") {
+            "дозволений лише https://www.pracuj.pl/"
+        }
         client.newCall(request).execute().use { response ->
             check(response.isSuccessful) {
                 when (response.code) {
                     403, 429 -> "Pracuj.pl обмежив доступ (HTTP ${response.code}); Lumena не обходить обмеження"
+                    in 300..399 -> "Pracuj.pl перенаправляє (HTTP ${response.code}); переходи заборонені"
                     else -> "Pracuj.pl відповів HTTP ${response.code}"
                 }
             }
             val body = checkNotNull(response.body) { "порожня відповідь" }
             check(body.contentLength() <= MAX_BYTES) { "сторінка завелика" }
-            body.string().also { check(it.length <= MAX_BYTES) { "сторінка завелика" } }
+            val kind = body.contentType()?.let { "${it.type}/${it.subtype}" }
+            check(kind == null || kind in setOf("text/html", "application/xhtml+xml")) {
+                "неочікуваний тип сторінки: $kind"
+            }
+            readBounded(body.byteStream()).toString(Charsets.UTF_8)
         }
     }
 }
