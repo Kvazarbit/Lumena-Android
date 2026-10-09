@@ -41,11 +41,42 @@ object PracujSource {
     private val day = DateTimeFormatter.ofPattern("dd.MM.yyyy").withZone(ZoneOffset.UTC)
     private val json = Moshi.Builder().build().adapter(Any::class.java)
 
-    /** `legionowo;wp?rd=10`, or `kierowca;kw/legionowo;wp?rd=10` with keywords. */
+    // Explicit, bounded city aliases. Unknown Cyrillic must not silently turn
+    // into the default Legionowo (or a partial ASCII slug).
+    private val cityAliases = mapOf(
+        "варшава" to "warszawa",
+        "варшаві" to "warszawa",
+        "легіоново" to "legionowo",
+        "леґіоново" to "legionowo",
+        "легионово" to "legionowo"
+    )
+
+    private fun hasNonLatinLetters(raw: String): Boolean =
+        raw.any { c ->
+            c.isLetter() &&
+                Character.UnicodeScript.of(c.code) != Character.UnicodeScript.LATIN
+        }
+
+    /** Reject invalid city/keyword text rather than searching a different place. */
     fun searchUrl(search: PracujSearch): String {
-        val city = slug(search.city).ifEmpty { "legionowo" }
+        val cityRaw = search.city.trim()
+        require(cityRaw.isNotEmpty()) { "Вкажи місто пошуку" }
+        val city = cityAliases[cityRaw.lowercase(Locale.ROOT)] ?: run {
+            require(!hasNonLatinLetters(cityRaw)) {
+                "Невідома назва міста кирилицею — введи польську назву латиницею"
+            }
+            slug(cityRaw)
+        }
+        require(city.any(Char::isLetter)) { "Місто має містити літери" }
+        val keywordsRaw = search.keywords.trim()
+        require(!hasNonLatinLetters(keywordsRaw)) {
+            "Ключові слова для Pracuj.pl потрібно вводити польською латиницею"
+        }
+        val keywords = slug(keywordsRaw)
+        require(keywordsRaw.isEmpty() || keywords.isNotEmpty()) {
+            "Ключові слова нечитабельні"
+        }
         val radius = search.radiusKm.coerceIn(0, 100)
-        val keywords = slug(search.keywords)
         val path = if (keywords.isEmpty()) "$city;wp" else "$keywords;kw/$city;wp"
         return "https://www.pracuj.pl/praca/$path?rd=$radius"
     }
@@ -61,7 +92,7 @@ object PracujSource {
             return PracujPage.Blocked("на сторінці немає списку вакансій (змінився формат або доступ обмежено)")
         }
         val offers = lists.maxByOrNull { it.size }.orEmpty()
-        val notices = offers.mapNotNull { (it as? Map<*, *>)?.let { offer -> toNotice(offer, now) } }
+        val notices = offers.flatMap { (it as? Map<*, *>)?.let { offer -> toNotices(offer, now) } ?: emptyList() }
         return PracujPage.Offers(notices.distinctBy { it.url ?: (it.title + it.text) })
     }
 
@@ -76,10 +107,13 @@ object PracujSource {
         }
     }
 
-    private fun toNotice(offer: Map<*, *>, now: Long): ListingNotice? {
+    private fun toNotices(offer: Map<*, *>, now: Long): List<ListingNotice> {
         val title = (offer["jobTitle"] as? String)?.trim().orEmpty()
-        if (title.isEmpty()) return null
-        val place = (offer["offers"] as? List<*>)?.firstOrNull() as? Map<*, *>
+        if (title.isEmpty()) return emptyList()
+        val places: List<Map<*, *>?> = (offer["offers"] as? List<*>)
+            ?.mapNotNull { it as? Map<*, *> }
+            ?.take(20)
+            ?.ifEmpty { listOf(null) } ?: listOf(null)
         val last = instant(offer["lastPublicated"])
         val first = instant(offer["initialPublicated"])
         val attributes = (offer["primaryAttributes"] as? List<*>).orEmpty().mapNotNull { attr ->
@@ -87,30 +121,30 @@ object PracujSource {
         }
         val republished = if (first != null && last != null && last - first >= REPUBLISHED_AFTER_MS) {
             "odnawiane ogłoszenie (pierwsza publikacja ${day.format(Instant.ofEpochMilli(first))})"
-        } else {
-            null
+        } else null
+        return places.map { place ->
+            val text = listOfNotNull(
+                offer["companyName"] as? String,
+                place?.get("displayWorkplace") as? String,
+                offer["salaryDisplayText"] as? String,
+                strings(offer["typesOfContract"]),
+                strings(offer["workSchedules"]),
+                strings(offer["positionLevels"]),
+                attributes.joinToString(", ").ifBlank { null },
+                republished,
+                (offer["jobDescription"] as? String)?.take(400)
+            ).map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" · ")
+            ListingNotice(
+                source = SOURCE,
+                title = title,
+                text = text,
+                postedAt = last ?: now,
+                url = (place?.get("offerAbsoluteUri") as? String)?.takeIf {
+                    it.startsWith("https://www.pracuj.pl/")
+                },
+                observedAt = now
+            )
         }
-        val text = listOfNotNull(
-            offer["companyName"] as? String,
-            place?.get("displayWorkplace") as? String,
-            offer["salaryDisplayText"] as? String,
-            strings(offer["typesOfContract"]),
-            strings(offer["workSchedules"]),
-            strings(offer["positionLevels"]),
-            attributes.joinToString(", ").ifBlank { null },
-            republished,
-            (offer["jobDescription"] as? String)?.take(400)
-        )
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .joinToString(" · ")
-        return ListingNotice(
-            source = SOURCE,
-            title = title,
-            text = text,
-            postedAt = last ?: now,
-            url = (place?.get("offerAbsoluteUri") as? String)?.takeIf { it.startsWith("https://www.pracuj.pl/") }
-        )
     }
 
     private fun strings(value: Any?): String? =
