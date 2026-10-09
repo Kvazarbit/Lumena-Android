@@ -110,10 +110,11 @@ object PracujSource {
     private fun toNotices(offer: Map<*, *>, now: Long): List<ListingNotice> {
         val title = (offer["jobTitle"] as? String)?.trim().orEmpty()
         if (title.isEmpty()) return emptyList()
-        val places: List<Map<*, *>?> = (offer["offers"] as? List<*>)
+        val groupedPlaces = (offer["offers"] as? List<*>)
             ?.mapNotNull { it as? Map<*, *> }
             ?.take(20)
-            ?.ifEmpty { listOf(null) } ?: listOf(null)
+            .orEmpty()
+        val places: List<Map<*, *>?> = if (groupedPlaces.isEmpty()) listOf(null) else groupedPlaces
         val last = instant(offer["lastPublicated"])
         val first = instant(offer["initialPublicated"])
         val attributes = (offer["primaryAttributes"] as? List<*>).orEmpty().mapNotNull { attr ->
