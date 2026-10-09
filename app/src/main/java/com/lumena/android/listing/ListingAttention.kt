@@ -404,8 +404,9 @@ object ListingAttentionPolicy {
             probability >= DIGEST_AT -> ListingDecision.DIGEST
             else -> ListingDecision.QUIET
         }
+        val identityKey = canonicalUrl?.let { ListingText.key(notice.source, it) } ?: key
         val record = ListingRecord(
-            id = "$key@$now",
+            id = "$identityKey@$now",
             contentKey = key,
             source = notice.source,
             title = title,
