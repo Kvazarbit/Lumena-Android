@@ -133,14 +133,20 @@ class ModuleKernelBoundaryTest {
     }
 
     @Test fun sameModuleCannotDuplicateItsOwnToolsOrAliases() {
-        val duplicate = module(
+        val duplicateTool = module(
             "duplicator",
-            readOnlyTool("one.read", ToolCapability.READ_STATE, aliases = setOf("same_alias")),
             readOnlyTool("one.read", ToolCapability.READ_STATE),
+            readOnlyTool("one.read", ToolCapability.READ_STATE)
+        )
+        val duplicateAlias = module(
+            "aliasdup",
+            readOnlyTool("one.read", ToolCapability.READ_STATE, aliases = setOf("same_alias")),
             readOnlyTool("two.read", ToolCapability.READ_STATE, aliases = setOf("same_alias"))
         )
-        assertTrue(ModuleRegistry.violations(listOf(duplicate)).any { "inside manifest" in it })
-        assertTrue(ModuleRegistry.accept(listOf(duplicate)).isEmpty())
+        listOf(duplicateTool, duplicateAlias).forEach { bad ->
+            assertTrue(ModuleRegistry.violations(listOf(bad)).any { "inside manifest" in it })
+            assertTrue(ModuleRegistry.accept(listOf(bad)).isEmpty())
+        }
     }
 
     @Test fun secondModuleClaimingTheSameToolOrIdIsRefused() {
