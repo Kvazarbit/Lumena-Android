@@ -90,6 +90,49 @@ class ListingAttentionPolicyTest {
         assertEquals(1, twice.state.records.size)
     }
 
+    @Test fun stablePracujUrlIsNeverNewAgainInsideRetentionEvenAfter48Hours() {
+        val first = ListingNotice(
+            source = "pracuj.pl",
+            title = "Technik",
+            text = "Firma A · Legionowo · 6 000 zł",
+            postedAt = t0 - 14 * day,
+            url = "https://www.pracuj.pl/praca/technik,oferta,123",
+            observedAt = t0
+        )
+        val initial = ListingAttentionPolicy.ingest(ListingAttentionState(), first)
+        assertFalse(initial.duplicate)
+        assertEquals(t0, requireNotNull(initial.record).seenAt)
+
+        val refreshed = first.copy(
+            text = "Firma A · Legionowo · 6 500 zł",
+            postedAt = t0 + 4 * day,
+            observedAt = t0 + 5 * day
+        )
+        val again = ListingAttentionPolicy.ingest(initial.state, refreshed)
+        assertTrue(again.duplicate)
+        assertNull(again.record)
+        assertEquals(1, again.state.records.size)
+        assertEquals(t0, again.state.records.single().seenAt)
+    }
+
+    @Test fun sameTextButDistinctPracujUrlsRemainDistinctOffers() {
+        val shared = ListingNotice(
+            source = "pracuj.pl",
+            title = "Monter",
+            text = "Firma A · Legionowo",
+            postedAt = t0,
+            url = "https://www.pracuj.pl/praca/monter,oferta,1",
+            observedAt = t0
+        )
+        val first = ListingAttentionPolicy.ingest(ListingAttentionState(), shared)
+        val second = ListingAttentionPolicy.ingest(
+            first.state,
+            shared.copy(url = "https://www.pracuj.pl/praca/monter,oferta,2")
+        )
+        assertFalse(second.duplicate)
+        assertEquals(2, second.state.records.size)
+    }
+
     @Test fun repeatedRepostsAreTreatedAsTurnover() {
         var state = ListingAttentionState()
         val decisions = (0 until 3).map { i ->
