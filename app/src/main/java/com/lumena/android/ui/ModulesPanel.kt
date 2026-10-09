@@ -7,6 +7,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.lumena.android.agent.core.BridgeCompatibility
 import com.lumena.android.agent.core.ModuleRegistry
 import com.lumena.android.settings.ModuleSettings
 
@@ -25,6 +26,11 @@ fun ModulesPanel(onChanged: () -> Unit = {}) {
                     "Модуль додає можливості, але не повноваження; вимкнений модуль не маршрутизує, не виконує і нічого не зберігає.",
                 style = MaterialTheme.typography.bodySmall
             )
+            Text(
+                "Termux bridge на телефоні: " +
+                    (BridgeCompatibility.observedVersion()?.let { "v$it" } ?: "ще не перевірено"),
+                style = MaterialTheme.typography.labelMedium
+            )
             ModuleRegistry.all().forEach { module ->
                 val m = module.manifest
                 val enabled = m.id !in disabled
@@ -41,6 +47,15 @@ fun ModulesPanel(onChanged: () -> Unit = {}) {
                                 "Інструменти: " + m.tools.joinToString(", ") { it.spec.name },
                                 style = MaterialTheme.typography.labelSmall
                             )
+                        }
+                        if (enabled) {
+                            ModuleRegistry.unavailableReason(module)?.let { reason ->
+                                Text(
+                                    "Недоступний: $reason. Онови bridge у Termux: bash install_bridge.sh, потім перезапусти Lumena.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
                         }
                     }
                     Switch(

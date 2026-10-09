@@ -3,6 +3,7 @@ package com.lumena.android.settings
 import android.content.Context
 import android.os.Build
 import com.lumena.android.agent.core.ConstitutionCharter
+import com.lumena.android.agent.core.BridgeCompatibility
 import com.lumena.android.agent.core.ModuleRegistry
 import com.lumena.android.agent.core.HistoricalRecordOrigin
 import com.lumena.android.agent.core.TaskState
@@ -471,10 +472,12 @@ object LumenaDiagnosticFormatter {
             appendLine()
 
             appendLine("[MODULES]")
+            appendLine("bridge_version=${BridgeCompatibility.observedVersion() ?: "(unknown)"}")
             ModuleRegistry.all().forEach { module ->
                 appendLine(
                     "${module.manifest.id}=v${module.manifest.version}" +
-                        " enabled=${ModuleRegistry.isEnabled(module.manifest.id)}" +
+                        " active=${ModuleRegistry.isEnabled(module.manifest.id)}" +
+                        " requires_bridge=${module.manifest.requiresBridge ?: "-"}" +
                         " tools=${module.manifest.tools.size}"
                 )
             }

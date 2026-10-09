@@ -194,7 +194,24 @@ object ModuleRegistry { all(); enabled(); isEnabled(id); setDisabled(ids); withD
 - файли стану в StateVault;
 - чистота коду ядра.
 
-### Етап 2b — bridge (PLAN)
+### Сумісність застосунку з bridge  ✅ код (0.12.27)
+
+APK і Termux bridge оновлюються окремо. На стабільній збірці телефона стоїть bridge v0.27, а
+інструменти модулів з'явились пізніше: `marketplace.*` у 0.28, `mcp.search` у 0.29.
+
+- `ModuleManifest.requiresBridge`: мінімальна версія bridge для модуля (`marketplace` 0.28,
+  `mcp` 0.29; `listing-attention` bridge не потребує).
+- `BridgeCompatibility` читає `version=` з `health` (застосунок уже викликає його при старті) і
+  запам'ятовує версію між запусками.
+- Модуль, якому потрібен новіший bridge, ніж **побачений**, недоступний: його інструментів немає,
+  маршрути йдуть на ядро. У Tools → Модулі видно причину ("потрібен ≥ 0.28, на телефоні 0.27") і
+  як виправити (`bash install_bridge.sh`, перезапуск Lumena).
+- Невідома версія (bridge ще не відповідав) нічого не блокує.
+- Diagnostics `[MODULES]`: `bridge_version`, `active`, `requires_bridge`.
+- `BridgeCompatibilityTest`: розбір `health`, порівняння версій, поведінка на 0.27, 0.28 і 0.29, а також
+  перевірка, що жоден модуль не вимагає bridge, новішого за `termux/bridge.py` у репозиторії.
+
+### Етап 2b — bridge (ВІДКЛАДЕНО власником 2026-10-09)
 
 `termux/bridge.py` лишається монолітом. Інструменти модулів і фоновий watch-цикл marketplace живуть
 у ньому і не знають про вимикач у застосунку. Виконання блокує ядро, бо застосунок не надішле

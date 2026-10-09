@@ -1763,3 +1763,4 @@ v1 читає лише push збереженого пошуку з застос�
 Детально: [constitution-first-plan.uk.md](constitution-first-plan.uk.md).
 
 Етап 2 (межа ядро/модулі: `LumenaModule`, `ModuleRegistry`, модулі `mcp` / `marketplace` / `listing-attention`, вимикачі в Tools) IMPLEMENTED на `feature/modules-v1` (app `0.12.26` / versionCode `52`), не phone-verified; розділення `bridge.py` — етап 2b (PLAN).
+Сумісність застосунку з Termux bridge (`ModuleManifest.requiresBridge`, `BridgeCompatibility` з `health`) IMPLEMENTED на `feature/modules-v1` (app `0.12.27` / versionCode `53`), не phone-verified. Розділення bridge відкладено власником.
