@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import androidx.core.app.NotificationCompat
@@ -102,7 +103,15 @@ object ListingAlerts {
             )
         }
         val notificationId = record.id.hashCode()
-        val open = original ?: context.packageManager.getLaunchIntentForPackage(record.source)?.let { launch ->
+        val page = record.url?.let { url ->
+            PendingIntent.getActivity(
+                context,
+                notificationId,
+                Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+        }
+        val open = original ?: page ?: context.packageManager.getLaunchIntentForPackage(record.source)?.let { launch ->
             PendingIntent.getActivity(
                 context,
                 notificationId,

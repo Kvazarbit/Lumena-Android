@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.AtomicFile
 import com.lumena.android.listing.ListingAttentionPolicy
 import com.lumena.android.listing.ListingAttentionState
+import com.lumena.android.listing.ListingNotice
 import com.lumena.android.listing.ListingNoticeExtractor
 import com.lumena.android.listing.ListingRawCapture
 import com.lumena.android.listing.ListingRecord
@@ -55,6 +56,20 @@ object ListingAttentionStore {
             result.record?.let { added += it }
         }
         save(context, state)
+        added
+    }
+
+    /** Scores listings from a polled source (no raw notification); returns the newly seen ones. */
+    fun ingestNotices(context: Context, notices: List<ListingNotice>): List<ListingRecord> = synchronized(lock) {
+        if (notices.isEmpty()) return@synchronized emptyList()
+        var state = load(context)
+        val added = mutableListOf<ListingRecord>()
+        notices.forEach { notice ->
+            val result = ListingAttentionPolicy.ingest(state, notice)
+            state = result.state
+            result.record?.let { added += it }
+        }
+        if (added.isNotEmpty()) save(context, state)
         added
     }
 

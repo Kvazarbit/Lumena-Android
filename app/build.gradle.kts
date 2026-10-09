@@ -13,8 +13,8 @@ android {
         applicationId = "com.lumena.android"
         minSdk = 28
         targetSdk = 35
-        versionCode = 53
-        versionName = "0.12.27" + providers.environmentVariable("GITHUB_RUN_NUMBER")
+        versionCode = 54
+        versionName = "0.12.28" + providers.environmentVariable("GITHUB_RUN_NUMBER")
             .orNull?.let { "-ci$it" }.orEmpty()
         ndk { abiFilters += listOf("arm64-v8a") }
         externalNativeBuild {
@@ -54,6 +54,7 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.moshi:moshi-kotlin:1.15.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     testImplementation("junit:junit:4.13.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

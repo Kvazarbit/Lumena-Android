@@ -7,6 +7,7 @@ object BuiltInModules {
     val all: List<LumenaModule> = listOf(
         McpModule,
         MarketplaceModule,
-        ListingAttentionModule
+        ListingAttentionModule,
+        PracujModule
     )
 }
