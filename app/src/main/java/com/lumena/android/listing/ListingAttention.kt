@@ -25,7 +25,9 @@ data class ListingNotice(
     val source: String,
     val title: String,
     val text: String,
-    val postedAt: Long
+    val postedAt: Long,
+    /** Public page of the listing, when the source provides one. */
+    val url: String? = null
 )
 
 enum class ListingDecision {
@@ -55,7 +57,8 @@ data class ListingRecord(
     val reasons: List<String> = emptyList(),
     /** Owner label: +1 worth attention, -1 not; null until labelled. */
     val feedback: Int? = null,
-    val feedbackAt: Long? = null
+    val feedbackAt: Long? = null,
+    val url: String? = null
 )
 
 /** Weights missing from [weights] fall back to [ListingAttentionPolicy.PRIOR_WEIGHTS]. */
@@ -274,7 +277,7 @@ object ListingAttentionPolicy {
     internal val MASS_HIRING_CUES = listOf(
         "od zaraz", "od jutra", "bez doswiadczenia", "dla kazdego", "dla par",
         "dla obcokrajowcow", "stala rekrutacja", "wiele wolnych", "nabor",
-        "zatrudnimy", "przyjmiemy"
+        "zatrudnimy", "przyjmiemy", "wielu kandydat", "odnawiane ogloszenie"
     )
 
     /** Declared conditions the owner wants to avoid, with a readable label. */
@@ -398,7 +401,8 @@ object ListingAttentionPolicy {
             features = features,
             score = probability,
             decision = decision,
-            reasons = reasons
+            reasons = reasons,
+            url = notice.url
         )
         val records = (retained + record).takeLast(MAX_RECORDS)
         return ListingIngestResult(state.copy(records = records), record, duplicate = false)
