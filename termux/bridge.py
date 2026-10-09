@@ -2670,6 +2670,7 @@ READ_ONLY_BATCH_TOOLS = {
     "http.get",
     "web.search",
     "web.read",
+    "mcp.search",
     "marketplace.search",
     "marketplace.watch.list",
     "image.search",
