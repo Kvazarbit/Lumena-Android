@@ -56,7 +56,7 @@ class McpSearchCueTest {
     @Test fun latestPositiveMcpClauseCanOverrideEarlierDenial() {
         val goal = "не шукай через MCP, а знайди через MCP вакансії"
         assertTrue(McpSearchCue.searchRequested(goal))
-        assertEquals("а вакансії", McpSearchCue.searchQuery(goal))
+        assertEquals("вакансії", McpSearchCue.searchQuery(goal))
     }
 
     @Test fun protocolWithoutSearchSubjectMustNotIssueMcpCall() {
