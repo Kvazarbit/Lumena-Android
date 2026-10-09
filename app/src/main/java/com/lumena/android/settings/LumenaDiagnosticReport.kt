@@ -2,6 +2,7 @@ package com.lumena.android.settings
 
 import android.content.Context
 import android.os.Build
+import com.lumena.android.agent.core.ConstitutionCharter
 import com.lumena.android.agent.core.HistoricalRecordOrigin
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.local.TermuxBridgeClient
@@ -455,6 +456,16 @@ object LumenaDiagnosticFormatter {
                         appendLine("- " + clean(it, 1000))
                     }
                 }
+            }
+            appendLine()
+
+            appendLine("[CONSTITUTION_CHARTER]")
+            appendLine("version=${ConstitutionCharter.VERSION}")
+            appendLine("hash=${ConstitutionCharter.hash()}")
+            ConstitutionCharter.summary().let { charter ->
+                appendLine("enforced=${charter.enforced}")
+                appendLine("partial=${charter.partial}")
+                appendLine("pending=${charter.pending}")
             }
             appendLine()
 

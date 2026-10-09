@@ -10,6 +10,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.lumena.android.agent.core.CharterEnforcement
+import com.lumena.android.agent.core.ConstitutionCharter
 import com.lumena.android.settings.ConstitutionInspectorConflict
 import com.lumena.android.settings.ConstitutionInspectorEntry
 import com.lumena.android.settings.ConstitutionInspectorSnapshot
@@ -36,6 +38,8 @@ internal fun ConstitutionGenomeInspectorPanel(
             "Hard DNA ${snapshot.hardDna.size} · Active learned ${snapshot.learned.size} · Shadow ${snapshot.shadowCandidates.size} · User constraints ${snapshot.userConstraints.size} · Contested ${snapshot.contested.size} · Imported ${snapshot.importedLearned.size + snapshot.importedUserConstraints.size}",
             style = MaterialTheme.typography.labelSmall
         )
+
+        CharterSection()
 
         LocalSection(
             title = "Hard DNA",
@@ -68,6 +72,36 @@ internal fun ConstitutionGenomeInspectorPanel(
             emptyText = "Немає імпортованих user-constraint records.",
             entries = snapshot.importedUserConstraints
         )
+    }
+}
+
+@Composable
+private fun CharterSection() {
+    Text("Хартія Lumena — золота основа", style = MaterialTheme.typography.titleSmall)
+    Text(
+        ConstitutionCharter.statusLine(),
+        style = MaterialTheme.typography.labelSmall
+    )
+    Card(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            ConstitutionCharter.articles.forEach { article ->
+                val status = when (article.enforcement) {
+                    CharterEnforcement.ENFORCED -> "захищено кодом"
+                    CharterEnforcement.PARTIAL -> "частково"
+                    CharterEnforcement.PENDING -> "ще не захищено"
+                }
+                Text(
+                    "${article.id} · ${article.title} · $status",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                article.gap?.let {
+                    Text("Чого бракує: $it", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
     }
 }
 
