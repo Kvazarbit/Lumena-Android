@@ -102,10 +102,13 @@ object GoalContractPolicy {
                 id = "source-content-evidence",
                 kind = CriterionKind.SOURCE_CONTENT_EVIDENCE,
                 subject =
-                    if (isMarketplaceGoal(goal)) {
-                        "marketplace.search"
-                    } else {
-                        "web.read|http.get|http.json"
+                    when {
+                        isExplicitMcpGoal(goal) ->
+                            "mcp.search"
+                        isMarketplaceGoal(goal) ->
+                            "marketplace.search|mcp.search"
+                        else ->
+                            "web.read|http.get|http.json"
                     }
             )
         }
@@ -512,6 +515,18 @@ object GoalContractPolicy {
             "zawartość",
             "przeczytaj"
         ).any { lower.contains(it) }
+    }
+
+    private fun isExplicitMcpGoal(goal: String): Boolean {
+        val lower = goal.lowercase()
+        val mcp = lower.contains("mcp") ||
+            lower.contains("model context protocol")
+        if (!mcp) return false
+        return listOf(
+            "знайд", "пошук", "пошукай", "шукай",
+            "find", "search", "lookup", "query",
+            "znajd", "wyszuk", "sprawd"
+        ).any(lower::contains)
     }
 
     private fun isMarketplaceGoal(goal: String): Boolean {
