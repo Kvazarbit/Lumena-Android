@@ -31,21 +31,26 @@ internal object McpSearchCue {
         return i + 1
     }
 
-    /** Last non-negated protocol mention wins if multiple clauses conflict. */
-    fun searchRequested(raw: String): Boolean {
-        val text = raw.take(3000)
-        val hits = protocol.findAll(text).toList()
-        if (hits.isEmpty()) return false
-        return hits.any { hit ->
+    private fun positiveHits(text: String): List<MatchResult> =
+        protocol.findAll(text).filter { hit ->
             val start = clauseStart(text, hit.range.first)
             val prefix = text.substring(start, hit.range.first).takeLast(150).trim()
             val local = text.substring(start, minOf(text.length, hit.range.last + 100))
             searchAction.containsMatchIn(local) && !negative.containsMatchIn(prefix)
-        }
-    }
+        }.toList()
+
+    /** A negated mention is never a positive permission or an MCP recipe. */
+    fun searchRequested(raw: String): Boolean = positiveHits(raw.take(3000)).isNotEmpty()
 
     fun searchQuery(raw: String): String {
-        var query = TaskIntentRouter.publicSearchQuery(raw.take(3000))
+        val text = raw.take(3000)
+        val active = positiveHits(text).lastOrNull()
+        // When one clause forbids MCP and a later one positively requests it,
+        // do not send the earlier negative clause as search-provider query text.
+        val current = active?.let { text.substring(clauseStart(text, it.range.first)) } ?: text
+        var query = current.trim()
+            .replace(Regex("""(?iu)^(?:а|але|but|then)\s+"""), "")
+        query = TaskIntentRouter.publicSearchQuery(query)
         query = query.replace(viaProtocol, " ")
         query = query.replace(leadingProtocol, " ")
         return query.replace(Regex("""\s{2,}"""), " ")
