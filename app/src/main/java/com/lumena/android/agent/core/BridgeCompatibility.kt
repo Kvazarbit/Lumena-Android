@@ -51,8 +51,11 @@ object BridgeCompatibility {
         return (compare(seen, required) ?: return false) >= 0
     }
 
-    /** Test isolation only: no runtime call should clear a verified version. */
-    internal fun clearForTests() { observed = null }
+    /** Clear outdated compatibility claims after process start or failed health. */
+    fun invalidateObservation() { observed = null }
+
+    /** Test isolation delegates to the same fail-closed invalidation path. */
+    internal fun clearForTests() { invalidateObservation() }
 
     /** Runs [block] as if [version] had been observed, then restores the previous value. */
     fun <T> withObserved(version: String?, block: () -> T): T {
