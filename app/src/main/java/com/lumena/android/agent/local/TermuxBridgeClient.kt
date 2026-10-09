@@ -70,9 +70,12 @@ class TermuxBridgeClient(
         val result = if (first.transportFailure && BridgeTransportPolicy.canRetry(toolRequest.tool)) {
             executeOnce(toolRequest).result
         } else first.result
-        if (toolRequest.tool == "health" && result.ok) {
-            // The installed bridge decides which modules can run on this phone.
-            BridgeCompatibility.versionFromHealth(result.stdout)?.let { version ->
+        if (toolRequest.tool == "health") {
+            // Previous success cannot override a failed/unparseable current health.
+            val version = if (result.ok) BridgeCompatibility.versionFromHealth(result.stdout) else null
+            if (version == null) {
+                BridgeCompatibility.invalidateObservation()
+            } else {
                 BridgeCompatibility.observe(version)
                 context?.let { ModuleSettings.rememberBridgeVersion(it, version) }
             }
