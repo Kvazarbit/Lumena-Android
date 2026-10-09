@@ -48,7 +48,7 @@ data class ToolValidation(
 )
 
 object ToolRegistry {
-    private val specs = listOf(
+    private val kernelSpecs = listOf(
         ToolSpec("health", ToolRisk.READ_ONLY, description = "Check the local Termux bridge."),
         ToolSpec("system.time", ToolRisk.READ_ONLY, description = "Read the phone's current local date, time and timezone."),
         ToolSpec("system.info", ToolRisk.READ_ONLY, description = "Inspect CPU, memory, storage and Termux/Android environment."),
@@ -56,12 +56,6 @@ object ToolRegistry {
         ToolSpec("http.get", ToolRisk.READ_ONLY, setOf("url"), "Fetch public HTTPS text/HTML with SSRF, redirect, timeout and size guards."),
         ToolSpec("web.search", ToolRisk.READ_ONLY, setOf("query"), "Search the web for source URLs and snippets. Optional limit=1..8, time_range=day/week/month/year. Read selected URLs before claiming facts."),
         ToolSpec("web.read", ToolRisk.READ_ONLY, setOf("url"), "Read public HTTPS page text without scripts/navigation, following up to 3 validated redirects. Optional max_chars=500..12000."),
-        ToolSpec("mcp.search", ToolRisk.READ_ONLY, setOf("query"), "Search through configured external MCP providers using only tools that declare readOnlyHint=true. Optional provider/location/category/limit. If unavailable, fall back to web.search or another source."),
-        ToolSpec("marketplace.search", ToolRisk.READ_ONLY, setOf("query"), "Search Polish marketplace listings through a provider adapter. v1 supports provider=olx-pl via indexed public search because direct OLX.pl fetches may be blocked. Optional location/category/limit/time_range."),
-        ToolSpec("marketplace.watch.list", ToolRisk.READ_ONLY, description = "List persistent marketplace watches and their most recently discovered new listings."),
-        ToolSpec("marketplace.watch.create", ToolRisk.MUTATING, setOf("query"), "Create a persistent marketplace watch. Optional provider/location/category/interval_minutes/notify; background polling runs while the Termux bridge is alive."),
-        ToolSpec("marketplace.watch.poll", ToolRisk.MUTATING, setOf("watch_id"), "Poll one existing marketplace watch now, advance its seen cursor, and optionally send the configured local notification."),
-        ToolSpec("marketplace.watch.remove", ToolRisk.MUTATING, setOf("watch_id"), "Remove a persistent marketplace watch."),
         ToolSpec("image.search", ToolRisk.READ_ONLY, setOf("query"), "Search images through multiple public providers with query fallback and return safe display-ready previews plus source pages."),
         ToolSpec("context.snapshot", ToolRisk.READ_ONLY, description = "Return a cached compact snapshot of system, workspace and known repository state."),
         ToolSpec("inspect.batch", ToolRisk.READ_ONLY, setOf("requests"), "Run up to 8 independent read-only inspections in one call. requests must be a JSON array encoded as a string, with items shaped as {tool,args}."),
@@ -90,7 +84,7 @@ object ToolRegistry {
         ToolSpec("ollama.pull", ToolRisk.EXECUTABLE, setOf("model"), "Download an Ollama model after approval.")
     ).associateBy { it.name }
 
-    private val aliases = mapOf(
+    private val kernelAliases = mapOf(
         "git_status" to "git.status",
         "git_diff" to "git.diff",
         "git_log" to "git.log",
@@ -101,12 +95,6 @@ object ToolRegistry {
         "http_get" to "http.get",
         "web_search" to "web.search",
         "web_read" to "web.read",
-        "mcp_search" to "mcp.search",
-        "marketplace_search" to "marketplace.search",
-        "marketplace_watch_list" to "marketplace.watch.list",
-        "marketplace_watch_create" to "marketplace.watch.create",
-        "marketplace_watch_poll" to "marketplace.watch.poll",
-        "marketplace_watch_remove" to "marketplace.watch.remove",
         "image_search" to "image.search",
         "context_snapshot" to "context.snapshot",
         "inspect_batch" to "inspect.batch",
@@ -121,7 +109,7 @@ object ToolRegistry {
      * Explicit capability table. Every registered tool must appear here;
      * a missing entry is a test failure, never a silent default.
      */
-    private val capabilityTable: Map<String, Set<ToolCapability>> = mapOf(
+    private val kernelCapabilities: Map<String, Set<ToolCapability>> = mapOf(
         "health" to setOf(ToolCapability.READ_STATE),
         "system.time" to setOf(ToolCapability.READ_STATE),
         "system.info" to setOf(ToolCapability.READ_STATE),
@@ -129,12 +117,6 @@ object ToolRegistry {
         "http.get" to setOf(ToolCapability.READ_STATE, ToolCapability.NETWORK),
         "web.search" to setOf(ToolCapability.READ_STATE, ToolCapability.NETWORK),
         "web.read" to setOf(ToolCapability.READ_STATE, ToolCapability.NETWORK),
-        "mcp.search" to setOf(ToolCapability.READ_STATE, ToolCapability.NETWORK),
-        "marketplace.search" to setOf(ToolCapability.READ_STATE, ToolCapability.NETWORK),
-        "marketplace.watch.list" to setOf(ToolCapability.READ_STATE),
-        "marketplace.watch.create" to setOf(ToolCapability.READ_STATE, ToolCapability.NETWORK),
-        "marketplace.watch.poll" to setOf(ToolCapability.READ_STATE, ToolCapability.NETWORK),
-        "marketplace.watch.remove" to setOf(ToolCapability.READ_STATE),
         "image.search" to setOf(ToolCapability.READ_STATE, ToolCapability.NETWORK),
         "context.snapshot" to setOf(ToolCapability.READ_STATE),
         // Children are validated one by one by the task policy.
@@ -174,6 +156,23 @@ object ToolRegistry {
         "ollama.generate" to setOf(ToolCapability.MODEL_INFERENCE),
         "ollama.pull" to setOf(ToolCapability.NETWORK, ToolCapability.PROCESS_CONTROL)
     )
+
+    /** Kernel tools plus the tools of enabled, kernel-accepted modules. */
+    private val specs: Map<String, ToolSpec>
+        get() = kernelSpecs + ModuleRegistry.enabledTools().associate { it.spec.name to it.spec }
+
+    private val aliases: Map<String, String>
+        get() = kernelAliases + ModuleRegistry.enabledTools()
+            .flatMap { tool -> tool.aliases.map { it to tool.spec.name } }
+
+    private val capabilityTable: Map<String, Set<ToolCapability>>
+        get() = kernelCapabilities + ModuleRegistry.enabledTools()
+            .associate { it.spec.name to it.capabilities }
+
+    /** Tools that exist with every module disabled. */
+    fun kernelToolNames(): Set<String> = kernelSpecs.keys
+
+    fun kernelAliasNames(): Set<String> = kernelAliases.keys
 
     /** Unknown tools get every capability, so a policy can only block them. */
     fun capabilities(name: String): Set<ToolCapability> =

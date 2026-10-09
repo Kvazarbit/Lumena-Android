@@ -102,14 +102,12 @@ object GoalContractPolicy {
                 id = "source-content-evidence",
                 kind = CriterionKind.SOURCE_CONTENT_EVIDENCE,
                 subject =
-                    when {
-                        isExplicitMcpGoal(goal) ->
-                            "mcp.search"
-                        isMarketplaceGoal(goal) ->
-                            "marketplace.search|mcp.search"
-                        else ->
-                            "web.read|http.get|http.json"
-                    }
+                    ModuleRegistry.enabled()
+                        .firstNotNullOfOrNull { it.sourceEvidenceTools(goal) }
+                        ?.filter { ToolRegistry.get(it) != null }
+                        ?.takeIf { it.isNotEmpty() }
+                        ?.joinToString("|")
+                        ?: "web.read|http.get|http.json"
             )
         }
 
@@ -515,34 +513,6 @@ object GoalContractPolicy {
             "zawartość",
             "przeczytaj"
         ).any { lower.contains(it) }
-    }
-
-    private fun isExplicitMcpGoal(goal: String): Boolean {
-        val lower = goal.lowercase()
-        val mcp = lower.contains("mcp") ||
-            lower.contains("model context protocol")
-        if (!mcp) return false
-        return listOf(
-            "знайд", "пошук", "пошукай", "шукай",
-            "find", "search", "lookup", "query",
-            "znajd", "wyszuk", "sprawd"
-        ).any(lower::contains)
-    }
-
-    private fun isMarketplaceGoal(goal: String): Boolean {
-        val lower = goal.lowercase()
-        val marketplace = listOf(
-            "olx", "оголош", "ogłosz", "marketplace", "classified"
-        ).any { lower.contains(it) }
-        val watchJob =
-            listOf(
-                "ваканс", "робот", "praca", "job", "ofert pracy"
-            ).any(lower::contains) &&
-                listOf(
-                    "слідку", "стеж", "монітор", "monitor", "watch",
-                    "powiad", "нові ваканс", "nowe ofert"
-                ).any(lower::contains)
-        return marketplace || watchJob
     }
 
     private fun requiresToolEvidence(
