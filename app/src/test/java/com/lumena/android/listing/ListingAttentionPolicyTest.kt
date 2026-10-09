@@ -131,6 +131,7 @@ class ListingAttentionPolicyTest {
         )
         assertFalse(second.duplicate)
         assertEquals(2, second.state.records.size)
+        assertNotEquals(first.state.records.single().id, second.state.records.last().id)
     }
 
     @Test fun repeatedRepostsAreTreatedAsTurnover() {
