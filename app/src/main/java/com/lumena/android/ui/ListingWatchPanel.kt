@@ -77,6 +77,7 @@ fun ListingWatchPanel(refreshToken: Int) {
                 }) { Text("Дозволити сповіщення Lumena") }
             }
             OutlinedButton(onClick = { tick++ }) { Text("Оновити") }
+            PracujWatchSection { tick++ }
             error?.let { Text("Стан не прочитано: $it") }
 
             state?.let { current ->
@@ -135,7 +136,7 @@ private fun ListingRow(record: ListingRecord, onFeedback: (Boolean) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(record.title.ifBlank { record.text.take(80) }, style = MaterialTheme.typography.bodyMedium)
         Text(
-            "$decision · ${(record.score * 100).roundToInt()}%$label\n${record.reasons.joinToString("; ")}",
+            "${record.source} · $decision · ${(record.score * 100).roundToInt()}%$label\n${record.reasons.joinToString("; ")}",
             style = MaterialTheme.typography.bodySmall
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
