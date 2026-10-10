@@ -305,7 +305,7 @@ jobs:
         if: env.LUMENA_SIGNING_BUNDLE != ''
         run: |
           mkdir -p dist
-          python scripts/sign_apk.py --apk app/build/outputs/apk/release/app-release-unsigned.apk --out dist/Lumena-v0.12.21-ci${GITHUB_RUN_NUMBER}-arm64.apk --apksigner "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner"
+          python scripts/sign_apk.py --apk app/build/outputs/apk/release/app-release-unsigned.apk --out dist/Lumena-v0.12.30-ci${GITHUB_RUN_NUMBER}-arm64.apk --apksigner "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner"
           (cd dist && sha256sum *.apk > SHA256SUMS.txt)
           cp signing/certificate.sha256 dist/CERTIFICATE-SHA256.txt
           printf 'App commit: %s\n' "$(git rev-parse HEAD)" > dist/BUILD-INFO.txt
@@ -313,7 +313,7 @@ jobs:
         if: env.LUMENA_SIGNING_BUNDLE != ''
         uses: actions/upload-artifact@v4
         with:
-          name: Lumena-v0.12.21-ci${{ github.run_number }}-arm64
+          name: Lumena-v0.12.30-ci${{ github.run_number }}-arm64
           path: dist/
           if-no-files-found: error
       - name: Prepare signing input when secret is not configured
