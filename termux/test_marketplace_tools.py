@@ -171,5 +171,81 @@ class MarketplaceToolsTest(unittest.TestCase):
         )
 
 
+    def _rows(self, *ids):
+        return [
+            {
+                "title": f"Serwisant {i} - Legionowo",
+                "url": f"https://www.olx.pl/d/oferta/serwisant-{i}-legionowo-ID{i}.html",
+                "snippet": "Praca serwisant Legionowo",
+                "published": None,
+            }
+            for i in ids
+        ]
+
+    def test_poll_reuses_the_window_the_watch_was_created_with(self):
+        seen_ranges = []
+
+        def search(args, request_id=None):
+            seen_ranges.append(args.get("time_range"))
+            return self.search_result(rows)
+
+        rows = []
+        with patch.object(self.b, "web_search", side_effect=search), \
+                patch.object(self.b.shutil, "which", return_value=None):
+            created = self.payload(
+                self.b.marketplace_watch_create(
+                    {
+                        "query": "serwisant",
+                        "location": "Legionowo",
+                        "category": "jobs",
+                        "time_range": "week",
+                        "limit": "2",
+                    }
+                )
+            )
+        watch_id = created["created"]["id"]
+        self.assertEqual("week", created["created"]["time_range"])
+        self.assertEqual(2, created["created"]["limit"])
+
+        rows = self._rows("aaa", "bbb", "ccc")
+        seen_ranges.clear()
+        with patch.object(self.b, "web_search", side_effect=search), \
+                patch.object(self.b.shutil, "which", return_value=None):
+            polled = self.payload(self.b.marketplace_watch_poll({"watch_id": watch_id}))
+
+        self.assertTrue(seen_ranges)
+        self.assertEqual({"week"}, set(seen_ranges))
+        self.assertEqual(2, polled["new_count"])
+
+    def test_watch_created_before_the_fix_keeps_month_and_twenty(self):
+        seen_ranges = []
+
+        def search(args, request_id=None):
+            seen_ranges.append(args.get("time_range"))
+            return self.search_result(self._rows("ddd"))
+
+        with patch.object(self.b, "web_search", side_effect=search), \
+                patch.object(self.b.shutil, "which", return_value=None):
+            created = self.payload(
+                self.b.marketplace_watch_create({"query": "serwisant", "location": "Legionowo"})
+            )
+        watch_id = created["created"]["id"]
+        state = json.loads(self.b.MARKETPLACE_WATCHES_FILE.read_text(encoding="utf-8"))
+        for row in state["watches"]:
+            row.pop("limit", None)
+            row.pop("time_range", None)
+        self.b.MARKETPLACE_WATCHES_FILE.write_text(json.dumps(state), encoding="utf-8")
+
+        seen_ranges.clear()
+        with patch.object(self.b, "web_search", side_effect=search), \
+                patch.object(self.b.shutil, "which", return_value=None):
+            self.payload(self.b.marketplace_watch_poll({"watch_id": watch_id}))
+        self.assertEqual({"month"}, set(seen_ranges))
+
+    def test_watch_rejects_an_unknown_window(self):
+        with self.assertRaises(ValueError):
+            self.b.marketplace_watch_create({"query": "serwisant", "time_range": "decade"})
+
+
 if __name__ == "__main__":
     unittest.main()

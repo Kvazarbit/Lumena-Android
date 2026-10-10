@@ -1963,6 +1963,8 @@ def _marketplace_watch_public(watch: dict[str, Any]) -> dict[str, Any]:
         "location": watch.get("location"),
         "category": watch.get("category"),
         "interval_minutes": watch.get("interval_minutes"),
+        "limit": watch.get("limit") or 20,
+        "time_range": watch.get("time_range") or "month",
         "notify": bool(watch.get("notify")),
         "enabled": bool(watch.get("enabled", True)),
         "created_at": watch.get("created_at"),
@@ -2041,6 +2043,12 @@ def marketplace_watch_create(
     category = " ".join(str(args.get("category") or "all").split()).lower()[:64]
     interval = _bounded_int(args.get("interval_minutes"), 60, 30, 1440)
     notify = _marketplace_bool(args.get("notify"), True)
+    # The watch keeps the window it was created with; every poll reuses it,
+    # otherwise a narrower baseline makes older listings look new later.
+    limit = _bounded_int(args.get("limit"), 20, 1, 20)
+    time_range = str(args.get("time_range") or "month").strip().lower()
+    if time_range not in {"day", "week", "month", "year"}:
+        raise ValueError("marketplace.watch.create time_range must be day, week, month or year")
 
     baseline_result = marketplace_search(
         {
@@ -2048,8 +2056,8 @@ def marketplace_watch_create(
             "query": query,
             "location": location,
             "category": category,
-            "limit": str(_bounded_int(args.get("limit"), 20, 1, 20)),
-            "time_range": str(args.get("time_range") or "month"),
+            "limit": str(limit),
+            "time_range": time_range,
         },
         request_id=request_id,
     )
@@ -2066,6 +2074,8 @@ def marketplace_watch_create(
         "location": location,
         "category": category,
         "interval_minutes": interval,
+        "limit": limit,
+        "time_range": time_range,
         "notify": notify,
         "enabled": True,
         "created_at": now.isoformat(timespec="seconds"),
@@ -2161,8 +2171,9 @@ def marketplace_watch_poll(
                 "query": str(watch.get("query") or ""),
                 "location": str(watch.get("location") or ""),
                 "category": str(watch.get("category") or "jobs"),
-                "limit": "20",
-                "time_range": "month",
+                # Watches created before these fields existed keep the old 20/month.
+                "limit": str(_bounded_int(watch.get("limit"), 20, 1, 20)),
+                "time_range": str(watch.get("time_range") or "month"),
             },
             request_id=request_id,
         )
