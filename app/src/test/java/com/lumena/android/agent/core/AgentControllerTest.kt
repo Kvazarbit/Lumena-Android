@@ -16,6 +16,68 @@ class AgentControllerTest {
     )
 
     @Test
+    fun invalidWorkspaceScopeIsRepairedWithoutExecutingTool() {
+        val state = controller.initial(
+            TaskState(
+                id = "invalid-list-scope",
+                projectId = null,
+                goal = "Знайди файл demo_project/config.json",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        val decision = controller.interpret(
+            """{"tool":"workspace.list","args":{"path":"demo_project"},"reason":"scope"}""",
+            state
+        )
+        assertTrue(decision is ControllerInstruction.AskModelAgain)
+        decision as ControllerInstruction.AskModelAgain
+        assertTrue(decision.feedback.contains("file.list"))
+        assertEquals(0, decision.state.task.step)
+    }
+
+    @Test
+    fun conditionalMissingFileCompletesOnlyWithScopedReceipts() {
+        var state = controller.initial(
+            TaskState(
+                id = "conditional-missing-file",
+                projectId = null,
+                goal = "Знайди файл demo_project/config.json і прочитай рядок. Якщо файл відсутній, перевір інші конфігураційні файли.",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        state = controller.afterTool(
+            state,
+            AgentDecision.ToolCall("file.list", mapOf("path" to "demo_project")),
+            true, "demo_project/hello.py\t35 bytes", "", null
+        ).state
+        assertFalse(GoalContractPolicy.allMandatoryPassed(state.task.goalContract))
+        state = controller.afterTool(
+            state,
+            AgentDecision.ToolCall("file.search", mapOf("path" to "demo_project", "query" to "config")),
+            true, "(no matches)", "", null
+        ).state
+        assertTrue(GoalContractPolicy.allMandatoryPassed(state.task.goalContract))
+
+        val done = controller.interpret(
+            """{"done":true,"summary":"demo_project/config.json відсутній; альтернативи перевірені"}""",
+            state
+        )
+        assertTrue(done is ControllerInstruction.Finish)
+        done as ControllerInstruction.Finish
+        assertEquals(TaskStatus.DONE, done.state.task.status)
+
+        // A human-readable model answer may now finish safely without a
+        // protocol-repair round-trip, because both required receipts exist.
+        val plain = controller.interpret(
+            "Файл demo_project/config.json відсутній; альтернативні конфігурації не знайдені.",
+            state
+        )
+        assertTrue(plain is ControllerInstruction.Finish)
+        plain as ControllerInstruction.Finish
+        assertEquals(TaskStatus.DONE, plain.state.task.status)
+    }
+
+    @Test
     fun causeProbeMetadataNeedsPriorFailedToolEvidence() {
         val state = controller.initial(
             TaskState(
@@ -983,7 +1045,8 @@ class AgentControllerTest {
             args = emptyMap()
         )
 
-        repeat(2) {
+        // A single successful directory listing is now enough to replan repeats.
+        repeat(1) {
             val instruction = controller.interpret(
                 """{"tool":"workspace.list","args":{}}""",
                 state
@@ -1014,6 +1077,8 @@ class AgentControllerTest {
                 "READ_ONLY_DUPLICATE_REPLAN"
             )
         )
+        assertEquals(1, duplicate.state.task.step)
+        assertTrue(duplicate.feedback.contains("file.list"))
         assertTrue(duplicate.feedback.contains("file.search"))
         assertTrue(duplicate.feedback.contains("file.read"))
         assertFalse(
@@ -1041,7 +1106,8 @@ class AgentControllerTest {
         var state = controller.initial(localTask)
         val call = AgentDecision.ToolCall("workspace.list")
 
-        repeat(2) {
+        // A single successful directory listing is now enough to replan repeats.
+        repeat(1) {
             val execute = controller.interpret(
                 """{"tool":"workspace.list","args":{}}""",
                 state
@@ -1064,6 +1130,7 @@ class AgentControllerTest {
             assertTrue(blocked is ControllerInstruction.AskModelAgain)
             blocked as ControllerInstruction.AskModelAgain
             assertEquals(0, blocked.state.protocolRetries)
+            assertEquals(1, blocked.state.task.step)
             assertTrue(blocked.state.task.status != TaskStatus.FAILED)
             state = blocked.state
         }

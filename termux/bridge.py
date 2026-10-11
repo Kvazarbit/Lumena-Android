@@ -3521,6 +3521,8 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         return file_search(args)
 
     if tool == "workspace.list":
+        if args:
+            raise ValueError("workspace.list accepts no arguments; use file.list with path for a specific directory")
         return {"ok": True, "exitCode": 0, "stdout": workspace_listing(), "stderr": "", "error": None}
 
     if tool == "file.read":

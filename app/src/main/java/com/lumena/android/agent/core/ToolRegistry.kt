@@ -205,6 +205,15 @@ object ToolRegistry {
             )
         }
 
+        if (canonical == "workspace.list" && call.args.isNotEmpty()) {
+            return ToolValidation(
+                allowed = false,
+                canonicalTool = canonical,
+                requiresConfirmation = true,
+                error = "workspace.list accepts no arguments; use file.list with path to inspect a directory"
+            )
+        }
+
         val oversized = call.args.entries.firstOrNull { (key, value) ->
             val limit = when (key) {
                 "content" -> 256_000

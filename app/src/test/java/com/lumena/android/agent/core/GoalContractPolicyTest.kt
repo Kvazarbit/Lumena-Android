@@ -15,19 +15,21 @@ class GoalContractPolicyTest {
         contract: GoalContract,
         call: AgentDecision.ToolCall,
         ok: Boolean,
-        previousKernel: ContextKernelState = ContextKernelState()
+        previousKernel: ContextKernelState = ContextKernelState(),
+        output: String = if (ok) "ok" else "failed"
     ): Pair<GoalContract, ContextKernelState> {
         val kernel = ContextKernel.record(
             previousKernel,
             call,
             ok,
-            if (ok) "ok" else "failed"
+            output
         )
         return GoalContractPolicy.afterTool(
             contract = contract,
             call = call,
             ok = ok,
-            kernel = kernel
+            kernel = kernel,
+            stdout = output
         ) to kernel
     }
 
@@ -233,6 +235,172 @@ class GoalContractPolicyTest {
         assertTrue(
             GoalContractPolicy.allMandatoryPassed(contract)
         )
+    }
+
+    private fun conditionalConfigGoal() = GoalContractPolicy.initial(
+        intent = TaskIntent.FILE_INSPECTION,
+        requiredTools = emptySet(),
+        visualRequired = false,
+        goal = "Знайди файл demo_project/config.json і прочитай рядок. Якщо файл відсутній, перевір інші конфігураційні файли."
+    )
+
+    @Test
+    fun conditionalAbsentFileRequiresScopedListingAndAlternativeSearch() {
+        var contract = conditionalConfigGoal()
+        assertEquals(
+            CriterionKind.FILE_CONTENT_OR_CONFIRMED_ABSENCE,
+            contract.criteria.first { it.id == "file-content-evidence" }.kind
+        )
+        var kernel = ContextKernelState()
+
+        val root = recorded(contract, AgentDecision.ToolCall("workspace.list"),
+            true, kernel, "demo_project/\n")
+        contract = root.first
+        kernel = root.second
+        assertFalse(GoalContractPolicy.allMandatoryPassed(contract))
+
+        val unscoped = recorded(contract,
+            AgentDecision.ToolCall("file.search", mapOf("query" to "config")),
+            true, kernel, "(no matches)")
+        contract = unscoped.first
+        kernel = unscoped.second
+        assertFalse(GoalContractPolicy.allMandatoryPassed(contract))
+
+        val listed = recorded(contract,
+            AgentDecision.ToolCall("file.list", mapOf("path" to "demo_project", "depth" to "1")),
+            true, kernel, "demo_project/hello.py\t35 bytes")
+        contract = listed.first
+        kernel = listed.second
+        assertFalse(GoalContractPolicy.allMandatoryPassed(contract))
+
+        val searched = recorded(contract,
+            AgentDecision.ToolCall("file.search", mapOf("path" to "demo_project", "query" to "config")),
+            true, kernel, "(no matches)")
+        contract = searched.first
+        val criterion = contract.criteria.first { it.id == "file-content-evidence" }
+        assertEquals(CriterionStatus.PASSED, criterion.status)
+        assertEquals(setOf("file.list", "file.search"), criterion.evidence.map { it.tool }.toSet())
+        assertTrue(GoalContractPolicy.allMandatoryPassed(contract))
+    }
+
+    @Test
+    fun conditionalFileTargetReadCountsButUnrelatedReadDoesNot() {
+        var contract = conditionalConfigGoal()
+        var kernel = ContextKernelState()
+        val unrelated = recorded(contract,
+            AgentDecision.ToolCall("file.read", mapOf("path" to "demo_project/hello.py")),
+            true, kernel, "hello")
+        contract = unrelated.first
+        kernel = unrelated.second
+        assertFalse(GoalContractPolicy.allMandatoryPassed(contract))
+
+        val target = recorded(contract,
+            AgentDecision.ToolCall("file.read", mapOf("path" to "demo_project/config.json")),
+            true, kernel, "{\"test\":true}")
+        assertTrue(GoalContractPolicy.allMandatoryPassed(target.first))
+        assertEquals(
+            VerificationStrength.INDEPENDENT_TOOL_RESULT,
+            target.first.criteria.first { it.id == "file-content-evidence" }.evidence.last().strength
+        )
+    }
+
+    @Test
+    fun conditionalAbsenceRejectsTruncationAndContradictoryPaths() {
+        var contract = conditionalConfigGoal()
+        var kernel = ContextKernelState()
+        val truncated = recorded(contract,
+            AgentDecision.ToolCall("file.list", mapOf("path" to "demo_project")),
+            true, kernel, "demo_project/hello.py\t35 bytes\n...[listing truncated]...")
+        contract = truncated.first
+        kernel = truncated.second
+
+        val searched = recorded(contract,
+            AgentDecision.ToolCall("file.search", mapOf("path" to "demo_project", "query" to "config")),
+            true, kernel, "(no matches)")
+        contract = searched.first
+        kernel = searched.second
+        assertFalse(GoalContractPolicy.allMandatoryPassed(contract))
+
+        val contradictory = recorded(contract,
+            AgentDecision.ToolCall("file.list", mapOf("path" to "demo_project")),
+            true, kernel, "demo_project/config.json\t40 bytes")
+        contract = contradictory.first
+        assertFalse(GoalContractPolicy.allMandatoryPassed(contract))
+    }
+
+    @Test
+    fun conditionalAbsenceRejectsMalformedSuccessfulToolOutput() {
+        var contract = conditionalConfigGoal()
+        var kernel = ContextKernelState()
+        val fakeList = recorded(contract,
+            AgentDecision.ToolCall("file.list", mapOf("path" to "demo_project")),
+            true, kernel, "OK: everything is missing")
+        contract = fakeList.first
+        kernel = fakeList.second
+        val correctSearch = recorded(contract,
+            AgentDecision.ToolCall("file.search", mapOf("path" to "demo_project", "query" to "config")),
+            true, kernel, "(no matches)")
+        contract = correctSearch.first
+        kernel = correctSearch.second
+        assertFalse(GoalContractPolicy.allMandatoryPassed(contract))
+
+        val correctList = recorded(contract,
+            AgentDecision.ToolCall("file.list", mapOf("path" to "demo_project")),
+            true, kernel, "demo_project/hello.py\t35 bytes")
+        contract = correctList.first
+        assertTrue(GoalContractPolicy.allMandatoryPassed(contract))
+
+        val malformedSearch = recorded(conditionalConfigGoal(),
+            AgentDecision.ToolCall("file.search", mapOf("path" to "demo_project", "query" to "config")),
+            true, ContextKernelState(), "error but ok=true")
+        val afterList = recorded(malformedSearch.first,
+            AgentDecision.ToolCall("file.list", mapOf("path" to "demo_project")),
+            true, malformedSearch.second, "demo_project/hello.py\t35 bytes")
+        assertFalse(GoalContractPolicy.allMandatoryPassed(afterList.first))
+    }
+
+    @Test
+    fun conditionalAbsenceAcceptsScopedSearchFindingAlternativeConfig() {
+        var contract = conditionalConfigGoal()
+        var kernel = ContextKernelState()
+        val list = recorded(contract,
+            AgentDecision.ToolCall("file.list", mapOf("path" to "demo_project")),
+            true, kernel, "demo_project/settings-config.yaml\t12 bytes")
+        contract = list.first
+        kernel = list.second
+        val search = recorded(contract,
+            AgentDecision.ToolCall("file.search", mapOf("path" to "demo_project", "query" to "config")),
+            true, kernel, "PATH\tdemo_project/settings-config.yaml")
+        assertTrue(GoalContractPolicy.allMandatoryPassed(search.first))
+    }
+
+    @Test
+    fun conditionalAbsenceDoesNotCrossWorkspaceMutationsOrWrongSearches() {
+        var contract = conditionalConfigGoal()
+        var kernel = ContextKernelState()
+        val listed = recorded(contract,
+            AgentDecision.ToolCall("file.list", mapOf("path" to "demo_project")),
+            true, kernel, "(directory empty)")
+        contract = listed.first
+        kernel = listed.second
+
+        val changed = recorded(contract,
+            AgentDecision.ToolCall("file.write", mapOf("path" to "unrelated.py", "content" to "x")),
+            true, kernel, "wrote")
+        contract = changed.first
+        kernel = changed.second
+
+        val wrongQuery = recorded(contract,
+            AgentDecision.ToolCall("file.search", mapOf("path" to "demo_project", "query" to "config.json")),
+            true, kernel, "(no matches)")
+        contract = wrongQuery.first
+        kernel = wrongQuery.second
+        assertFalse(GoalContractPolicy.allMandatoryPassed(contract))
+
+        val searched = recorded(contract,
+            AgentDecision.ToolCall("file.search", mapOf("path" to "demo_project", "query" to "config")),
+            true, kernel, "(no matches)")
+        assertFalse(GoalContractPolicy.allMandatoryPassed(searched.first))
     }
 
     @Test

@@ -65,6 +65,12 @@ object ContextKernel {
     fun repeatedObservation(state: ContextKernelState, call: AgentDecision.ToolCall): Boolean {
         if (ToolRegistry.get(call.tool)?.risk != ToolRisk.READ_ONLY) return false
         val same = state.evidence.filter { it.signature == signature(call) && it.revision == state.worldRevision }.takeLast(2)
+        // A directory listing is deterministic within the task's recorded workspace
+        // revision. Do not spend a second tool slot re-reading the exact same scope.
+        // Other read-only sources may change externally, so retain the two-receipt guard.
+        if (ToolRegistry.canonicalize(call.tool) in setOf("workspace.list", "file.list")) {
+            return same.any { it.ok }
+        }
         return same.size == 2 && same.all { it.ok } && same[0].digest == same[1].digest
     }
 
