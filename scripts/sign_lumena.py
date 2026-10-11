@@ -72,7 +72,7 @@ def github_json(resource: str) -> dict:
     allowed = (
         re.fullmatch(r"/actions/runs/[1-9][0-9]*", resource)
         or re.fullmatch(r"/pulls/[1-9][0-9]*", resource)
-        or re.fullmatch(r"/actions/runs/[1-9][0-9]*/artifacts\\?per_page=100", resource)
+        or re.fullmatch(r"/actions/runs/[1-9][0-9]*/artifacts[?]per_page=100", resource)
     )
     if not allowed:
         raise SigningError("Invalid GitHub API resource")
