@@ -66,7 +66,15 @@ def sha256_file(path: Path) -> str:
 
 
 def github_json(resource: str) -> dict:
-    if not resource.startswith("/") or ".." in resource or "?" in resource:
+    # Only the exact endpoints used by the signer are permitted.  The artifact
+    # listing legitimately needs a bounded pagination query; an unconditional
+    # ban on '?' previously blocked every signing attempt.
+    allowed = (
+        re.fullmatch(r"/actions/runs/[1-9][0-9]*", resource)
+        or re.fullmatch(r"/pulls/[1-9][0-9]*", resource)
+        or re.fullmatch(r"/actions/runs/[1-9][0-9]*/artifacts\\?per_page=100", resource)
+    )
+    if not allowed:
         raise SigningError("Invalid GitHub API resource")
     url = "https://api.github.com/repos/" + REPO + resource
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "Lumena-Owner-Signer/1"}
