@@ -65,6 +65,57 @@ class SignLumenaTest(unittest.TestCase):
             return {"artifacts": [self.artifact]}
         raise AssertionError(resource)
 
+    def test_real_api_route_allows_bounded_artifact_pagination(self):
+        """Regression: the legitimate ?per_page=100 query must not be rejected."""
+        payloads = {
+            "/actions/runs/" + str(self.run_id): self.run,
+            "/pulls/113": self.pr,
+            "/actions/runs/" + str(self.run_id) + "/artifacts?per_page=100":
+                {"artifacts": [self.artifact]},
+        }
+        base = "https://api.github.com/repos/" + signer.REPO
+
+        class Response:
+            def __init__(self, url, payload):
+                self.url = url
+                self.payload = json.dumps(payload).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def geturl(self):
+                return self.url
+
+            def read(self, limit):
+                return self.payload[:limit]
+
+        def fake_urlopen(request, timeout):
+            self.assertEqual(timeout, 20)
+            url = request.full_url
+            self.assertTrue(url.startswith(base))
+            resource = url[len(base):]
+            self.assertIn(resource, payloads)
+            return Response(url, payloads[resource])
+
+        with patch.object(signer.urllib.request, "urlopen", side_effect=fake_urlopen) as hit:
+            run, artifact = signer.trusted_run(self.run_id, allow_pr=True)
+            self.assertEqual(self.sha, run["head_sha"])
+            self.assertEqual(self.artifact, artifact)
+            self.assertEqual(3, hit.call_count)
+            for malicious in (
+                "/actions/runs/1/artifacts?per_page=101",
+                "/actions/runs/1/artifacts?redirect=https://example.net",
+                "/actions/runs/../artifacts?per_page=100",
+                "/actions/runs/1/artifacts?per_page=100&evil=1",
+                "//other-host/path",
+            ):
+                with self.assertRaisesRegex(signer.SigningError, "Invalid GitHub API resource"):
+                    signer.github_json(malicious)
+            self.assertEqual(3, hit.call_count)
+
     def test_trusted_same_repo_pr_requires_explicit_consent(self):
         with self.assertRaisesRegex(signer.SigningError, "allow-pr"):
             signer.trusted_run(self.run_id, allow_pr=False, fetch=self.fetch)
