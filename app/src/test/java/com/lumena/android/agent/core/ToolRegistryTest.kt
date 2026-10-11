@@ -28,6 +28,22 @@ class ToolRegistryTest {
     }
 
     @Test
+    fun workspaceListCannotSilentlyIgnorePath() {
+        val invalid = ToolRegistry.validate(
+            AgentDecision.ToolCall("workspace.list", mapOf("path" to "demo_project"))
+        )
+        assertFalse(invalid.allowed)
+        assertTrue(invalid.error!!.contains("file.list"))
+
+        val root = ToolRegistry.validate(AgentDecision.ToolCall("workspace.list"))
+        assertTrue(root.allowed)
+        val scoped = ToolRegistry.validate(
+            AgentDecision.ToolCall("file.list", mapOf("path" to "demo_project"))
+        )
+        assertTrue(scoped.allowed)
+    }
+
+    @Test
     fun readOnlyLocalToolDoesNotNeedConfirmation() {
         val validation = ToolRegistry.validate(
             AgentDecision.ToolCall("file.read", mapOf("path" to "README.md")),
