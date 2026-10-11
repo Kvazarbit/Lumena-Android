@@ -336,6 +336,10 @@ class AgentController(
                         (
                             knownTool in setOf("python.run", "python.syntax_check") &&
                                 problem.startsWith("python script arg must be")
+                        ) ||
+                        (
+                            knownTool == "workspace.list" &&
+                                problem.startsWith("workspace.list accepts no arguments")
                         )
                     )
             ) {
@@ -703,6 +707,8 @@ class AgentController(
                 // A missing script path cannot be repaired safely by inventing
                 // one. Expose bounded read-only discovery fallbacks instead.
                 setOf(tool, "file.search", "workspace.list")
+            } else if (tool == "workspace.list") {
+                setOf("workspace.list", "file.list", "file.search")
             } else {
                 setOf(tool)
             }
@@ -712,6 +718,12 @@ class AgentController(
         )
         val toolSpecific =
             when (tool) {
+                "workspace.list" -> {
+                    "workspace.list accepts no path and only discovers workspace roots. " +
+                        "To inspect a specific directory, call file.list with args.path. " +
+                        "To search filenames/contents in that directory, use file.search with args.path and query."
+                }
+
                 "inspect.batch" -> {
                     """
                     For inspect.batch, args.requests must be ONE string containing a JSON array.
@@ -792,11 +804,13 @@ class AgentController(
     ): ControllerInstruction.AskModelAgain {
         val canonical = ToolRegistry.canonicalize(call.tool)
         val nextHint = when (canonical) {
-            "workspace.list", "file.list" ->
-                "The verified directory listing is already recorded and unchanged. " +
-                    "Do NOT list the same directory again. Search its contents instead: use file.search with discriminative terms from the ACTIVE_TASK " +
-                    "(domain names, likely filenames, extensions, symbols), then file.read the relevant returned paths. " +
-                    "If the recorded listing already contains a plausible script/data path, read that path directly."
+            "workspace.list" ->
+                "The workspace root listing is already verified. workspace.list cannot select a directory. " +
+                    "Do NOT repeat it or add a path argument. To inspect an exact directory use file.list with args.path; " +
+                    "then use scoped file.search or file.read as required by the active task."
+            "file.list" ->
+                "The scoped directory listing is already verified and unchanged. Do NOT repeat it. " +
+                    "Use its recorded paths, a scoped file.search for alternatives, or file.read on a verified file path."
 
             "file.search" ->
                 "The same file.search result is already recorded and unchanged. " +
