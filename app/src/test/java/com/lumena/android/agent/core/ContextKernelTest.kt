@@ -32,6 +32,21 @@ class ContextKernelTest {
         assertEquals(CognitivePhase.OBSERVE, observed.evidence.single().phase)
     }
 
+    @Test fun directoryListingsReplanAfterOneReceiptAndMutationsResetFreshness() {
+        val list = AgentDecision.ToolCall("file.list", mapOf("path" to "demo_project"))
+        val workspace = AgentDecision.ToolCall("workspace.list")
+        var state = ContextKernel.record(ContextKernelState(), list, true, "demo_project/hello.py")
+        assertTrue(ContextKernel.repeatedObservation(state, list))
+        assertFalse(ContextKernel.repeatedObservation(state, workspace))
+        assertFalse(ContextKernel.repeatedObservation(state, read("demo_project/hello.py")))
+
+        state = ContextKernel.record(state, workspace, true, "demo_project/hello.py")
+        assertTrue(ContextKernel.repeatedObservation(state, workspace))
+
+        state = ContextKernel.record(state, write("demo_project/new.py", "x"), true, "wrote")
+        assertFalse(ContextKernel.repeatedObservation(state, list))
+    }
+
     @Test fun nonConsecutiveIdenticalObservationsDoNotBuyProgress() {
         var state = ContextKernelState()
         for (call in listOf(read("a"), read("b"), read("a"))) state = ContextKernel.record(state, call, true, "same")
