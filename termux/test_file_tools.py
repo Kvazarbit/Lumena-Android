@@ -109,6 +109,22 @@ class FileReadRangeTest(unittest.TestCase):
         self.assertIn("read_only_roots=@phone", health["stdout"])
         self.assertIn("version=0.29", health["stdout"])
 
+    def test_workspace_list_rejects_ignored_path_and_file_list_is_scoped(self):
+        directory = self.workspace / "demo_project"
+        directory.mkdir()
+        (directory / "hello.py").write_text("print('hello')\n", encoding="utf-8")
+
+        root = self.b.execute_tool("workspace.list", {})
+        self.assertTrue(root["ok"])
+        self.assertIn("demo_project/", root["stdout"])
+
+        with self.assertRaisesRegex(ValueError, r"file\.list"):
+            self.b.execute_tool("workspace.list", {"path": "demo_project"})
+
+        scoped = self.b.execute_tool("file.list", {"path": "demo_project", "depth": "1"})
+        self.assertTrue(scoped["ok"])
+        self.assertIn("demo_project/hello.py", scoped["stdout"])
+
     def test_read_only_root_never_expands_write_scope(self):
         with self.assertRaises(ValueError):
             self.b.safe_path(str(self.external / "must_not_write.txt"))
