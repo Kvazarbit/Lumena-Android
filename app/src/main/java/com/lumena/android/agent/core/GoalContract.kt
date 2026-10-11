@@ -442,7 +442,19 @@ object GoalContractPolicy {
 
         when (tool) {
             "file.list" -> {
-                if (stdout == "(no matches)") return criterion
+                // Only accept the bridge's complete, path-scoped listing format.
+                // A generic success message must not prove a negative claim.
+                val wellFormed = stdout.trim() == "(directory empty)" ||
+                    stdout.lineSequence().filter { it.isNotBlank() }.all { row ->
+                        val name = normalizePath(row.substringBefore('\t').trimEnd('/'))
+                        val scoped = if (parent == ".") {
+                            !java.io.File(name).isAbsolute && name != ".." && !name.startsWith("../")
+                        } else {
+                            name.startsWith(parent + "/")
+                        }
+                        scoped && (row.endsWith("/") || '\t' in row)
+                    }
+                if (!wellFormed) return criterion
                 val targetListed = stdout.lineSequence()
                     .map { normalizePath(it.substringBefore('\t').trimEnd('/')) }
                     .any { it == target }
@@ -451,10 +463,15 @@ object GoalContractPolicy {
             "file.search" -> {
                 val stem = java.io.File(target).name.substringBeforeLast('.')
                 if (call.args["query"]?.trim()?.equals(stem, ignoreCase = true) != true) return criterion
+                val wellFormed = stdout.trim() == "(no matches)" ||
+                    stdout.lineSequence().filter { it.isNotBlank() }.all { row ->
+                        row.startsWith("PATH\t") || Regex("""^.+:\d+\t.*$""").matches(row)
+                    }
+                if (!wellFormed) return criterion
                 // Search results contain PATH records and file:line records.
                 // Do not resolve contradictory evidence by guessing.
                 if (stdout.lineSequence().any {
-                        it.startsWith("PATH\t" + target) || it.startsWith(target + ":")
+                        it == "PATH\t" + target || it.startsWith(target + ":")
                     }) return criterion
             }
             else -> return criterion
