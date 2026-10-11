@@ -13,6 +13,7 @@ enum class CriterionKind {
     VISUAL_EVIDENCE,
     SOURCE_CONTENT_EVIDENCE,
     FILE_CONTENT_EVIDENCE,
+    FILE_CONTENT_OR_CONFIRMED_ABSENCE,
     CODE_ACTION_EVIDENCE,
     PYTHON_TARGET_VERIFIED
 }
@@ -118,10 +119,18 @@ object GoalContractPolicy {
                     requiresFileContent(goal)
                 )
         ) {
+            // A conditional read may be satisfied by proof that the requested
+            // file is absent AND that alternatives in its parent were checked.
+            // Ordinary reads still require a successful file.read result.
+            val conditionalTarget = conditionalFileTarget(goal)
             criteria += AcceptanceCriterion(
                 id = "file-content-evidence",
-                kind = CriterionKind.FILE_CONTENT_EVIDENCE,
-                subject = "file.read"
+                kind = if (conditionalTarget != null) {
+                    CriterionKind.FILE_CONTENT_OR_CONFIRMED_ABSENCE
+                } else {
+                    CriterionKind.FILE_CONTENT_EVIDENCE
+                },
+                subject = conditionalTarget ?: "file.read"
             )
         }
 
@@ -166,7 +175,8 @@ object GoalContractPolicy {
         contract: GoalContract,
         call: AgentDecision.ToolCall,
         ok: Boolean,
-        kernel: ContextKernelState
+        kernel: ContextKernelState,
+        stdout: String = ""
     ): GoalContract {
         if (contract.coverage == GoalContractCoverage.NONE &&
             ToolRegistry.get(call.tool) == null
@@ -272,6 +282,15 @@ object GoalContractPolicy {
                     } else {
                         criterion
                     }
+
+                CriterionKind.FILE_CONTENT_OR_CONFIRMED_ABSENCE ->
+                    verifyConditionalFileCriterion(
+                        criterion = criterion,
+                        call = call,
+                        ok = ok,
+                        toolEvidence = toolEvidence,
+                        stdout = stdout
+                    )
 
                 CriterionKind.CODE_ACTION_EVIDENCE -> {
                     val risk =
@@ -387,6 +406,87 @@ object GoalContractPolicy {
                 append(pending)
             }
         }
+    }
+
+    /**
+     * A conditional file read has two safe success paths:
+     * 1) A real file.read of the requested path.
+     * 2) A complete scoped file.list showing the target absent AND a scoped
+     *    file.search for alternative names. Different tools, same revision.
+     *
+     * Generic root listings, unscoped searches, truncated results and guesses
+     * cannot discharge the contract. This is typed evidence, not semantic proof.
+     */
+    private fun verifyConditionalFileCriterion(
+        criterion: AcceptanceCriterion,
+        call: AgentDecision.ToolCall,
+        ok: Boolean,
+        toolEvidence: CriterionEvidence?,
+        stdout: String
+    ): AcceptanceCriterion {
+        if (!ok || toolEvidence == null || criterion.status == CriterionStatus.PASSED) return criterion
+        val target = normalizePath(criterion.subject)
+        val tool = ToolRegistry.canonicalize(call.tool)
+
+        if (tool == "file.read" && normalizePath(call.args["path"].orEmpty()) == target) {
+            return pass(
+                criterion,
+                toolEvidence.copy(strength = VerificationStrength.INDEPENDENT_TOOL_RESULT)
+            )
+        }
+
+        val parent = normalizePath(java.io.File(target).parent ?: ".")
+        val selectedRoot = normalizePath(call.args["path"].orEmpty().ifBlank { "." })
+        if (parent != selectedRoot || stdout.isBlank()) return criterion
+        if (stdout.contains("...[") || stdout.contains("[truncated]", ignoreCase = true)) return criterion
+
+        when (tool) {
+            "file.list" -> {
+                if (stdout == "(no matches)") return criterion
+                val targetListed = stdout.lineSequence()
+                    .map { normalizePath(it.substringBefore('\t').trimEnd('/')) }
+                    .any { it == target }
+                if (targetListed) return criterion
+            }
+            "file.search" -> {
+                val stem = java.io.File(target).name.substringBeforeLast('.')
+                if (call.args["query"]?.trim()?.equals(stem, ignoreCase = true) != true) return criterion
+                // Search results contain PATH records and file:line records.
+                // Do not resolve contradictory evidence by guessing.
+                if (stdout.lineSequence().any {
+                        it.startsWith("PATH\t" + target) || it.startsWith(target + ":")
+                    }) return criterion
+            }
+            else -> return criterion
+        }
+
+        val receipt = toolEvidence.copy(
+            strength = if (tool == "file.search") {
+                VerificationStrength.INDEPENDENT_TOOL_RESULT
+            } else {
+                VerificationStrength.TOOL_RESULT
+            }
+        )
+        val receipts = (criterion.evidence.filter { it.revision == receipt.revision } + receipt)
+            .distinctBy { it.evidenceId + "|" + it.tool + "|" + it.target }
+            .takeLast(MAX_EVIDENCE_PER_CRITERION)
+        val confirmed = receipts.any { it.tool == "file.list" } &&
+            receipts.any { it.tool == "file.search" }
+        return criterion.copy(
+            evidence = receipts,
+            status = if (confirmed) CriterionStatus.PASSED else CriterionStatus.PENDING
+        )
+    }
+
+    /** Only opt into the absence alternative when the user actually allowed it. */
+    private fun conditionalFileTarget(goal: String): String? {
+        if (!Regex("""(?iu)(якщо|if).{0,60}(відсут|нема|не існує|missing|absent|not found)""")
+                .containsMatchIn(goal)) return null
+        val raw = Regex("""(?iu)(?:файл|file)\s+[^A-Za-z0-9_./-]{0,3}([A-Za-z0-9_./-]+\.[A-Za-z0-9_-]+)""")
+            .find(goal)?.groupValues?.getOrNull(1) ?: return null
+        val target = normalizePath(raw)
+        if (java.io.File(target).isAbsolute || target == ".." || target.startsWith("../")) return null
+        return target
     }
 
     private fun verifyPythonCriterion(
