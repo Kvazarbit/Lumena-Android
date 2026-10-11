@@ -329,6 +329,52 @@ class GoalContractPolicyTest {
     }
 
     @Test
+    fun conditionalAbsenceRejectsMalformedSuccessfulToolOutput() {
+        var contract = conditionalConfigGoal()
+        var kernel = ContextKernelState()
+        val fakeList = recorded(contract,
+            AgentDecision.ToolCall("file.list", mapOf("path" to "demo_project")),
+            true, kernel, "OK: everything is missing")
+        contract = fakeList.first
+        kernel = fakeList.second
+        val correctSearch = recorded(contract,
+            AgentDecision.ToolCall("file.search", mapOf("path" to "demo_project", "query" to "config")),
+            true, kernel, "(no matches)")
+        contract = correctSearch.first
+        kernel = correctSearch.second
+        assertFalse(GoalContractPolicy.allMandatoryPassed(contract))
+
+        val correctList = recorded(contract,
+            AgentDecision.ToolCall("file.list", mapOf("path" to "demo_project")),
+            true, kernel, "demo_project/hello.py\t35 bytes")
+        contract = correctList.first
+        assertTrue(GoalContractPolicy.allMandatoryPassed(contract))
+
+        val malformedSearch = recorded(conditionalConfigGoal(),
+            AgentDecision.ToolCall("file.search", mapOf("path" to "demo_project", "query" to "config")),
+            true, ContextKernelState(), "error but ok=true")
+        val afterList = recorded(malformedSearch.first,
+            AgentDecision.ToolCall("file.list", mapOf("path" to "demo_project")),
+            true, malformedSearch.second, "demo_project/hello.py\t35 bytes")
+        assertFalse(GoalContractPolicy.allMandatoryPassed(afterList.first))
+    }
+
+    @Test
+    fun conditionalAbsenceAcceptsScopedSearchFindingAlternativeConfig() {
+        var contract = conditionalConfigGoal()
+        var kernel = ContextKernelState()
+        val list = recorded(contract,
+            AgentDecision.ToolCall("file.list", mapOf("path" to "demo_project")),
+            true, kernel, "demo_project/settings-config.yaml\t12 bytes")
+        contract = list.first
+        kernel = list.second
+        val search = recorded(contract,
+            AgentDecision.ToolCall("file.search", mapOf("path" to "demo_project", "query" to "config")),
+            true, kernel, "PATH\tdemo_project/settings-config.yaml")
+        assertTrue(GoalContractPolicy.allMandatoryPassed(search.first))
+    }
+
+    @Test
     fun conditionalAbsenceDoesNotCrossWorkspaceMutationsOrWrongSearches() {
         var contract = conditionalConfigGoal()
         var kernel = ContextKernelState()
