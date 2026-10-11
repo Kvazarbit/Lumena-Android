@@ -1045,7 +1045,8 @@ class AgentControllerTest {
             args = emptyMap()
         )
 
-        repeat(2) {
+        // A single successful directory listing is now enough to replan repeats.
+        repeat(1) {
             val instruction = controller.interpret(
                 """{"tool":"workspace.list","args":{}}""",
                 state
@@ -1076,6 +1077,8 @@ class AgentControllerTest {
                 "READ_ONLY_DUPLICATE_REPLAN"
             )
         )
+        assertEquals(1, duplicate.state.task.step)
+        assertTrue(duplicate.feedback.contains("file.list"))
         assertTrue(duplicate.feedback.contains("file.search"))
         assertTrue(duplicate.feedback.contains("file.read"))
         assertFalse(
@@ -1103,7 +1106,8 @@ class AgentControllerTest {
         var state = controller.initial(localTask)
         val call = AgentDecision.ToolCall("workspace.list")
 
-        repeat(2) {
+        // A single successful directory listing is now enough to replan repeats.
+        repeat(1) {
             val execute = controller.interpret(
                 """{"tool":"workspace.list","args":{}}""",
                 state
@@ -1126,6 +1130,7 @@ class AgentControllerTest {
             assertTrue(blocked is ControllerInstruction.AskModelAgain)
             blocked as ControllerInstruction.AskModelAgain
             assertEquals(0, blocked.state.protocolRetries)
+            assertEquals(1, blocked.state.task.step)
             assertTrue(blocked.state.task.status != TaskStatus.FAILED)
             state = blocked.state
         }
