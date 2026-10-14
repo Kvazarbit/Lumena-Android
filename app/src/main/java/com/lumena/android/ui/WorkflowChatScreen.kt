@@ -1793,7 +1793,13 @@ fun WorkflowChatScreen(
             currentInstruction = text,
             effectivePolicy =
                 effectivePolicy,
-            status = TaskStatus.WAITING_MODEL
+            status = TaskStatus.WAITING_MODEL,
+            previousExecutionReceipt =
+                previous
+                    ?.takeIf {
+                        ShortTurnCue.isExecutionEvidenceQuestion(text)
+                    }
+                    ?.let(PreviousTaskOutcomeContext::executionReceipt)
         )
         val languageIntent = FractalLanguageIntentPolicy.canonicalIntent(
             codeContinued = codeResolution.continued,
