@@ -1,5 +1,7 @@
 package com.lumena.android.companion
 
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import com.lumena.android.settings.StateVault
 import androidx.compose.runtime.SideEffect
@@ -458,6 +460,30 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
         acceptDetected(command, force = force)
     }
 
+    fun importClipboardCommand() {
+        // Read only the explicitly copied text on a user click. Do not resolve
+        // content URIs, poll the clipboard or persist its contents.
+        val pastedText = runCatching {
+            val manager =
+                context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            manager?.primaryClip
+                ?.takeIf { it.itemCount > 0 }
+                ?.getItemAt(0)
+                ?.text
+                ?.toString()
+        }.getOrNull()
+
+        val command = CompanionClipboardImport.parse(pastedText)
+        if (command == null) {
+            detected = null
+            status = CompanionClipboardImport.diagnostic(pastedText)
+            return
+        }
+        // The same ToolGate, fingerprint, Safe Auto and approval lifecycle
+        // applies to clipboard requests as to Accessibility requests.
+        acceptDetected(command)
+    }
+
     fun runDetected() {
         val command = detected ?: return
         if (!CompanionRequestLifecycle.shouldAccept(
@@ -765,6 +791,17 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
             OutlinedButton(onClick = { refreshCommand(force = false) }) { Text("Scan ChatGPT") }
             TextButton(onClick = { refreshCommand(force = true) }) { Text("Rescan") }
         }
+        OutlinedButton(
+            enabled = !busy,
+            onClick = { importClipboardCommand() }
+        ) {
+            Text("Вставити LUMENA_TOOL з буфера")
+        }
+        Text(
+            "Якщо Scan не бачить команду, скопіюй увесь блок LUMENA_TOOL у ChatGPT. " +
+                "Буфер читається лише після натискання; виконання контролює ToolGate.",
+            style = MaterialTheme.typography.bodySmall
+        )
 
         if (lastResult.isNotBlank()) {
             HorizontalDivider()
