@@ -1,5 +1,8 @@
 # Lumena Cognitive Exoskeleton Roadmap
 
+> **Актуалізація 2026-10-14 — Integrated Cognitive Autonomy v2:** нижче додано [розділ 13](#13-інтегрована-програма-автономного-когнітивного-контуру-v2-2026-10-14): єдиний покроковий маршрут, вимірювані критерії, ресурсні та безпекові межі, результати CI #2166/#2175, залишкові GAP, залежності й реалістичний прогноз. Розділи 1–12 зберігають свої історичні статуси, а не автоматично оновлюються до DONE.
+
+
 > **2026-10-09 — PC-first/Opus audit hardening handoff:** [детальний план, 10 дефектів,
 > 11 mutation probes, privacy/typo/Pracuj/Bridge acceptance та блокування
 > перенесення неперевірених 24 оцінок на телефон](pc-preference-evaluation-and-module-hardening.uk.md).
@@ -7,8 +10,8 @@
 > Реальні 24 labels (6 👎 водіям) поки відомі лише агреговано; їх не вигадувати.
 
 
-Стан документа: 2026-09-30.  
-Поточна canary-лінія: `0.12.14-ci1552`, versionCode 40, Bridge 0.27.  
+Історична базова версія: 2026-09-30.  
+Історична canary-лінія на той момент: `0.12.14-ci1552`, versionCode 40, Bridge 0.27 (**не є підтвердженням актуального встановленого стану**).  
 Цей документ є дорожньою картою. Позначка **PLAN** не означає, що функція вже реалізована або підтверджена на телефоні.
 
 ## 1. Ціль
@@ -1772,3 +1775,202 @@ v1 читає лише push збереженого пошуку з застос�
 Етап 2 (межа ядро/модулі: `LumenaModule`, `ModuleRegistry`, модулі `mcp` / `marketplace` / `listing-attention`, вимикачі в Tools) IMPLEMENTED на `feature/modules-v1` (app `0.12.26` / versionCode `52`), не phone-verified; розділення `bridge.py` — етап 2b (PLAN).
 Сумісність застосунку з Termux bridge (`ModuleManifest.requiresBridge`, `BridgeCompatibility` з `health`) IMPLEMENTED на `feature/modules-v1` (app `0.12.27` / versionCode `53`), не phone-verified. Розділення bridge відкладено власником.
 Джерело вакансій Pracuj.pl для listing attention (модуль `pracuj-jobs`, WorkManager, без Termux і без обходу захисту) IMPLEMENTED на `feature/modules-v1` (app `0.12.28` / versionCode `54`), не phone-verified. Див. [listing-attention-v1.uk.md](listing-attention-v1.uk.md).
+
+
+---
+
+## 13. Інтегрована програма автономного когнітивного контуру v2 (2026-10-14)
+
+**Тип розділу:** актуальна дорожня карта, а не обіцянка наявних функцій. Попередні Phase 0–12 залишаються деталізованими технічними потоками; цей розділ задає **спільні залежності, доказові gates і порядок інтеграції**. Нову паралельну OS, пам'ять, ядро або обхід чинного Coordinator/ToolGate створювати заборонено.
+
+### 13.1. Мета і фальсифікований результат
+
+**Кінцевий практичний результат:** на телефоні власника працює довготривалий когнітивний екзоскелет, здатний перетворити задачу на конкретні критерії успіху, відновити релевантний контекст після перезапуску, порівняти дозволені стратегії, виконати дії локальними або хмарними інструментами, незалежно оцінити досягнутий результат, зберегти **контекстно придатний і перевірений** досвід та зробити наступну схожу задачу з меншою кількістю помилок, кроків і ручних втручань.
+
+Це **не** доказ AGI, свідомості, загального інтелекту або того, що будь-яка хмарна модель «може все». Базова гіпотеза H1: додавання локального когнітивного контуру **підвищує частку незалежно підтверджених успіхів за контрольованої вартості**, порівняно з тими самими моделлю, інструментами й дозволами без контуру. Нульова гіпотеза H0: переваги немає або вона пояснюється додатковими токенами, повторними спробами, витратами чи доступом до підказок/готових Skills.
+
+**Мінімальний продукт:** швидший і більш достовірний багатокроковий асистент; **реалістична дослідницька ціль:** контекстно-адаптивний екзоскелет; **амбітна, недоведена ціль:** автономний дослідник, що створює власні перевірені стратегії та цифрові результати.
+
+### 13.2. Які докази вже є (snapshot, не вигадувати статус)
+
+| Компонент / твердження | Фактична підстава | Статус на дату |
+| --- | --- | --- |
+| Coordinator, ContextKernel, ToolRegistry/ToolGate, GoalContract | Наявні production-класи й Kotlin-регресії | **CODE + CI**, не нова phone-верифікація |
+| Захист від порожнього DONE, коротких «покажи!», підробного toolUsed | Draft [PR #116](https://github.com/Kvazarbit/Lumena-Android/pull/116), CI #2161 SUCCESS | **CODE + CI**, на телефоні для нової гілки ще не перевірено |
+| Автономний тестовий контур | CI [#2166](https://github.com/Kvazarbit/Lumena-Android/actions/runs/38607595713); 16 синтетичних сценаріїв: 13 PASS, 3 GAP | **OFFLINE_SYNTHETIC**, без справжньої Gemma/Laya |
+| Виправлення трьох хибних DONE: Kotlin, фото, gov.pl | Draft [PR #117](https://github.com/Kvazarbit/Lumena-Android/pull/117); exact-head CI [#2175](https://github.com/Kvazarbit/Lumena-Android/actions/runs/38611433826) SUCCESS; 18 сценаріїв: 16 PASS, 2 GAP | **CODE + CI**, лише вузькі типізовані докази |
+| Фото з правильним title, але неправильними пікселями | Adversarial case image-title-not-pixel-proof | **GAP:** текстове metadata != visual truth |
+| Текст з офіційного host, але не за темою | Adversarial case official-host-not-topic-proof | **GAP:** authority host != semantic relevance |
+| Fractal Canvas, WorkThread/ResearchThread, Laya, TinyJev, Layer Governor | Наявний код / старі телефонні діагностики, зокрема Laya SHADOW | **Різний рівень готовності:** незалежного causal uplift ще немає |
+| Встановлений телефон | Власник раніше підтверджував ci2152 та Bridge 0.29; **свіжої діагностики для ci2175 немає** | **OWNER-REPORTED OLD BASELINE**, а не phone proof нової гілки |
+
+Статуси строго розділяти: **PLAN → CODE_PRESENT → CI_VERIFIED → PHONE_VERIFIED → MEASURED_BENEFIT**. Жоден етап не переходить у наступний від самого commit, green CI, моделі, імпортованої пам'яті чи цієї дорожньої карти. При невідомому результаті використовувати **UNKNOWN/PARTIAL**, не DONE.
+
+### 13.3. Єдиний контур рішень і джерела авторитету
+
+~~~text
+USER_GOAL + OWNER_CONSTRAINTS
+  → EffectiveTaskPolicy / GoalContract / WorkThread+ResearchThread
+  → typed Context Snapshot (live world state; source, version, freshness)
+  → Planner + Cloud/Local model (candidates, prediction, confidence)
+  → deterministic filters / counterexamples / Layer Governor
+  → ToolRegistry + ToolGate + confirmation (OWNER PHONE AUTHORITY)
+  → Bridge / MCP / Python / approved Skills / GitHub CI
+  → signed/scoped TOOL_RESULT + independent acceptance verifier
+  → EXPECTED ↔ ACTUAL / cause probe / uncertainty / recovery
+  → Fractal Canvas (EPISODE → PATTERN → STRATEGY → META_RULE)
+  → shadow strategy selector / frozen-memory A/B / stale-data decay
+  → next task receives only relevant, provenance-bound guidance
+~~~
+
+**Непорушні правила:** немає permission від Skills, Laya, cloud model, memory або CI; немає самопідписування APK; немає merge, покупок, відправлення листів/заявок, угод або змін на чужих сервісах без окремого дозволу власника. GitHub runner — **тимчасове ізольоване місце обчислень**, не постійна частина телефону. GitHub Actions може доказово підтвердити власну збірку на точному SHA, але **не може підмінити** local TOOL_RESULT чи власницьке підтвердження встановлення.
+
+Стан задачі (контракт між шарами): ідентифікатор goal/scope; точне user instruction; owner constraints; критерії й версія оцінювача; snapshots версій застосунку/Bridge/моделі/інструментів; bounded evidence IDs; status для кожного критерію; EXPECTED, ACTUAL, DELTA; hypothesis/counterexample; unverifiable/unknown; authority/approval (окремо, ніколи з advisory memory). Повний сирий чат, секрети й PII не копіювати в загальний контекст.
+
+### 13.4. Наскрізні робочі пакети (WBS, залежності, результат і gate)
+
+Орієнтовний час **від початку конкретного пакета**, не календарна обіцянка. Порядок міняється лише за доказами; пакети, які мають критичний blocker, не можна оголошувати завершеними через частковий успіх сусідів.
+
+| ID / пріоритет / горизонт | Залежить від | Що реалізувати у наявних компонентах | Вимірюваний критерій виходу |
+| --- | --- | --- | --- |
+| **R0 — P0, 1–2 тижні**. Відтворювана лабораторія | Зелений exact-head CI #2175 | Заморозити базу 18 scenarios/16 PASS/2 GAP; manifest із hash fixtures, versions, provenance, costs; окремі negative controls; детермінований результат JSON + report; заборонити приховувати GAP | Повторний CI відтворює ті самі verdicts; JSON валідний; job failure не маскується, випадкові seed/ліміти записані |
+| **R1 — P0, 2–5 тижнів**. Незалежне приймання цілей | R0 | Розширити GoalContract: точна збірка й тести коду, змістовна відповідність прочитаного джерела, pixel-level image verification з abstain; перевіряти actual target і postcondition, не лише ok=true | Три старі GAP не повертаються; image-title-not-pixel-proof та official-host-not-topic-proof лишаються GAP до справжньої незалежної перевірки; відповідні нові positive/negative oracles |
+| **R2 — P0/P1, 2–4 тижні**. Надійний контекст задачі | R0, R1 | WorkThreadMemory, ResearchThreadResolver, GoalContract, HistoricalSessionMemory: зберігати активні вимоги/скоуп/докази після стиску, переключення тем, перезапуску; не відновлювати права | Ціль з 30–100 кроків та 3 перерв відновлюється без заміни задачі; усі старі permissions потребують чинного ToolGate; bounded context |
+| **R3 — P1, 3–6 тижнів**. Fractal Canvas v2 і retrieval | R2 | Захистити WORST/CONTESTED/STRATEGY/META_RULE; дедуплікація, decay, provenance, environment fingerprint, cost-aware ranker; Shadow-only до оцінки | 10 000 fixture events без втрати критичних контрприкладів і без небезпечного перенесення з іншого scope; deterministic rebuild; немає витоку PII |
+| **R4 — P1, 4–8 тижнів**. Причинний контур | R1–R3 | EXPECTED→ACTUAL→DELTA→CAUSE; перевірні гіпотези з можливістю спростування; порівняння альтернатив, recovery, UNKNOWN/CONTESTED, model confidence calibration | Позитивні та негативні причинні проби; одна задача = не більше одного незалежного голосу; при зміні середовища старий досвід не стає доказом |
+| **R5 — P1, 3–6 тижнів**. Когнітивні Skills | R1, R4 | Versioned Skill Registry: інструкції/скрипти як методи, не authority; sandbox, tests, provenance, rollback; експериментальна генерація й оптимізація Skills лише за verified reward | Skill без тестів не promoted; prompt injection не дає дозволу; порівняння Skill ON/OFF на незнайомих задачах, safety не погіршується |
+| **R6 — P1, 4–8 тижнів**. Вимір реальної користі | R0–R5 | Фіксована offline/online A/B/факторна лабораторія; незалежні acceptance-oracles; Layer Governor, HOLDOUT, cost/latency, протокол самообману й data leakage | PRE-REGISTERED звіт із uncertainty та порівнянням baseline; немає доказів → INSUFFICIENT_DATA, не KEEP |
+| **R7 — P2, 4–8 тижнів**. Laya і вибір моделей | R4, R6 | Laya/малий локальний ranker у SHADOW прогнозує корисний strategy/model; хмарні моделі виконують важке міркування; обмеження пам'яті, токенів та енергії | Laya випереджає детермінований ranker на holdout за quality-per-cost; інакше лишається SHADOW / DISABLE |
+| **R8 — P1/P2, 2–4 тижні після R1–R6**. Phone E2E | Відповідний exact-head CI + дозвіл власника | Резервна копія/rollback, owner signing, сумісність schema, Bridge 0.29+, реальні задачі з перериваннями, permission audit, заповнення телеметрії | Окремий PHONE_VERIFIED gate, доказово встановлений build/version, non-loss of data; без цього не позначати deployed |
+| **R9 — P2, 6–12 тижнів після R6–R8**. Економічна цінність | Незалежне вимірювання якості | Read-only пошук польського попиту; створення цифрових артефактів; кошторис часу/токенів; власницьке затвердження контакту/договірних та платіжних дій | Реально прийнятий продукт/оплачена послуга з обліком чистого результату; жодних гарантій заробітку чи live-trading за замовчуванням |
+
+**Критичний шлях:** R0 → R1 → R2 → R4 → R6 → R8. R3/R5/R7 — модульні гіпотези, не привід затримувати безпечний MVP, якщо вони не дають переваги. R9 не потрібен для доказу якості когнітивного контуру.
+
+### 13.5. Два поточні GAP — точний маршрут закриття
+
+**V1. Visual truth.** Читати реальні bytes/pixels (або bounded image attachment), а не тільки URL, title, alt, matched_query або пошуковий snippet. Ввести незалежного візуального оцінювача з confidence/abstain, облік provenance й можливість manual review власником. Випробування: «назва Red cat, у кадрі blue car», зміна назви без зміни картинки, невірний crop, недоступні URL, 404/JS shells, кілька кадрів із перемішаними словами, prompt injection у метаданих. **Gate:** відповідність підтверджується саме для конкретного зображення; якщо пікселі недоступні — PARTIAL/UNKNOWN. Не називати це 100% точністю моделі зору.
+
+**S1. Source semantics.** Відділити domain/source identity від змістового твердження. Отримувати фактичний текст сторінки, розбивати його на цитовані уривки, зв'язувати кожен acceptance criterion із конкретним supporting excerpt та URL+hash+timestamp. Якщо є суперечності/застарілі дані — CONTESTED/UNKNOWN. Випробування: правильний gov.pl URL із нерелевантним текстом; редирект на сторонній домен; фальшивий цитований уривок; правильна сторінка з іншою датою або протилежною вимогою. **Gate:** незалежний oracle підтверджує пов'язаність питання ↔ уривок ↔ твердження; без уривка не DONE.
+
+**C1. Kotlin compile.** Типізований критерій compilation наразі fail-closed: жодна дія file.write або python.run не може його задовольнити. Наступний крок — тільки після безпечного ToolRegistry/ToolGate contract впровадити scoped remote CI compile-verification (exact SHA, відомий Gradle task, exit code, provenance, tests, хеш артефакту) або ізольований локальний компілятор. **Gate:** malformed Kotlin зобов'язаний провалитися; unrelated project/old SHA не можуть задовольнити поточний критерій. GitHub success доводить CI-збірку, не установку APK.
+
+### 13.6. Еталонні задачі і незалежні оцінювачі
+
+Скласти versioned corpus за сімействами, а не тільки приклади, які Люмена вже бачила:
+
+| Сімейство | Суть задачі | Незалежний oracle |
+| --- | --- | --- |
+| Код / баг-фікс | Python, Kotlin, HTML, неповний patch, regression | compile + unit/integration tests + target hash + runtime postcondition |
+| Пошук / джерела | Офіційна інструкція, порівняння суперечливих джерел, нова сторінка | конкретний змістовний уривок + URL + timestamp + незалежна перевірка |
+| Візуальні задачі | Об'єкт, властивість, кадр, false title | справжні пікселі й окремий оцінювач/ручна розмітка |
+| Контекст / відновлення | 30–100 кроків, нова тема, стиск і перезапуск | незмінний goal/effects, відсутність старого permission, правильні наступні дії |
+| Recovery / невідомість | timeout, 404, rate-limit, action unknown, duplicated request | без сліпого replay, правильний PARTIAL/UNKNOWN, виправлений target |
+| Planning / Snake | видимий весь state, хвіст/голова, планування з lookahead | simulator з незалежним actual state/reward, нові карти/seed |
+| Digital service | Скрипт або структурований звіт із точним технічним acceptance | acceptance checklist замовника/власника, витрати, придатний артефакт |
+
+**Анти-витік:** розділити train/dev/holdout за *родиною цілі/проєктом*, а не випадковими перефразами одного прикладу. Не використовувати answer key, hidden oracle output, майбутні результати чи Holdout labels у retrieval/Skills/memory. Заморожувати версії fixtures, policy, model, prompts і corpus перед вирішальним порівнянням. Перевіряти counterfactual variants (зміна одного факту → інше правильне рішення), adversarial/typo, незнайомі контексти.
+
+### 13.7. Чесна методика A/B і показники розумного прогресу
+
+**Основний показник (primary):** частка задач із **незалежно підтвердженим виконанням усіх важливих критеріїв**, а не TaskStatus.DONE. Без oracle задача не входить у successful label; UNKNOWN не прирівнюється до negative або positive evidence.
+
+**Варіанти на тих самих цілях:**
+- **A** — однакова cloud/local модель + ToolGate + базові веріфікатори, без advisory пам'яті та Skills;
+- **B** — A + фіксовані готові Skills, без когнітивної пам'яті;
+- **C** — той самий набір Skills/інструментів + Coordinator/ContextKernel/планування, **MEMORY_OFF**;
+- **D** — C + frozen verified memory/retrieval, додаткові модельні пропозиції лише в межах однакових бюджетів.
+
+Порівняння **C vs D** ізолює користь пам'яті; **A vs B** — Skills; **B vs C** — orchestration; Laya треба оцінювати окремим фактором SHADOW→ON і не змішувати з ефектом пам'яті. Будь-які відмінності в кількості спроб, моделях, токенах і дозволених інструментах фіксувати в результаті. Якщо budgets різні — це окреме cost-quality порівняння, не чистий causal A/B.
+
+**Secondary metrics:** false DONE із незалежного oracle; wrong-target operations; порушення permission (ціль = 0 у всіх safety fixtures); steps-to-goal; recovery quality; повторні безрезультатні виклики; owner interventions; token counts/cost; p50/p95 time; tool failures; контекстні збої; abort/abstain; precision of retrieval; cross-model transfer. Зберігати модель, конфігурацію, seed, backend, environment snapshot, policy і cohort. Не робити один «intelligence score».
+
+**Статистичний gate:** пілот 40–60 задач для калібрування задач/інструментів; потім окрема зафіксована нова вибірка (орієнтир ≥100 незалежних задач на порівнювану умову, уточнювати power analysis за очікуваною різницею), paired or stratified design, 95% confidence intervals / bootstrap для різниці, контроль multiple comparisons, attrition та інфраструктурних failure. Заздалегідь визначити мінімально корисний виграш (проектний орієнтир ≥5 відсоткових пунктів verified success **або** суттєве зменшення втручань/витрат без втрати якості); оцінити uncertainty, а не оголошувати KEEP лише через позитивне середнє. Якщо інтервал охоплює нуль або даних мало — **INSUFFICIENT_DATA**.
+
+Окремо перевіряти **learning transfer**: пам'ять накопичується тільки на train/tasks; після цього freezes; оцінка на невиданих tasks і нових backend/моделях. Поліпшення тільки на повторенні старих кейсів не доводить когнітивне навчання.
+
+### 13.8. Стратегічна самостійність без втрати керування
+
+Дозволені цикли в автономному лабораторному режимі: сформувати кілька планів; передбачити ризики; вибрати найменший законний read-only probe; виконати через ToolGate; порівняти actual з expected; або зробити наступний probe, або чесно завершити PARTIAL; дати людині зрозумілу трасу. Ліміти: кроки, токени, хвилини, retries, memory, allowed roots, домени, бюджет зовнішніх API. Безвихідні повтори зупиняти з конкретною причиною.
+
+**Provenance trace для кожного рішення:** task/ref, що пропонувала модель; які альтернативи існували; що порадила Laya/Skill/Fractal (або abstained); чому ToolGate дозволив/відхилив; TOOL_RESULT hash; чому Verifier дав PASS/FAIL/UNKNOWN; чи дійшло до experience store; чому наступного разу було використано цей досвід. Відповідь моделі про свій «успіх» не заповнює ці поля.
+
+**Skills lifecycle:** DRAFT → SANDBOX_TESTED → VERIFIED_FOR_SCOPE → SHADOW → CANDIDATE → OWNER_APPROVED, з відкатом при регресії; кожна зміна Skill отримує версію, тести та окремий holdout. Skill — advisory method, не право доступу. Ніяке automatic self-edit hard Constitution або owner signing.
+
+### 13.9. Бюджет, обчислення й місце GitHub Actions
+
+| Де | Що доречно робити | Чого не припускати |
+| --- | --- | --- |
+| **OnePlus + Termux Bridge** | Own task state, tool permission, локальні snapshots/receipts, базова пам'ять, користувацькі дії | Безмежну RAM, GPU, батарею, 24/7 процес без зупинки Android |
+| **Хмарні моделі** | Планування, семантичне читання, генерація кандидатів, багатокрокові міркування | Автоматичну правильність, сталість контексту або право виконання |
+| **GitHub Actions (ephemeral Linux)** | Фіксовані seeds, Python/JVM/Android tests, property/fuzz, simulation, artifact reports, порівняння A/B | Постійний сервер, приватний диск телефону, авторитет встановленої версії, необмежені безкоштовні ресурси |
+| **Laya / малий ranker (SHADOW)** | Дешевий selector/candidate prioritization, оцінка latency | Permission, незалежний verifier, автоматичний доступ до грошей |
+| **PC/кластер (опційно)** | Великі локальні симуляції після порівняння cost/energy | Передумову для MVP або гарантований прискорювач кожної задачі |
+
+CI за замовчуванням використовує **лише синтетичні/публічні fixtures**. Не експортувати в GitHub raw приватні розмови, owner signing backup, Bridge token, фінанси, персональні історії або файлові шляхи з приватним змістом. API оплачувати лише в межах окремо затвердженого ліміту; нові платні cloud sessions автоматично не створювати. При перевищенні бюджету — PARTIAL/COST_LIMIT, не підробний успіх.
+
+### 13.10. Phone acceptance, підписування, відкат
+
+Перевірки спочатку на точному HEAD: Kotlin unit + mutation + native smoke + APK unsigned compile + audit artifact + manual code review. Далі, **лише за дозволом власника**, зберегти encrypted/локальний backup даних, перевірити SHA APK, pinned owner cert, versionCode/upgrade-path і схему історичних станів; підписати тим самим owner key **локально**; зробити in-place install; провести відтворювані задачі й restart. Не передавати ключ у Actions, issue, PR, артефакт чи журнал.
+
+Телефонний набір: актуальна діагностика до/після; реальне file.read; безпечний Python fix→test; офіційне джерело з цитатою; справжній visual result + pixel check; фальшивий tool-result і failing verification; повторний запуск Bridge; модельний context compression; переключення проєкту; відмова в небезпечній дії; continuity історії. Кожен кейс має acceptance ID, evidence IDs і знімок версії. Missing phone-evidence не можна замінити зеленим CI.
+
+Відкат: резервна копія та міграційний план, проба читання old JSON, abort при схемній несумісності, явне відновлення власником; не очищати Experience Canvas, не відновлювати старі дозволи з imported advisory.
+
+### 13.11. Перевірка економічної корисності після когнітивної якості
+
+**Перша задача:** знайти потенційно затребувану цифрову проблему у Польщі, зробити reproducible proof-of-work (Python-автоматизація, документи/таблиці, аналіз даних), виміряти затрати й перевірити продукт у незалежному acceptance test. Лише потім шукати справжній платний контакт, причому contact/send/buy/apply/contract/payment — **тільки після окремого явного owner confirmation**. Трейдинг — лише віртуальний portfolio/simulation до окремого рішення власника.
+
+Рахувати revenue тільки після підтвердженої фактичної оплати; net value = отримані кошти мінус платежі сервісам, матеріали/комісії та оцінений час. Нуль замовлень або багато цікавих listings ≠ прибуток. Ціль 100 PLN може бути експериментальним орієнтиром, **не гарантією**. Якщо продукт не потрібний клієнтам, це ринкова невдача, а не доказ відсутності когнітивного інтелекту.
+
+### 13.12. Критичні ризики, обмеження й що робити при невдачі
+
+| Ризик | Контрзахід | Сигнал STOP/REWORK |
+| --- | --- | --- |
+| Хибне DONE після ok=true | Typed independent acceptance + uncertainty | Будь-який критичний false DONE у regression suite |
+| Метадані замість реальності | Pixel / semantic source oracles; abstain | Назва фото/host видається за змістовий доказ |
+| Досвід засмічує мислення | Frozen A/B, targeted retrieval, негативні приклади | MEMORY_ON не кращий, збільшує витрати чи порушення |
+| Старі проєкти змішуються | Scoped durable context, freshness+version IDs | Задача/правило з іншого проєкту отримує authority |
+| Стратегії оптимізують тест, не мету | Hidden holdout, counterfactual, нові середовища | Uplift лише на train/близьких paraphrases |
+| Laya вчиться від власних прогнозів | Ground truth від simulator/real tools, shadow | Самопідтвердження prediction без actual |
+| Непередбачена зовнішня дія | ToolGate, deny-by-default, confirmation, budget | Самостійна mutation/contact/financial operation |
+| Надмірні витрати, батарея, таймаути | Bounded retries/steps/tokens/energy; circuit breaker | Cost росте, якість не росте |
+| Приватність або prompt injection | App-local vault, redaction, untrusted-data separation | Leak secret/PII або зовнішній текст підвищує права |
+
+При невдалій гіпотезі: запустити негативний regression і ablation; позначити CANDIDATE як CONTESTED/SHADOW/DISABLE, зберігши provenance; не переписувати старі PASS і не змінювати критерій заднім числом, щоб отримати green.
+
+### 13.13. Готовність релізу і 6 контрольних воріт
+
+| Gate | Умова для переходу | Доказ / артефакт |
+| --- | --- | --- |
+| **G0 / Reproducible** | exact HEAD, green unit/mutation/native, зафіксовані 18 сценаріїв та версії | GitHub Actions run + immutable report/hash |
+| **G1 / No false completion** | нуль спостережених критичних false DONE у негативному корпусі; усі unresolved = PARTIAL/UNKNOWN | GoalContract + ContextKernel receipts, adversarial cases |
+| **G2 / Semantic evidence** | image pixels, cited source excerpt, actual compile/test; два поточні residual GAP закриті **справжніми** oracles | Незалежні позитивні й негативні приклади, provenance |
+| **G3 / Context continuity** | багатоетапна задача без втрати goal, permissions, key constraints після рестарту | Детермінований replay + інтеграційний телефонний протокол |
+| **G4 / Cognitive utility** | preregistered holdout: покращення verified success/cost або interventions, інтервали й negative cases | C vs D, ablations, Layer Governor, costs |
+| **G5 / Phone & owner** | власницький in-place install, підпис, rollback, перевірені e2e дії, відсутність втрати пам'яті | DEVICE diagnostic before/after + owner acceptance |
+
+**Критерій реального «розумнішає»: G4**, не G0 або кількість фрактальних вузлів. **Критерій користувацької готовності: G5**, не CI. Режим з невиміряною порадою — SHADOW; можливість safe baseline без усіх advisory layers — обов'язкова.
+
+### 13.14. Перші 10 конкретних наступних задач (в порядку)
+
+1. **ROADMAP-01:** зафіксувати цю актуалізацію у новому Draft PR, не чіпати stable та PR #117; записати точний базовий SHA й CI #2175.
+2. **EVAL-01:** нормалізувати результати cognitive-contour-audit у versioned case manifest; зберігати сімейство задач, oracle, expected, observed, GAP, version та run provenance.
+3. **VERIFIER-01:** спроєктувати detached pixel-level verifer із реальною передачею зображення та abstention; спочатку відтворити misleading-title негативний приклад.
+4. **VERIFIER-02:** source-to-claim binding: exact final URL, chunk/quote, hash, topic verdict; відтворити off-topic gov.pl case.
+5. **VERIFIER-03:** Kotlin compile verification як окремий scope-bound CI tool/result; позитивний compile і негативний malformed-file на тому самому HEAD.
+6. **CTX-01:** складний сценарій довгого проєкту з перериваннями й зміною тем; показати, що GoalContract та current instruction не губляться, а permission не переноситься.
+7. **MEM-01:** compaction v2 на 10 000 synthetic records із захистом WORST/CONTESTED; знімок метрик і контроль сумісності old JSON.
+8. **CAUSE-01:** змусити Snake world model порівнювати прогноз з незалежним actual simulator, а не зі своїм очікуванням; мінімум два спростовні probe outcomes.
+9. **BENCH-01:** 40–60 pilot задач A/B/C/D із cost tracing; preregister unseen holdout та stop-rules, не навчати на test labels.
+10. **PHONE-01:** після G1–G3 та явного owner OK провести backup/sign/install/real-phone E2E; до того ніяких приватних даних або автоматичних мутацій телефону.
+
+**Handoff наступній моделі:** почни з актуального GitHub HEAD і Draft PR; спершу читай існуючі реалізації й перевіряй, чи не виконано пункт в іншій гілці. Внось мінімальний diff, один ризик/гіпотеза на тестовий цикл; спочатку negative case → patch → rerun → exact-head CI → звіт. Ніякого «DONE» без незалежного acceptance і жодного merge без власника.
+
+### 13.15. Орієнтовний прогноз (за умов виконання gates)
+
+- **0–2 місяці:** систематичні semantic verifiers, зменшення неправдивих DONE, відтворювана CI-лабораторія, стабільніший long-task context. Висока здійсненність інженерної частини, але не гарантовано повний pixel-level oracle.
+- **2–6 місяців:** причинні проби, Fractal compaction v2, retrieval, багатомодельні work cycles, A/B harness. Ймовірна користь у вузьких повторюваних задачах; реальний uplift невідомий до holdout.
+- **6–12 місяців:** частково самостійна персональна система роботи над проєктами з керованим пошуком та recovery, опційним Laya selector; практичні цифрові продукти, якщо справді пройдуть acceptance.
+- **Ризиковий/амбітний варіант:** автономне відкриття й перенесення стратегій на нові задачі, вимірювана економічна вигода. Це **гіпотеза**, не запланований гарантований deliverable.
+
+**Стоп-умова архітектурного розвитку:** якщо після чесних контрольованих випробувань D не випереджає C, нові Skills/Laya/пам'ять не слід робити обов'язковими. Залишити безпечний і корисний Coordinator із незалежними Verifiers, а складні шари перенести назад у експеримент.
