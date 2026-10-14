@@ -1551,7 +1551,8 @@ class AgentController(
                 contract = state.task.goalContract,
                 call = call,
                 ok = ok,
-                kernel = nextKernel
+                kernel = nextKernel,
+                stdout = stdout
             )
 
         val nextPolicy =

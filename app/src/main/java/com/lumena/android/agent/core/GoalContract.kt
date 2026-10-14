@@ -11,7 +11,10 @@ enum class CriterionKind {
     OPERATIONAL_TOOL_EVIDENCE,
     REQUIRED_TOOL_SUCCESS,
     VISUAL_EVIDENCE,
+    VISUAL_METADATA_ALIGNMENT,
     SOURCE_CONTENT_EVIDENCE,
+    REQUIRED_SOURCE_HOST,
+    KOTLIN_COMPILE_VERIFIED,
     FILE_CONTENT_EVIDENCE,
     CODE_ACTION_EVIDENCE,
     PYTHON_TARGET_VERIFIED
@@ -95,6 +98,13 @@ object GoalContractPolicy {
                 kind = CriterionKind.VISUAL_EVIDENCE,
                 subject = "image.search"
             )
+            if (goal.isNotBlank()) {
+                criteria += AcceptanceCriterion(
+                    id = "visual-metadata-alignment",
+                    kind = CriterionKind.VISUAL_METADATA_ALIGNMENT,
+                    subject = goal.take(500)
+                )
+            }
         }
 
         if (intent == TaskIntent.PUBLIC_WEB) {
@@ -109,6 +119,13 @@ object GoalContractPolicy {
                         ?.joinToString("|")
                         ?: "web.read|http.get|http.json"
             )
+            SemanticGoalEvidence.requiredOfficialHost(goal)?.let { host ->
+                criteria += AcceptanceCriterion(
+                    id = "required-source-host:$host",
+                    kind = CriterionKind.REQUIRED_SOURCE_HOST,
+                    subject = host
+                )
+            }
         }
 
         if (
@@ -126,6 +143,15 @@ object GoalContractPolicy {
         }
 
         if (intent == TaskIntent.CODE_WORK) {
+            if (SemanticGoalEvidence.explicitKotlinCompilationGoal(goal)) {
+                // The current Android ToolRegistry has no Kotlin/Gradle compiler.
+                // Fail closed: file.write alone can never certify Kotlin syntax.
+                criteria += AcceptanceCriterion(
+                    id = "kotlin-compile-verification",
+                    kind = CriterionKind.KOTLIN_COMPILE_VERIFIED,
+                    subject = "kotlin"
+                )
+            }
             val requirement =
                 if (goal.isBlank()) {
                     "mutating-or-executable"
@@ -166,7 +192,8 @@ object GoalContractPolicy {
         contract: GoalContract,
         call: AgentDecision.ToolCall,
         ok: Boolean,
-        kernel: ContextKernelState
+        kernel: ContextKernelState,
+        stdout: String = ""
     ): GoalContract {
         if (contract.coverage == GoalContractCoverage.NONE &&
             ToolRegistry.get(call.tool) == null
@@ -221,6 +248,47 @@ object GoalContractPolicy {
                     } else {
                         criterion
                     }
+
+                CriterionKind.VISUAL_METADATA_ALIGNMENT ->
+                    if (
+                        ok &&
+                        canonical == "image.search" &&
+                        toolEvidence != null &&
+                        SemanticGoalEvidence.imageMetadataSupportsGoal(
+                            goal = criterion.subject,
+                            stdout = stdout
+                        )
+                    ) {
+                        // The title/alt is untrusted metadata, NOT pixel verification.
+                        pass(criterion, toolEvidence)
+                    } else {
+                        criterion
+                    }
+
+                CriterionKind.REQUIRED_SOURCE_HOST ->
+                    if (
+                        ok &&
+                        toolEvidence != null &&
+                        SemanticGoalEvidence.fetchedFromRequiredHost(
+                            call = call,
+                            stdout = stdout,
+                            host = criterion.subject
+                        )
+                    ) {
+                        pass(
+                            criterion,
+                            toolEvidence.copy(
+                                strength = VerificationStrength.INDEPENDENT_TOOL_RESULT
+                            )
+                        )
+                    } else {
+                        criterion
+                    }
+
+                CriterionKind.KOTLIN_COMPILE_VERIFIED ->
+                    // No supported, independently verified compiler tool yet.
+                    // Never accept file.write, python.run, or a model claim as proof.
+                    criterion
 
                 CriterionKind.SOURCE_CONTENT_EVIDENCE -> {
                     val accepted =
