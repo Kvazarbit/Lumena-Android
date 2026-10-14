@@ -283,7 +283,28 @@ class AgentController(
     private fun interpretDecision(
         decision: AgentDecision,
         state: AgentControlState
-    ): ControllerInstruction = when (decision) {
+    ): ControllerInstruction {
+        // Explanation of an earlier tool action is a question about the
+        // previous app-owned ledger, not a fresh execution goal. Model prose
+        // cannot certify a search it never ran. The deterministic receipt wins
+        // over an invented DONE, a plain reply, or a new model tool proposal.
+        val prior = state.task.previousExecutionReceipt
+        if (
+            prior != null &&
+            ShortTurnCue.isExecutionEvidenceQuestion(state.task.currentInstruction)
+        ) {
+            val report = ExecutionClaimGuard.explain(prior)
+            return ControllerInstruction.Finish(
+                report,
+                state.copy(
+                    task = state.task.copy(
+                        status = TaskStatus.DONE,
+                        lastResult = report.take(4_000)
+                    )
+                )
+            )
+        }
+        return when (decision) {
         is AgentDecision.ToolCall -> interpretTool(decision, state)
         is AgentDecision.Done -> interpretDone(decision, state)
         is AgentDecision.Partial -> summaryConsistency(decision.summary, state) ?: ControllerInstruction.Finish(
@@ -296,6 +317,7 @@ class AgentController(
             )
         )
         is AgentDecision.Reply -> interpretReply(decision, state)
+        }
     }
 
     private fun interpretTool(
