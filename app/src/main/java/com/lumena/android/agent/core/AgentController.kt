@@ -861,10 +861,27 @@ class AgentController(
         )
     }
 
+    private fun clarifyUnresolvedShow(state: AgentControlState): ControllerInstruction.Finish {
+        val report = CompletionEvidenceGate.unresolvedShowReport()
+        return ControllerInstruction.Finish(
+            report,
+            state.copy(
+                task = state.task.copy(
+                    status = TaskStatus.PARTIAL,
+                    lastResult = report,
+                    errors = (state.task.errors + "GOAL_TARGET_MISSING").takeLast(8)
+                )
+            )
+        )
+    }
+
     private fun interpretDone(
         decision: AgentDecision.Done,
         state: AgentControlState
     ): ControllerInstruction {
+        if (CompletionEvidenceGate.hasUnresolvedShowTarget(state)) {
+            return clarifyUnresolvedShow(state)
+        }
         ContextKernel.completionBlocker(state.task.kernel)?.let {
             return protocolRetry(state, it)
         }
@@ -928,6 +945,12 @@ class AgentController(
                         "if work is required, call a tool. Do not claim completion."
                 )
             }
+        }
+
+        // The model cannot satisfy an operational task by supplying prose or
+        // by setting toolUsed=true without a successful local kernel receipt.
+        CompletionEvidenceGate.missingExecutionProof(state)?.let {
+            return protocolRetry(state, it)
         }
 
         val incompleteGoalCriteria =
@@ -998,6 +1021,10 @@ class AgentController(
                 state,
                 "The previous output looked like a tool/protocol message but could not be parsed safely. Return exactly one valid tool/done/partial/reply JSON object. No proposed tool was executed."
             )
+        }
+
+        if (CompletionEvidenceGate.hasUnresolvedShowTarget(state)) {
+            return clarifyUnresolvedShow(state)
         }
 
         val registeredToolMention =
@@ -1136,6 +1163,23 @@ class AgentController(
                 )
         ) && state.visualEvidenceReady) {
             return interpretDone(AgentDecision.Done(trimmed), state)
+        }
+
+        CompletionEvidenceGate.missingExecutionProof(state)?.let { problem ->
+            if (!state.toolUsed && state.plan.isEmpty()) {
+                val report = CompletionEvidenceGate.unexecutedDirectiveReport()
+                return ControllerInstruction.Finish(
+                    report,
+                    state.copy(
+                        task = state.task.copy(
+                            status = TaskStatus.PARTIAL,
+                            lastResult = report,
+                            errors = (state.task.errors + "NO_VERIFIED_TOOL_RESULT").takeLast(8)
+                        )
+                    )
+                )
+            }
+            return recoverPlainReply(state, trimmed, problem)
         }
 
         if (canFinishVerifiedReadOnlyPlainReply(state)) {
