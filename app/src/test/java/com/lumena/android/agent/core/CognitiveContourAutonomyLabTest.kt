@@ -191,6 +191,22 @@ class CognitiveContourAutonomyLabTest {
             "The fixture passes transport success but never verifies that the image is a cat."
         )
 
+        // Additional adversarial case: a picture title can lie about pixels.
+        // The synthetic URL is deliberately suggestive, not independent visual proof.
+        val misleadingLabel = tool(
+            visualGoal, "image.search",
+            mapOf("query" to "red cat"),
+            output = """{"display_ready":true,"images":[{"title":"Red cat","thumbnail_url":"https://example.org/blue-car.jpg"}]}"""
+        )
+        val misleadingDecision = done(misleadingLabel)
+        observe(
+            "image-title-not-pixel-proof", "visual-trust",
+            misleadingDecision.state.task.status != TaskStatus.DONE,
+            misleadingDecision.state.task.status.name,
+            "NOT_DONE without independent pixel inspection",
+            "A matching search title is source-controlled text; it does not verify image pixels."
+        )
+
         // 8. A successful source read from a different domain is not proof that
         // the requested OFFICIAL source was consulted.
         val govGoal = init(
@@ -213,6 +229,22 @@ class CognitiveContourAutonomyLabTest {
             webDecision.state.task.status.name,
             "NOT_DONE without gov.pl source",
             "A generic source-content receipt may satisfy a typed operational contract without domain identity."
+        )
+
+        // Matching the official domain alone does not establish that the
+        // fetched page contains the requested safety instructions.
+        val sameHostOffTopic = tool(
+            found, "web.read",
+            mapOf("url" to "https://www.gov.pl/web/unrelated"),
+            output = """{"url":"https://www.gov.pl/web/unrelated","text":"Tourism homepage only; no fire-door instructions."}"""
+        )
+        val offTopicDecision = done(sameHostOffTopic)
+        observe(
+            "official-host-not-topic-proof", "source-semantics",
+            offTopicDecision.state.task.status != TaskStatus.DONE,
+            offTopicDecision.state.task.status.name,
+            "NOT_DONE without subject-grounded source evidence",
+            "Correct official host is necessary but content relevance is not yet independently verified."
         )
 
         // 9. Unknown in-flight operations cannot be declared completed.
