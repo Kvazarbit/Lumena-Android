@@ -27,6 +27,21 @@ object ShortTurnCue {
             "pokaż(?:\\s+mi)?(?:\\s+to)?|pokaz(?:\\s+mi)?(?:\\s+to)?)\\s*[.!?]*$"
     )
 
+    /**
+     * Narrow questions about whether an earlier assistant action actually ran.
+     * Unlike a general "what?" these require an app-owned execution receipt,
+     * not interpretation of model prose or chat history.
+     */
+    private val executionQuestion = Regex(
+        "(?iu)^(?:що\\s+(?:це\\s+)?за\\s+(?:результат|пошук)\\s*[?!]*|" +
+            "що\\s+означає\\s+(?:цей|той)\\s+результат\\s*[?!]*|" +
+            "це\\s+(?:дійсно|справді)\\s+(?:результат|пошук)\\s*[?!]*|" +
+            "чи\\s+(?:ти\\s+)?(?:виконав|виконала|запустив|запустила)\\s+(?:пошук|інструмент|web\\.search)\\s*[?!]*|" +
+            "what\\s+is\\s+this\\s+result\\s*[?!]*|" +
+            "did\\s+you\\s+(?:run|execute)\\s+(?:the\\s+)?(?:search|tool)\\s*[?!]*|" +
+            "co\\s+to\\s+za\\s+wynik\\s*[?!]*)$"
+    )
+
     private val execute = Regex(
         "(?iu)^(?:реалізуй|реалізовуй|зроби|роби|виконай|виконуй|давай|поїхали|вперед|" +
             "реализуй|сделай|делай|выполни|поехали|" +
@@ -38,11 +53,19 @@ object ShortTurnCue {
     private fun normalized(text: String): String =
         text.trim().replace(Regex("\\s+"), " ")
 
-    fun isExplain(text: String): Boolean {
+    fun isExecutionEvidenceQuestion(text: String): Boolean {
         val value = normalized(text)
         return value.isNotEmpty() &&
+            value.length <= 100 &&
+            executionQuestion.matches(value)
+    }
+
+    fun isExplain(text: String): Boolean {
+        val value = normalized(text)
+        return (value.isNotEmpty() &&
             value.length <= MAX_CUE_CHARS &&
-            explain.matches(value)
+            explain.matches(value)) ||
+            isExecutionEvidenceQuestion(value)
     }
 
     fun isBareShowRequest(text: String): Boolean {

@@ -215,6 +215,25 @@ class AgentController(
     }
 
     fun interpret(raw: String, state: AgentControlState): ControllerInstruction {
+        val prior = state.task.previousExecutionReceipt
+        if (
+            prior != null &&
+            ShortTurnCue.isExecutionEvidenceQuestion(state.task.currentInstruction)
+        ) {
+            // This is an audit of an earlier action, not a model decision.
+            // Use the prior LOCAL ledger even if the new model answer is
+            // malformed protocol, a hallucinated success, or a proposed tool.
+            val report = ExecutionClaimGuard.explain(prior)
+            return ControllerInstruction.Finish(
+                report,
+                state.copy(
+                    task = state.task.copy(
+                        status = TaskStatus.DONE,
+                        lastResult = report.take(4_000)
+                    )
+                )
+            )
+        }
         return when (val normalized = normalizer.normalize(raw)) {
             is NormalizationResult.Canonical -> {
                 val next = if (normalized.changed) {
