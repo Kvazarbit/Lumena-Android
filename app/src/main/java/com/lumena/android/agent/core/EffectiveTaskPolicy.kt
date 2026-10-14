@@ -119,7 +119,7 @@ object EffectiveTaskPolicyCompiler {
         val maskedRoot =
             maskQuoted(root)
         val operationalMasked =
-            if (isBareContinuation(current)) {
+            if (isBareContinuation(current) || isVisualShowContinuation(current, root)) {
                 maskedRoot
             } else {
                 maskedCurrent
@@ -336,6 +336,9 @@ object EffectiveTaskPolicyCompiler {
             if (
                 isBareContinuation(
                     current
+                ) || isVisualShowContinuation(
+                    current,
+                    policy.rootGoal
                 )
             ) {
                 policy.rootGoal
@@ -732,6 +735,13 @@ object EffectiveTaskPolicyCompiler {
             effect.targetRef
                 .matches(Regex("[0-9a-f]{64}")) &&
             ToolRegistry.get(effect.tool) != null
+
+    // "Show!" may continue an already concrete visual goal, but must not
+    // reactivate arbitrary older code/mutation tasks as if the user said "continue".
+    private fun isVisualShowContinuation(current: String, root: String): Boolean =
+        ShortTurnCue.isBareShowRequest(current) &&
+            !ShortTurnCue.isBareShowRequest(root) &&
+            VisualGoalRouter.route(root) != null
 
     private fun isBareContinuation(
         text: String
