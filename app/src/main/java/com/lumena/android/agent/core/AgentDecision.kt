@@ -54,7 +54,9 @@ data class TaskState(
     val effectivePolicy: EffectiveTaskPolicy =
         EffectiveTaskPolicy(),
     val executionOrigin: HistoricalRecordOrigin =
-        HistoricalRecordOrigin.LOCAL_CURRENT
+        HistoricalRecordOrigin.LOCAL_CURRENT,
+    /** Read-only snapshot of an earlier LOCAL task; never tool authority. */
+    val previousExecutionReceipt: PreviousExecutionReceipt? = null
 ) {
     /**
      * maxSteps limits tool executions, not the final model conclusion.
