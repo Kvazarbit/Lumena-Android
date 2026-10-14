@@ -288,6 +288,24 @@ jobs:
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
       - name: Run agent core unit tests
         run: gradle --max-workers=2 testDebugUnitTest
+      - name: Summarize cognitive contour audit
+        if: always()
+        shell: bash
+        run: |
+          if test -f app/build/cognitive-contour-audit/report.md; then
+            cat app/build/cognitive-contour-audit/report.md
+            cat app/build/cognitive-contour-audit/report.md >> "$GITHUB_STEP_SUMMARY"
+            python -m json.tool app/build/cognitive-contour-audit/results.json >/dev/null
+          else
+            echo "Cognitive contour report unavailable (JVM tests may not have completed)."
+          fi
+      - name: Upload cognitive contour audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cognitive-contour-audit
+          path: app/build/cognitive-contour-audit/
+          if-no-files-found: ignore
       - name: Probe recovery guard mutations
         run: python scripts/mutation_recovery_probe.py
       - name: Probe MCP and module/listing mutations
