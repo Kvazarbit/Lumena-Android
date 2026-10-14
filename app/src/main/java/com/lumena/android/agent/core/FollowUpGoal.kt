@@ -89,6 +89,24 @@ object FollowUpGoal {
 object PreviousTaskOutcomeContext {
     private const val MAX_FIELD = 1_200
 
+    /**
+     * Captured exclusively from the previous app-owned execution ledger.
+     * No model summary or claimed tool call can increase these counters.
+     */
+    fun executionReceipt(task: TaskState): PreviousExecutionReceipt {
+        val events = task.kernel.evidence
+        return PreviousExecutionReceipt(
+            sourceTaskId = task.id.take(220),
+            goal = task.goal.take(MAX_FIELD),
+            previousStatus = task.status,
+            toolResultsObserved = task.kernel.observed,
+            retainedResults = events.size,
+            retainedSuccessfulResults = events.count { it.ok },
+            executedTools = events.map { it.tool }.distinct().takeLast(8),
+            unresolvedInFlight = task.kernel.inFlight != null
+        )
+    }
+
     fun failure(
         task: TaskState,
         message: String
@@ -136,6 +154,9 @@ object PreviousTaskOutcomeContext {
         appendLine("task_id=" + clean(task.id, 220))
         appendLine("project_id=" + clean(task.projectId.orEmpty(), 160))
         appendLine("goal=" + clean(task.goal, MAX_FIELD))
+        appendLine("verified_tool_result_count=" + task.kernel.observed)
+        appendLine("verified_success_count_retained=" + task.kernel.evidence.count { it.ok })
+        appendLine("model_text_is_not_execution_proof=true")
         appendLine("last_tool=" + clean(task.lastTool.orEmpty(), 160))
         task.lastResult
             ?.takeIf { it.isNotBlank() }
