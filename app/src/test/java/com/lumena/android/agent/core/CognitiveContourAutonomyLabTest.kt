@@ -304,7 +304,8 @@ class CognitiveContourAutonomyLabTest {
             "bounded-context-mandatory-content", "context-window",
             mandatoryPresent,
             "chars=" + compact.length + "; mandatory=" + mandatoryPresent,
-            "Constitution, task and budget survive long untrusted memories; no model comprehension is measured."
+            "Mandatory goal and constitution retained within 4500 chars",
+            "No direct model comprehension is measured."
         )
 
         // 15. Automated real WorkflowRunner sequencing with a *scripted fake*
