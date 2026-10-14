@@ -19,6 +19,14 @@ object ShortTurnCue {
             ")$"
     )
 
+    // A bare "show!" has no subject of its own. Without an earlier grounded
+    // visual goal, a model must not mark it DONE just by writing plausible prose.
+    private val bareShow = Regex(
+        "(?iu)^(?:покажи(?:\\s+(?:мені|мне|це|його|її))?|покажіть|" +
+            "show(?:\\s+me)?(?:\\s+(?:it|this))?|" +
+            "pokaż(?:\\s+mi)?(?:\\s+to)?|pokaz(?:\\s+mi)?(?:\\s+to)?)\\s*[.!?]*$"
+    )
+
     private val execute = Regex(
         "(?iu)^(?:реалізуй|реалізовуй|зроби|роби|виконай|виконуй|давай|поїхали|вперед|" +
             "реализуй|сделай|делай|выполни|поехали|" +
@@ -37,11 +45,18 @@ object ShortTurnCue {
             explain.matches(value)
     }
 
+    fun isBareShowRequest(text: String): Boolean {
+        val value = normalized(text)
+        return value.isNotEmpty() &&
+            value.length <= MAX_CUE_CHARS &&
+            bareShow.matches(value)
+    }
+
     fun isExecutionDirective(text: String): Boolean {
         val value = normalized(text)
         return value.isNotEmpty() &&
             value.length <= MAX_CUE_CHARS &&
-            execute.matches(value)
+            (execute.matches(value) || bareShow.matches(value))
     }
 
     /**

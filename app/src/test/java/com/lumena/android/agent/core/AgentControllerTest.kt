@@ -681,15 +681,27 @@ class AgentControllerTest {
 
     @Test
     fun extraToolAtLimitGetsOneConclusionTurnAfterVerifiedResult() {
-        val atLimit = controller.initial(task().copy(maxSteps = 5)).copy(
-            toolUsed = true,
-            task = task().copy(
-                status = TaskStatus.WAITING_MODEL,
-                step = 5,
-                maxSteps = 5,
-                lastTool = "python.run",
-                lastResult = "ok=true stdout=Cleanup script deleted"
-            )
+        // The final-turn shortcut must be exercised with a real kernel receipt,
+        // not with fabricated toolUsed=true / lastResult="ok=true" flags.
+        val starting = controller.initial(
+            task().copy(goal = "Run Python script cleanup.py", maxSteps = 5)
+        )
+        val verified = controller.afterTool(
+            state = starting,
+            call = AgentDecision.ToolCall(
+                tool = "python.run",
+                args = mapOf("script" to "cleanup.py"),
+                reason = "Run cleanup"
+            ),
+            ok = true,
+            stdout = "Cleanup script deleted",
+            stderr = "",
+            error = null
+        ).state
+        assertTrue(verified.task.kernel.evidence.any { it.ok && it.tool == "python.run" })
+        assertTrue(GoalContractPolicy.allMandatoryPassed(verified.task.goalContract))
+        val atLimit = verified.copy(
+            task = verified.task.copy(step = verified.task.maxSteps)
         )
 
         val correction = controller.interpret(
