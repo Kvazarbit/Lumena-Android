@@ -16,6 +16,7 @@ import com.lumena.android.agent.core.EffectiveTaskPolicyCompiler
 import com.lumena.android.agent.core.ToolRegistry
 import com.lumena.android.agent.core.ToolRisk
 import com.lumena.android.agent.core.TaskIntentRouter
+import com.lumena.android.agent.core.ShortTurnCue
 import com.lumena.android.agent.local.PlannedTool
 import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.CauseProbeExecutionIntent
@@ -125,6 +126,28 @@ class WorkflowRunner(
         val collectedImages = initialImages.toMutableList()
         var protocolTurns = 0
         publish(state, onState)
+
+        // A question about an earlier operation has an app-owned local
+        // answer. Avoid a cloud model call entirely: its output cannot
+        // strengthen or change the earlier execution receipts.
+        if (
+            state.task.previousExecutionReceipt != null &&
+            ShortTurnCue.isExecutionEvidenceQuestion(
+                state.task.currentInstruction
+            )
+        ) {
+            val local = controller.interpret("", state)
+            if (local is ControllerInstruction.Finish) {
+                publish(local.state, onState)
+                onProgress("PREVIOUS TASK RECEIPT\\n" + local.text.take(4_000))
+                return WorkflowOutcome.Finished(
+                    text = local.text,
+                    history = current + OllamaMessage("assistant", local.text),
+                    control = local.state,
+                    images = collectedImages.toList()
+                )
+            }
+        }
 
         val intentProfile =
             TaskIntentRouter.route(
