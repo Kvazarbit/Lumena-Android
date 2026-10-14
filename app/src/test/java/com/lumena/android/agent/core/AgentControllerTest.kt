@@ -1715,7 +1715,7 @@ class AgentControllerTest {
             state = state,
             call = call,
             ok = true,
-            stdout = """{"display_ready":true,"images":[{"thumbnail_url":"https://upload.wikimedia.org/example.jpg"}]}""",
+            stdout = """{"display_ready":true,"images":[{"title":"Woman","thumbnail_url":"https://upload.wikimedia.org/example.jpg"}]}""",
             stderr = "",
             error = null
         ).state
@@ -1746,7 +1746,7 @@ class AgentControllerTest {
                 )
             ),
             ok = true,
-            stdout = """{"display_ready":true,"images":[{"thumbnail_url":"https://upload.wikimedia.org/example.jpg"}]}""",
+            stdout = """{"display_ready":true,"images":[{"title":"Woman","thumbnail_url":"https://upload.wikimedia.org/example.jpg"}]}""",
             stderr = "",
             error = null
         ).state
