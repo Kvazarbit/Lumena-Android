@@ -32,24 +32,24 @@ web.search(query="bitcoin price chart current")
 
 ## Додатковий телефонний контрприклад (2026-10-15)
 
-Нова діагностика все ще встановленої \`ci2152\` показала **другу** форму того самого дефекту: на емоційну репліку користувача модель відповіла довгим вибаченням та закінчила його словами «Ось реальний запит прямо зараз», додавши \`expect_ok: true confidence: 1.0 web.search(query="current bitcoin price usd")\`. Реальний журнал поточної задачі:
+Нова діагностика все ще встановленої `ci2152` показала **другу** форму того самого дефекту: на емоційну репліку користувача модель відповіла довгим вибаченням та закінчила його словами «Ось реальний запит прямо зараз», додавши `expect_ok: true confidence: 1.0 web.search(query="current bitcoin price usd")`. Реальний журнал поточної задачі:
 
-\`\`\`text
+```text
 status=DONE
 step=0/4
 kernel_observed=0
 tool_result_count=0
 last_tool=
 goal_contract_criteria=0
-\`\`\`
+```
 
-Це **не** standalone tool call, тому його не можна виконувати лише тому, що він схожий на код. Додатковий вузький захист у \`TaskExecutionRecap.unverifiedInlineSearchClaim\` та \`AgentController\` виявляє модельну заяву «ось реальний запит» + псевдокоманду \`web.search(query=...)\` **без успішного current-task receipt**:
+Це **не** standalone tool call, тому його не можна виконувати лише тому, що він схожий на код. Додатковий вузький захист у `TaskExecutionRecap.unverifiedInlineSearchClaim` та `AgentController` виявляє модельну заяву «ось реальний запит» + псевдокоманду `web.search(query=...)` **без успішного current-task receipt**:
 
-- GENERAL (зокрема вибачення/розмова) → детермінований \`PARTIAL\` без запуску інструмента або удаваних свіжих даних;
-- PUBLIC_WEB → одна спроба виправити відповідь до коректного JSON \`tool\` через штатний ToolGate; повторення того самого псевдовиклику → \`PARTIAL\`;
-- успішне \`system.time\`, старий \`lastTool\`, \`Bridge.last_web_search_status\` чи лише \`confidence=1.0\` не є доказом пошуку;
+- GENERAL (зокрема вибачення/розмова) → детермінований `PARTIAL` без запуску інструмента або удаваних свіжих даних;
+- PUBLIC_WEB → одна спроба виправити відповідь до коректного JSON `tool` через штатний ToolGate; повторення того самого псевдовиклику → `PARTIAL`;
+- успішне `system.time`, старий `lastTool`, `Bridge.last_web_search_status` чи лише `confidence=1.0` не є доказом пошуку;
 - звичайний **приклад синтаксису** без твердження «я щойно запустила» залишається текстовим поясненням.
 
-Новий offline regression: \`InlineSearchClaimSafetyTest\` та сценарій у \`WorkflowRunnerStandaloneWebSearchTest\` вичерпують саме цей новий виявлений клас, не претендуючи на універсальне розпізнавання всіх мовних тверджень про дії.
+Новий offline regression: `InlineSearchClaimSafetyTest` та сценарій у `WorkflowRunnerStandaloneWebSearchTest` вичерпують саме цей новий виявлений клас, не претендуючи на універсальне розпізнавання всіх мовних тверджень про дії.
 
 **Поточний ризик:** словесні твердження про виконання інших інструментів ще можуть потребувати окремої типізованої перевірки. Новий захист не замінює семантичних oracle та phone E2E.
