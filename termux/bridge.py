@@ -1303,14 +1303,14 @@ def web_search(
         "dependency": "web.search",
     })
     _record_search_diagnostics(
-        status="dependency_exhausted",
+        status="no_lexical_match" if lexical_miss else "dependency_exhausted",
         request_id=request_id,
         stage="complete",
         provider=providers[-1] if providers else None,
         elapsed_ms=elapsed_ms,
         result_count=0,
         result_chars=0,
-        error_code="SEARCH_EXHAUSTED",
+        error_code=result["errorCode"],
         last_error=attempts[-1]["error"] if attempts else None,
     )
     return result
