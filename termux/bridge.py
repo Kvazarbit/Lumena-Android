@@ -1273,6 +1273,7 @@ def web_search(
             return _web_result(cached_payload)
 
     attempts = []
+    constrained_rejections = 0
     for provider in providers:
         _record_search_diagnostics(
             status="running",
@@ -1295,6 +1296,7 @@ def web_search(
                                 "title": title, "url": url, "snippet": _plain_html(candidate.get("snippet"), 450),
                                 "published": str(candidate.get("published") or "")[:80] or None}
                 if not _search_result_matches_explicit_constraints(query, item):
+                    constrained_rejections += 1
                     continue
                 item_chars = len(json.dumps(item, ensure_ascii=False))
                 if result_chars + item_chars > 6000:
@@ -1304,6 +1306,8 @@ def web_search(
                 if len(results) >= limit:
                     break
             if not results:
+                if constrained_rejections:
+                    raise ValueError("Search candidates did not match explicit quoted/site constraints")
                 raise ValueError("No usable results; response may be empty or unsupported")
             elapsed_ms = int((time.monotonic() - started) * 1000)
             payload = {"query": query, "provider": provider, "time_range": period or None,
@@ -1342,26 +1346,36 @@ def web_search(
             )
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
+    no_match = constrained_rejections > 0
+    code = "SEARCH_NO_MATCH" if no_match else "SEARCH_EXHAUSTED"
+    failure_class = "NO_RELEVANT_RESULTS" if no_match else "DEPENDENCY_EXHAUSTED"
+    message = (
+        "Search providers returned candidate links, but none satisfied the explicit quoted/site constraints. "
+        "Broaden the query or inspect the official source; do not claim the goal was achieved."
+        if no_match else
+        "Search unavailable after all keyless/configured providers were tried. "
+        "Do not invent current facts; report partial if evidence remains unavailable."
+    )
     result = _web_result(
         {"query": query, "results": [], "attempts": attempts,
          "bridge_run_id": BRIDGE_RUN_ID, "search_elapsed_ms": elapsed_ms},
-        "Search unavailable after all keyless/configured providers were tried. Do not invent current facts; report partial if evidence remains unavailable."
+        message
     )
     result.update({
-        "errorCode": "SEARCH_EXHAUSTED",
-        "failureClass": "DEPENDENCY_EXHAUSTED",
+        "errorCode": code,
+        "failureClass": failure_class,
         "retryable": False,
         "dependency": "web.search",
     })
     _record_search_diagnostics(
-        status="dependency_exhausted",
+        status="no_matching_results" if no_match else "dependency_exhausted",
         request_id=request_id,
         stage="complete",
         provider=providers[-1] if providers else None,
         elapsed_ms=elapsed_ms,
         result_count=0,
         result_chars=0,
-        error_code="SEARCH_EXHAUSTED",
+        error_code=code,
         last_error=attempts[-1]["error"] if attempts else None,
     )
     return result
