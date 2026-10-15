@@ -311,34 +311,38 @@ PUBLIC_HTTPS_OPENER = urllib.request.build_opener(
 )
 
 
+def _integral_number(value: Any) -> int:
+    """Decode a finite integral JSON number, including Moshi's '30.0' text."""
+    if isinstance(value, bool):
+        raise ValueError("expected finite integral number")
+    raw = str(value).strip()
+    if not raw or len(raw) > 32:
+        raise ValueError("expected finite integral number")
+    try:
+        number = Decimal(raw)
+    except InvalidOperation as exc:
+        raise ValueError("expected finite integral number") from exc
+    if not number.is_finite() or number != number.to_integral_value():
+        raise ValueError("expected finite integral number")
+    return int(number)
+
+
 def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     try:
-        parsed = int(value)
-    except (TypeError, ValueError):
+        parsed = _integral_number(value)
+    except ValueError:
         parsed = default
     return max(minimum, min(parsed, maximum))
 
 
 def _execution_timeout(value: Any, default: int, maximum: int = 600, minimum: int = 1) -> int:
-    """Normalize integer-valued timeout arguments transported via JSON/Moshi.
-
-    Companion may serialize a JSON integer as '30.0'. Reject fractional,
-    non-finite, malformed and out-of-range values before executing code.
-    """
+    """Reject malformed/out-of-range child-process timeouts before execution."""
     if value is None:
         return default
-    if isinstance(value, bool):
-        raise ValueError("timeout must be a finite integer number of seconds")
-    raw = str(value).strip()
-    if not raw or len(raw) > 32:
-        raise ValueError("timeout must be a finite integer number of seconds")
     try:
-        number = Decimal(raw)
-    except InvalidOperation as exc:
+        seconds = _integral_number(value)
+    except ValueError as exc:
         raise ValueError("timeout must be a finite integer number of seconds") from exc
-    if not number.is_finite() or number != number.to_integral_value():
-        raise ValueError("timeout must be a finite integer number of seconds")
-    seconds = int(number)
     if not minimum <= seconds <= maximum:
         raise ValueError(f"timeout must be between {minimum} and {maximum} seconds")
     return seconds
@@ -3699,8 +3703,8 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         end_raw = args.get("end_line")
         if start_raw is not None or end_raw is not None:
             try:
-                start_line = int(start_raw) if start_raw is not None else 1
-                end_line = int(end_raw) if end_raw is not None else None
+                start_line = _integral_number(start_raw) if start_raw is not None else 1
+                end_line = _integral_number(end_raw) if end_raw is not None else None
             except (TypeError, ValueError) as exc:
                 raise ValueError("file.read start_line/end_line must be integers") from exc
 
