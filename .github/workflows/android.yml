@@ -288,6 +288,49 @@ jobs:
           "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
       - name: Run agent core unit tests
         run: gradle --max-workers=2 testDebugUnitTest
+      - name: Verify critical regression tests actually ran
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          base = Path("app/build/test-results/testDebugUnitTest")
+          checks = [
+              "com.lumena.android.agent.core.ExecutionClaimGuardTest",
+              "com.lumena.android.agent.core.InlineSearchClaimSafetyTest",
+              "com.lumena.android.agent.core.StandaloneWebSearchProtocolTest",
+              "com.lumena.android.ollama.WorkflowRunnerExecutionReceiptTest",
+              "com.lumena.android.ollama.WorkflowRunnerStandaloneWebSearchTest",
+          ]
+          total = 0
+          for name in checks:
+              p = base / f"TEST-{name}.xml"
+              if not p.is_file():
+                  raise SystemExit(f"MISSING_CRITICAL_TEST_SUITE: {name}")
+              root = ET.parse(p).getroot()
+              tests = int(root.get("tests", "0"))
+              failures = int(root.get("failures", "0"))
+              errors = int(root.get("errors", "0"))
+              skipped = int(root.get("skipped", "0"))
+              if tests <= 0 or failures or errors or skipped:
+                  raise SystemExit(f"INVALID_CRITICAL_TEST_RESULT: {name}: "
+                                   f"{tests=} {failures=} {errors=} {skipped=}")
+              total += tests
+              print(f"VERIFIED_REGRESSION {name}: {tests} passed")
+          print(f"VERIFIED_CRITICAL_REGRESSION_TESTS={total}")
+          PY
+      # Capture UNMUTATED baseline results before mutation probes intentionally
+      # cause JUnit assertions to fail as evidence that regressions were caught.
+      - name: Upload unmutated baseline unit-test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/testDebugUnitTest/
+          if-no-files-found: ignore
       - name: Summarize cognitive contour audit
         if: always()
         shell: bash
@@ -350,10 +393,3 @@ jobs:
           name: UNSIGNED-Lumena-ci${{ github.run_number }}-signing-input
           path: unsigned-input/
           if-no-files-found: error
-      - name: Upload test reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: unit-test-reports
-          path: app/build/reports/tests/
-          if-no-files-found: ignore
