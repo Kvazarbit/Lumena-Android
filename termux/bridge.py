@@ -3914,12 +3914,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.27",
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.30",
                              "bridge_run_id": BRIDGE_RUN_ID})
             return
         self._json(404, {"ok": False, "error": "Not found"})
 
     def do_POST(self) -> None:
+        tool = ""
         if self.path not in {"/tool", "/cancel"}:
             self._json(404, {"ok": False, "error": "Not found"})
             return
@@ -3957,18 +3958,35 @@ class Handler(BaseHTTPRequestHandler):
                 "error": "Command timed out",
             })
         except Exception as exc:
-            self._json(400, {
+            details = str(exc).lower()
+            failure_code = None
+            failure_class = None
+            if tool == "web.read" and "human verification" in details:
+                failure_code, failure_class = "WEB_HUMAN_VERIFICATION", "USER_ACTION_REQUIRED"
+            elif tool == "web.read" and "upstream http 404" in details:
+                failure_code, failure_class = "WEB_HTTP_404", "SOURCE_UNAVAILABLE"
+            elif tool in {"python.run", "python.tests", "python.syntax_check"} and "timeout must" in details:
+                failure_code, failure_class = "INVALID_TOOL_ARGUMENT", "VALIDATION_FAILURE"
+            payload = {
                 "ok": False,
                 "exitCode": None,
                 "stdout": "",
                 "stderr": "",
                 "error": f"{type(exc).__name__}: {exc}",
-            })
+            }
+            if failure_code:
+                payload.update({
+                    "errorCode": failure_code,
+                    "failureClass": failure_class,
+                    "retryable": False,
+                    "dependency": tool,
+                })
+            self._json(400, payload)
 
 
 def main() -> None:
     _mark_interrupted_search_from_previous_run()
-    print("Lumena Termux Bridge v0.28")
+    print("Lumena Termux Bridge v0.30")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")
