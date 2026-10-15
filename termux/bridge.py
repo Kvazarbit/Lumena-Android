@@ -1174,6 +1174,55 @@ def _web_result(payload: dict[str, Any], error: str | None = None) -> dict[str, 
             "stdout": json.dumps(payload, ensure_ascii=False, separators=(",", ":")), "stderr": "", "error": error}
 
 
+def _search_result_matches_explicit_constraints(query: str, item: dict[str, Any]) -> bool:
+    """Conservative negative filter, NOT a semantic relevance certificate.
+
+    Only enforce explicit quoted phrases and site: constraints. For site:
+    queries with no quoted phrase, reject results mentioning none of the
+    distinctive non-operator query terms. Ordinary searches are unchanged.
+    """
+    url = str(item.get("url") or "")
+    parsed = urllib.parse.urlsplit(url)
+    site = re.search(r"(?i)(?<!\w)site:([a-z0-9.-]+)(/[^\s\"“”]*)?", query)
+    if site:
+        expected_host = site.group(1).lower()
+        host = (parsed.hostname or "").lower()
+        if host != expected_host and not host.endswith("." + expected_host):
+            return False
+        expected_path = site.group(2) or ""
+        if expected_path and not parsed.path.lower().startswith(expected_path.lower()):
+            return False
+
+    # Tokenize punctuation, URI slugs and quoted titles the same way.
+    def normalize(raw: str) -> str:
+        return " ".join(re.findall(r"(?u)\w+", urllib.parse.unquote(raw).casefold()))
+
+    observed = normalize(
+        " ".join(str(item.get(k) or "") for k in ("title", "snippet", "url"))
+    )
+    phrases = [
+        normalize(x) for x in re.findall(r'["“]([^"”]{3,80})["”]', query)
+    ]
+    if phrases and any(phrase not in observed for phrase in phrases):
+        return False
+
+    if site and not phrases:
+        rest = query[:site.start()] + " " + query[site.end():]
+        generic = {
+            "with", "from", "find", "search", "page", "pages", "site",
+            "about", "what", "latest", "current", "images", "image",
+            "photo", "photos", "pictures", "picture", "gallery",
+            "galleries", "online", "the", "and", "www", "http", "https",
+        }
+        terms = {
+            word for word in normalize(rest).split()
+            if len(word) >= 4 and word not in generic
+        }
+        if terms and not any(term in observed.split() for term in terms):
+            return False
+    return True
+
+
 def web_search(
     args: dict[str, Any],
     request_id: str | None = None,
@@ -1245,6 +1294,8 @@ def web_search(
                 item = {"id": "src-" + hashlib.sha256(url.encode()).hexdigest()[:12],
                                 "title": title, "url": url, "snippet": _plain_html(candidate.get("snippet"), 450),
                                 "published": str(candidate.get("published") or "")[:80] or None}
+                if not _search_result_matches_explicit_constraints(query, item):
+                    continue
                 item_chars = len(json.dumps(item, ensure_ascii=False))
                 if result_chars + item_chars > 6000:
                     continue
