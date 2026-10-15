@@ -4,6 +4,34 @@ package com.lumena.android.agent.core
  * This detects explicit denials of invocation, not arbitrary semantic errors.
  */
 object TaskExecutionRecap {
+    /**
+     * A fake "live search now" inside chat prose is not a TOOL_RESULT or
+     * executable command. It must not become a completed research claim.
+     *
+     * Keep the detector narrow: documentation can quote web.search(...) safely
+     * without being treated as a real action proposal. In particular, a bare
+     * function call is handled independently by ProtocolNormalizer + ToolGate.
+     */
+    private val inlineSearch = Regex(
+        """(?iu)(?<![\p{L}\p{N}_.])web\.search\s*\(\s*query\s*="""
+    )
+    private val purportedLiveSearch = Regex(
+        """(?iu)(?:\bось\s+(?:мій\s+|наш\s+)?(?:реальн\p{L}*|справжн\p{L}*)\s+(?:запит|пошук)\b|""" +
+            """\bвот\s+(?:мой\s+)?(?:реальн\p{L}*|настоящ\p{L}*)\s+(?:запрос|поиск)\b|""" +
+            """\b(?:here\s+is|here's)\s+(?:the\s+)?(?:actual|real)\s+(?:query|search|request)\b)"""
+    )
+
+    fun unverifiedInlineSearchClaim(text: String, state: AgentControlState): Boolean {
+        // An unrelated old/global Bridge status never counts as a current
+        // task receipt. Failed/unknown web.search calls do not count either.
+        if (state.task.kernel.evidence.any {
+                it.ok && it.tool == "web.search"
+            }) return false
+        val message = text.take(12_000)
+        return inlineSearch.containsMatchIn(message) &&
+            purportedLiveSearch.containsMatchIn(message)
+    }
+
     fun render(state: AgentControlState): String {
         val events = state.task.kernel.evidence
         if (events.isEmpty()) return ""
