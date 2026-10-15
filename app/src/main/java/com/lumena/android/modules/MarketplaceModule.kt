@@ -116,8 +116,10 @@ object MarketplaceModule : LumenaModule {
         ).any { TaskIntentRouter.containsTerm(lower, it) }
 
     private fun isMarketplaceSearch(lower: String): Boolean {
+        // Match listing nouns (оголошення/оголошень), not the verb оголошуй
+        // in instructions such as "Не оголошуй DONE".
         val marketplaceSubject = listOf(
-            "olx", "олх", "оголош", "огалаш", "ogłosz", "oglosz",
+            "olx", "олх", "оголошенн", "оголошень", "огалаш", "ogłosz", "oglosz",
             "marketplace", "classified"
         ).any { TaskIntentRouter.containsTerm(lower, it) }
 
@@ -137,11 +139,11 @@ object MarketplaceModule : LumenaModule {
             (watchCue && isJobMarketplaceSearch(lower))
     }
 
-    /** Goal-contract matcher: plain substring, as before the module split. */
+    /** Match the same listing nouns as route(), not the unrelated verb оголошуй. */
     private fun isMarketplaceGoal(goal: String): Boolean {
         val lower = goal.lowercase()
         val marketplace = listOf(
-            "olx", "оголош", "ogłosz", "marketplace", "classified"
+            "olx", "оголошенн", "оголошень", "ogłosz", "marketplace", "classified"
         ).any { lower.contains(it) }
         val watchJob =
             listOf(
