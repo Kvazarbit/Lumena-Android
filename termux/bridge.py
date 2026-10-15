@@ -713,6 +713,12 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
 
 def http_get(args: dict[str, Any]) -> dict[str, Any]:
     url = _validated_public_https_url(str(args.get("url", "")).strip())
+    mode = str(args.get("mode", "body")).strip().lower()
+    if mode not in {"body", "links"}:
+        raise ValueError("http.get mode must be body or links")
+    path_contains = str(args.get("path_contains", "")).strip()
+    if len(path_contains) > 120:
+        raise ValueError("http.get path_contains exceeds 120 characters")
     timeout = _bounded_int(args.get("timeout"), 10, 1, 20)
     request = urllib.request.Request(
         url,
@@ -766,12 +772,39 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
 
         charset = response.headers.get_content_charset() or "utf-8"
         body = raw.decode(charset, errors="replace")
-        out = {
-            "url": url,
-            "status": getattr(response, "status", 200),
-            "content_type": content_type,
-            "body": body,
-        }
+        status = getattr(response, "status", 200)
+        if mode == "links":
+            if content_type not in {"text/html", "application/xhtml+xml"}:
+                raise ValueError("http.get links mode requires an HTML response")
+            if status != 200:
+                raise ValueError(f"HTTP {status}; links not verified")
+            if any(marker in body.lower() for marker in
+                   ("cf-chl-", "challenge-platform", "anomaly-modal", "g-recaptcha")):
+                raise ValueError("Page requires human verification; use another source")
+            parser = PageLinkParser(url)
+            parser.feed(body)
+            unique: dict[str, dict[str, str]] = {}
+            for link in parser.items:
+                if path_contains and path_contains.lower() not in urllib.parse.urlsplit(link["url"]).path.lower():
+                    continue
+                unique.setdefault(link["url"], link)
+            limit = _bounded_int(args.get("limit"), 50, 1, 80)
+            out = {
+                "url": url,
+                "status": status,
+                "content_type": content_type,
+                "links": list(unique.values())[:limit],
+                "matching_links": len(unique),
+                "truncated": len(unique) > limit,
+                "evidence": "Untrusted HTML links. Validate selected pages; a link is not evidence of page content."
+            }
+        else:
+            out = {
+                "url": url,
+                "status": status,
+                "content_type": content_type,
+                "body": body,
+            }
         return {
             "ok": True,
             "exitCode": 0,
@@ -918,6 +951,47 @@ def _result_url(value: str) -> str | None:
         return urllib.parse.urlunsplit(("https", url.netloc.lower(), url.path or "/", query, ""))
     except ValueError:
         return None
+
+
+class PageLinkParser(HTMLParser):
+    """Bounded link extraction, without executing scripts or fetching targets."""
+
+    def __init__(self, base_url: str):
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.current_href: str | None = None
+        self.label: list[str] = []
+        self.items: list[dict[str, str]] = []
+
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if tag == "a":
+            self._finish()
+            self.current_href = values.get("href")
+            self.label = [values.get("title") or ""]
+        elif tag == "img" and self.current_href is not None:
+            self.label.append(values.get("alt") or "")
+
+    def handle_data(self, data):
+        if self.current_href is not None:
+            self.label.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "a":
+            self._finish()
+
+    def _finish(self):
+        if self.current_href is not None and len(self.items) < 2000:
+            # _result_url rejects unsafe schemes, credentials, IPs and
+            # tracking/fragments. Returned links are UNTRUSTED leads.
+            url = _result_url(urllib.parse.urljoin(self.base_url, self.current_href))
+            if url:
+                self.items.append({
+                    "url": url,
+                    "title": " ".join(" ".join(self.label).split())[:160]
+                })
+        self.current_href = None
+        self.label = []
 
 
 class DuckSearchParser(HTMLParser):
