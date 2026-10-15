@@ -39,6 +39,25 @@ class CompanionTransportTest(unittest.TestCase):
         self.addCleanup(self.env.stop)
         self.addCleanup(self.temp.cleanup)
 
+    def test_bounded_numeric_args_preserve_integral_decimal(self):
+        self.assertEqual(8, self.b._bounded_int("8.0", 5, 1, 8))
+        self.assertEqual(5, self.b._bounded_int("8.5", 5, 1, 8))
+        self.assertEqual(5, self.b._bounded_int("NaN", 5, 1, 8))
+        self.assertEqual(5, self.b._bounded_int(True, 5, 1, 8))
+
+    def test_file_read_line_numbers_accept_moshi_integral_decimal(self):
+        sample = Path(self.temp.name) / "lines.txt"
+        sample.write_text("first\\nsecond\\nthird\\n", encoding="utf-8")
+        result = self.b.execute_tool("file.read", {
+            "path": "lines.txt", "start_line": "2.0", "end_line": "2.0"
+        })
+        self.assertTrue(result["ok"])
+        self.assertEqual("second\\n", result["stdout"])
+        with self.assertRaisesRegex(ValueError, "must be integers"):
+            self.b.execute_tool("file.read", {
+                "path": "lines.txt", "start_line": "2.5"
+            })
+
     def test_python_run_accepts_json_integer_transport_30_dot_zero(self):
         with patch.object(self.b, "run_process", return_value={"ok": True}) as runner:
             result = self.b.execute_tool("python.run", {
