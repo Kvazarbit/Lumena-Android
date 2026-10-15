@@ -473,7 +473,21 @@ object TaskIntentRouter {
             "hour", "today", "now", "latest", "aktualn"
         ).any { containsTerm(lower, it) }
 
-        return newsSubject && recency
+        // "current price chart" is a request for live public data even
+        // without the literal words "internet", "online" or "latest".
+        // Require BOTH a time-sensitive cue and a market-data subject, so
+        // educational explanations about charts/prices remain conversational.
+        val liveCue = listOf(
+            "current", "today", "now", "live", "поточн", "сьогодн",
+            "зараз", "тепер", "dzisiaj", "teraz", "aktualn"
+        ).any { containsTerm(lower, it) }
+        val marketData = listOf(
+            "price", "prices", "цін", "вартіст", "котируван",
+            "chart", "графік", "wykres", "cena", "kurs", "курс",
+            "exchange rate", "ринкову ціну"
+        ).any { containsTerm(lower, it) }
+
+        return (newsSubject && recency) || (liveCue && marketData)
     }
 
     /**
