@@ -607,6 +607,52 @@ class WebToolsTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.b._web_fetch("https://example.org")
 
+    def test_bridge_version_and_web_read_error_codes_are_consistent(self):
+        server = self.b.ThreadingHTTPServer(("127.0.0.1", 0), self.b.Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+            connection.request("GET", "/")
+            response = connection.getresponse()
+            self.assertEqual(200, response.status)
+            info = json.loads(response.read())
+            self.assertEqual("0.30", info["version"])
+            health = self.b.execute_tool("health", {})
+            self.assertIn("version=0.30", health["stdout"])
+
+            for detail, error_code, error_class in (
+                ("Page requires human verification; use another source",
+                 "WEB_HUMAN_VERIFICATION", "USER_ACTION_REQUIRED"),
+                ("Upstream HTTP 404; page unavailable or access restricted",
+                 "WEB_HTTP_404", "SOURCE_UNAVAILABLE"),
+            ):
+                with self.subTest(detail=detail), patch.object(
+                    self.b, "_web_fetch", side_effect=ValueError(detail)
+                ):
+                    connection.request(
+                        "POST", "/tool",
+                        body=json.dumps({
+                            "tool": "web.read",
+                            "args": {"url": "https://example.org"},
+                        }),
+                        headers={"Authorization": "Bearer fixture-token",
+                                 "Content-Type": "application/json"},
+                    )
+                    response = connection.getresponse()
+                    self.assertEqual(400, response.status)
+                    payload = json.loads(response.read())
+                    self.assertFalse(payload["ok"])
+                    self.assertEqual(error_code, payload["errorCode"])
+                    self.assertEqual(error_class, payload["failureClass"])
+                    self.assertFalse(payload["retryable"])
+                    self.assertEqual("web.read", payload["dependency"])
+            connection.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
+
     def test_real_http_errors_have_complete_json_and_next_request_works(self):
         server = self.b.ThreadingHTTPServer(("127.0.0.1", 0), self.b.Handler)
         worker = threading.Thread(target=server.serve_forever, daemon=True)
