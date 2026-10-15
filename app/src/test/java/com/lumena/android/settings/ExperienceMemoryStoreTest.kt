@@ -76,8 +76,8 @@ class ExperienceMemoryStoreTest {
             limit = 2
         )
 
-        assertTrue(relevant.first().startsWith("POSITIVE verified"))
-        assertTrue(relevant.any { it.startsWith("NEGATIVE resolved") })
+        assertTrue(relevant.first().startsWith("TOOL_OK verified; goal_not_verified"))
+        assertTrue(relevant.any { it.startsWith("TOOL_FAILED recovered_by_tool_ok") })
     }
 
     @Test
@@ -242,7 +242,7 @@ class ExperienceMemoryStoreTest {
 
         assertEquals(1, relevant.size)
         assertTrue(relevant.single().contains("python.run"))
-        assertTrue(relevant.single().contains("NEGATIVE"))
+        assertTrue(relevant.single().contains("TOOL_FAILED"))
     }
 
     @Test
