@@ -236,6 +236,43 @@ class WebToolsTest(unittest.TestCase):
         self.assertTrue(again["cached"])
         self.assertEqual(1, fetch.call_count)
 
+    def test_required_text_falls_back_from_irrelevant_provider_candidates(self):
+        wrong = {"url": "https://postal.example/track", "title": "Parcel tracking",
+                 "snippet": "Check shipping status"}
+        right = {"url": "https://photos.example/gallery/wandy-pan/",
+                 "title": "Wandy Pan photo gallery", "snippet": "Series"}
+        with patch.object(
+            self.b, "_search_provider", side_effect=[[wrong], [right]]
+        ) as search:
+            payload = self.payload(self.b.web_search({
+                "query": "Wandy Pan full gallery",
+                "required_text": "Wandy Pan",
+            }))
+        self.assertEqual("bing-rss", payload["provider"])
+        self.assertEqual(2, search.call_count)
+        self.assertEqual("https://photos.example/gallery/wandy-pan/",
+                         payload["results"][0]["url"])
+        self.assertEqual("Wandy Pan", payload["required_text"])
+        self.assertFalse(payload["relevance_verified"])
+        self.assertIn("required_text", payload["attempts"][0]["error"])
+
+    def test_required_text_reports_no_lexical_match_not_positive_success(self):
+        wrong = {"url": "https://postal.example/track", "title": "Parcel tracking",
+                 "snippet": "Shipment status"}
+        with patch.object(self.b, "_search_provider", return_value=[wrong]) as search:
+            result = self.b.web_search({
+                "query": "Wandy Pan gallery",
+                "required_text": "Wandy Pan",
+            })
+        self.assertFalse(result["ok"])
+        self.assertEqual("SEARCH_NO_LEXICAL_MATCH", result["errorCode"])
+        self.assertEqual("NO_RELEVANT_CANDIDATES", result["failureClass"])
+        self.assertEqual(3, search.call_count)
+        payload = json.loads(result["stdout"])
+        self.assertEqual([], payload["results"])
+        self.assertFalse(payload["relevance_verified"])
+        self.assertNotIn("tracking", str(payload.get("results")))
+
     def test_provider_failure_falls_back_without_exposing_key(self):
         with patch.dict(os.environ, {"LUMENA_BRAVE_API_KEY": "test-secret"}), \
                 patch.object(self.b, "_search_provider", side_effect=[ValueError("test-secret denied"),
