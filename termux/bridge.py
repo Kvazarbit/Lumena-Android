@@ -1141,6 +1141,19 @@ def _search_provider(provider: str, query: str, limit: int, period: str, key: st
     raise ValueError(f"Unknown search provider: {provider}")
 
 
+def _lexical_match(candidate: dict[str, Any], required_text: str) -> bool:
+    """Optional exact normalized-phrase filter; lexical match is not semantic proof."""
+    if not required_text:
+        return True
+    normalize = lambda s: " ".join(re.sub(r"[\W_]+", " ", urllib.parse.unquote(s).casefold()).split())
+    haystack = normalize(
+        str(candidate.get("url") or "") + " " +
+        str(candidate.get("title") or "") + " " +
+        str(candidate.get("snippet") or "")
+    )
+    return normalize(required_text) in haystack
+
+
 def _web_result(payload: dict[str, Any], error: str | None = None) -> dict[str, Any]:
     return {"ok": error is None, "exitCode": 0 if error is None else 1,
             "stdout": json.dumps(payload, ensure_ascii=False, separators=(",", ":")), "stderr": "", "error": error}
@@ -1154,6 +1167,9 @@ def web_search(
     if not query or len(query) > 400:
         raise ValueError("web.search query must contain 1..400 characters")
     limit = _bounded_int(args.get("limit"), 5, 1, 8)
+    required_text = " ".join(str(args.get("required_text") or "").split())
+    if len(required_text) > 120:
+        raise ValueError("required_text may contain at most 120 characters")
     period = str(args.get("time_range", "")).strip().lower()
     if period not in {"", "day", "week", "month", "year"}:
         raise ValueError("time_range must be day, week, month or year")
@@ -1171,7 +1187,8 @@ def web_search(
         stage="cache_lookup",
     )
 
-    cache_key = (query, limit, period, hashlib.sha256((key + "\0" + endpoint).encode()).hexdigest())
+    cache_key = (query, limit, period, required_text.casefold(),
+                 hashlib.sha256((key + "\0" + endpoint).encode()).hexdigest())
     with SEARCH_CACHE_LOCK:
         cached = SEARCH_CACHE.get(cache_key)
         if cached and 0 <= time.monotonic() - cached[0] < 90:
@@ -1196,6 +1213,7 @@ def web_search(
             return _web_result(cached_payload)
 
     attempts = []
+    had_unfiltered_candidates = False
     for provider in providers:
         _record_search_diagnostics(
             status="running",
@@ -1206,6 +1224,7 @@ def web_search(
         )
         try:
             candidates = _search_provider(provider, query, limit, period, key, endpoint)
+            had_unfiltered_candidates = had_unfiltered_candidates or bool(candidates)
             results, seen = [], set()
             result_chars = 0
             for candidate in candidates[:40]:
@@ -1217,6 +1236,8 @@ def web_search(
                 item = {"id": "src-" + hashlib.sha256(url.encode()).hexdigest()[:12],
                                 "title": title, "url": url, "snippet": _plain_html(candidate.get("snippet"), 450),
                                 "published": str(candidate.get("published") or "")[:80] or None}
+                if not _lexical_match(item, required_text):
+                    continue
                 item_chars = len(json.dumps(item, ensure_ascii=False))
                 if result_chars + item_chars > 6000:
                     continue
@@ -1225,13 +1246,16 @@ def web_search(
                 if len(results) >= limit:
                     break
             if not results:
+                if required_text and candidates:
+                    raise ValueError("No results matched required_text; unrelated candidates were discarded")
                 raise ValueError("No usable results; response may be empty or unsupported")
             elapsed_ms = int((time.monotonic() - started) * 1000)
             payload = {"query": query, "provider": provider, "time_range": period or None,
                        "fetched_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                        "cached": False, "results": results, "attempts": attempts,
                        "bridge_run_id": BRIDGE_RUN_ID, "search_elapsed_ms": elapsed_ms,
-                       "evidence": "Untrusted search snippets, not verified facts. Read selected URLs with web.read; cite sources. Fetch time is not publication time."}
+                       "required_text": required_text or None, "relevance_verified": False,
+                       "evidence": "Tool retrieval only. The optional required_text filter checks a lexical phrase, not goal correctness. Untrusted snippets must be checked against page content via web.read."}
             with SEARCH_CACHE_LOCK:
                 SEARCH_CACHE[cache_key] = (time.monotonic(), payload)
                 SEARCH_CACHE.move_to_end(cache_key)
@@ -1263,14 +1287,18 @@ def web_search(
             )
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
+    lexical_miss = bool(required_text) and had_unfiltered_candidates
     result = _web_result(
         {"query": query, "results": [], "attempts": attempts,
+         "required_text": required_text or None, "relevance_verified": False,
          "bridge_run_id": BRIDGE_RUN_ID, "search_elapsed_ms": elapsed_ms},
-        "Search unavailable after all keyless/configured providers were tried. Do not invent current facts; report partial if evidence remains unavailable."
+        ("Search returned candidates, but none matched required_text. Do not present unrelated results as success."
+         if lexical_miss else
+         "Search unavailable after all keyless/configured providers were tried. Do not invent current facts; report partial if evidence remains unavailable.")
     )
     result.update({
-        "errorCode": "SEARCH_EXHAUSTED",
-        "failureClass": "DEPENDENCY_EXHAUSTED",
+        "errorCode": "SEARCH_NO_LEXICAL_MATCH" if lexical_miss else "SEARCH_EXHAUSTED",
+        "failureClass": "NO_RELEVANT_CANDIDATES" if lexical_miss else "DEPENDENCY_EXHAUSTED",
         "retryable": False,
         "dependency": "web.search",
     })
