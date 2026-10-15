@@ -3583,6 +3583,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"read_only_roots={','.join('@' + alias for alias, root in READONLY_ALIASES.items() if root.exists()) or '(none)'}\n"
                 f"read_roots_config={READ_ROOTS_FILE}\n"
                 f"version=0.29\n"
+                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
                 f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
