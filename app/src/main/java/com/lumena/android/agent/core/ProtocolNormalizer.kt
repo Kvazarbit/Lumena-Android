@@ -22,7 +22,8 @@ enum class NormalizationRule {
     NESTED_NAMESPACE_TOOL,
     ARGS_ALIAS,
     FENCED_JSON,
-    SINGLE_FUNCTION_TOOL_CALL
+    SINGLE_FUNCTION_TOOL_CALL,
+    STANDALONE_WEB_SEARCH
 }
 
 sealed interface NormalizationResult {
@@ -68,6 +69,117 @@ class ProtocolNormalizer {
         val rule: NormalizationRule? = null
     )
 
+    // Only this read-only web.search form is supported. In particular,
+    // arbitrary Kotlin/Python-style calls and mutating tools are NOT parsed.
+    private val singleSearch = Regex(
+        """^web\.search\(\s*query\s*=\s*("(?:\\.|[^"\\\r\n])*")\s*(?:,\s*limit\s*=\s*([1-8]))?\s*\)$"""
+    )
+    private val searchAnnotation = Regex(
+        """^(expect_ok|confidence)\s*:\s*(\S+)$"""
+    )
+    private val jsonStringAdapter = moshi.adapter(String::class.java)
+
+    /**
+     * Models sometimes emit:
+     *   expect_ok: true
+     *   confidence: 1.0
+     *   web.search(query="bitcoin price chart current")
+     *
+     * This is an unexecuted PROPOSAL, not evidence. Interpret only a single,
+     * entirely standalone read-only call with at most two strict annotations.
+     * A caller must also check task intent and normal ToolRegistry/ToolGate.
+     */
+    private fun standaloneSearch(text: String): NormalizationResult? {
+        if (text.length > 1_200) return null
+        val lines = text.lines()
+            .map(String::trim)
+            .filter(String::isNotBlank)
+        val callLine = lines.lastOrNull() ?: return null
+        val match = singleSearch.matchEntire(callLine)
+            ?: return if (lines.size == 1 && callLine.startsWith("web.search(")) {
+                NormalizationResult.Failure(
+                    ProtocolFailureKind.SYNTAX,
+                    "Malformed standalone web.search. Use JSON protocol or one query=JSON-string call."
+                )
+            } else {
+                null
+            }
+
+        if (lines.size > 3) {
+            return NormalizationResult.Failure(
+                ProtocolFailureKind.AMBIGUOUS,
+                "Standalone search has too many annotations or tool calls"
+            )
+        }
+        val seen = mutableSetOf<String>()
+        var expectOk: Boolean? = null
+        var confidence: Double? = null
+        lines.dropLast(1).forEach { line ->
+            val annotation = searchAnnotation.matchEntire(line)
+                ?: return NormalizationResult.Failure(
+                    ProtocolFailureKind.AMBIGUOUS,
+                    "Unrecognized text before standalone search; no tool was executed"
+                )
+            val field = annotation.groupValues[1]
+            val value = annotation.groupValues[2]
+            if (!seen.add(field)) {
+                return NormalizationResult.Failure(
+                    ProtocolFailureKind.AMBIGUOUS,
+                    "Repeated pre-execution annotation: $field"
+                )
+            }
+            when (field) {
+                "expect_ok" -> {
+                    expectOk = value.lowercase().toBooleanStrictOrNull()
+                        ?: return NormalizationResult.Failure(
+                            ProtocolFailureKind.SYNTAX,
+                            "expect_ok must be true or false"
+                        )
+                }
+                "confidence" -> {
+                    confidence = value.toDoubleOrNull()
+                        ?.takeIf { it.isFinite() && it in 0.0..1.0 }
+                        ?: return NormalizationResult.Failure(
+                            ProtocolFailureKind.SYNTAX,
+                            "confidence must be a finite number between 0 and 1"
+                        )
+                }
+            }
+        }
+
+        val quoted = match.groupValues[1]
+        val query = runCatching { jsonStringAdapter.fromJson(quoted) }
+            .getOrNull()
+            ?: return NormalizationResult.Failure(
+                ProtocolFailureKind.SYNTAX,
+                "web.search query is not a valid JSON string"
+            )
+        if (query.isBlank() || query.length > 240 || query.any(Char::isISOControl)) {
+            return NormalizationResult.Failure(
+                ProtocolFailureKind.UNSUPPORTED_SHAPE,
+                "web.search query must be nonempty, at most 240 chars, without controls"
+            )
+        }
+
+        val args = linkedMapOf("query" to query)
+        match.groupValues[2]
+            .takeIf(String::isNotBlank)
+            ?.let { args["limit"] = it }
+
+        val canonical = linkedMapOf<String, Any?>(
+            "tool" to "web.search",
+            "args" to args
+        )
+        // Prediction annotations are advisory only, never execution proof.
+        expectOk?.let { canonical["expect_ok"] = it }
+        confidence?.let { canonical["confidence"] = it }
+        return canonicalJson(
+            canonical,
+            Envelope(text, changed = true, rule = NormalizationRule.STANDALONE_WEB_SEARCH),
+            NormalizationRule.STANDALONE_WEB_SEARCH
+        )
+    }
+
     fun normalize(raw: String): NormalizationResult {
         val text = raw.trim()
         if (text.isEmpty()) {
@@ -76,6 +188,8 @@ class ProtocolNormalizer {
                 "Empty model output"
             )
         }
+
+        standaloneSearch(text)?.let { return it }
 
         val envelope = extractStrictEnvelope(text)
             ?: return if (looksProtocolLike(text)) {
