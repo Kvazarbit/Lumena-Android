@@ -209,14 +209,36 @@ object EffectiveTaskPolicyCompiler {
         val lastNoExecute = noExecuteMatches.maxOrNull()
         val lastExecution = executionMatches.maxOrNull()
 
+        // A follow-up asking about a failed model reply is not consent to
+        // escalate a previously READ_ONLY goal. New write/execute authority
+        // requires an explicit, non-negated instruction in the CURRENT turn.
+        // Model/tool text quoted by the user is masked before cue detection.
+        val rootReadOnly = root != current &&
+            readOnlyCues.any { it.containsMatchIn(maskToolNames(maskedRoot)) }
+        val currentEffectText = maskToolNames(maskedCurrent)
+        val currentRequestsMutation =
+            findPositions(currentEffectText, mutationPositive)
+                .any { !isNegatedOperation(maskedCurrent, it) } ||
+                currentToolDirectives.any {
+                    !it.forbidden &&
+                        ToolRegistry.get(it.tool)?.risk == ToolRisk.MUTATING
+                }
+        val currentRequestsExecution =
+            findPositions(currentEffectText, executionPositive)
+                .any { !isNegatedOperation(maskedCurrent, it) } ||
+                currentToolDirectives.any {
+                    !it.forbidden &&
+                        ToolRegistry.get(it.tool)?.risk == ToolRisk.EXECUTABLE
+                }
+
         val mutationAllowed =
-            when {
+            (when {
                 lastReadOnly == null -> true
                 lastMutation == null -> false
                 else -> lastMutation > lastReadOnly
-            }
+            }) && (!rootReadOnly || currentRequestsMutation)
         val executionAllowed =
-            when {
+            (when {
                 lastReadOnly != null &&
                     (
                         lastExecution == null ||
@@ -225,7 +247,7 @@ object EffectiveTaskPolicyCompiler {
                 lastNoExecute == null -> true
                 lastExecution == null -> false
                 else -> lastExecution > lastNoExecute
-            }
+            }) && (!rootReadOnly || currentRequestsExecution)
 
         val effectiveDirectives =
             linkedMapOf<String, ToolDirective>()
@@ -241,12 +263,13 @@ object EffectiveTaskPolicyCompiler {
         // reopen workspace writes.
         val deniedCapabilities =
             buildList {
-                if (lastReadOnly != null && !mutationAllowed) {
+                if ((lastReadOnly != null || rootReadOnly) && !mutationAllowed) {
                     add(ToolCapability.WRITE_WORKSPACE)
                 }
                 if (
-                    lastNoExecute != null &&
-                    (lastExecution == null || lastExecution <= lastNoExecute)
+                    (lastNoExecute != null &&
+                        (lastExecution == null || lastExecution <= lastNoExecute)) ||
+                    (rootReadOnly && !executionAllowed)
                 ) {
                     add(ToolCapability.EXECUTE_CODE)
                 }

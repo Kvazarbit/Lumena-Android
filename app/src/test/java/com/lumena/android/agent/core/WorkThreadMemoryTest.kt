@@ -431,6 +431,40 @@ class WorkThreadMemoryTest {
     }
 
     @Test
+    fun freshReadOnlyWebTaskDoesNotInheritStaleWorkThreadDirectives() {
+        val prior = WorkThreadState(
+            anchors = listOf(
+                WorkThreadAnchor(
+                    rootGoal = "Проведи контрольний вебпошук, лише читання.",
+                    recentDirectives = listOf(
+                        "Не оголошуй DONE без реальних результатів інструментів.",
+                        "Що це за відповідь? Не повторюй її."
+                    ),
+                    subjectKeys = listOf("проведи", "контроль", "вебпошук")
+                )
+            )
+        )
+        val freshGoal = """
+            Проведи контрольний вебпошук, лише читання.
+            1. Знайди через web.search офіційну сторінку Python на python.org.
+            2. Прочитай сторінку через web.read.
+            Не використовуй python.run, file.write.
+            Не оголошуй DONE без результатів.
+        """.trimIndent()
+
+        val result = WorkThreadMemory.resolve(
+            text = freshGoal,
+            state = prior
+        )
+        assertEquals(TaskIntent.PUBLIC_WEB, TaskIntentRouter.route(freshGoal).intent)
+        assertFalse(result.continued)
+        assertEquals(freshGoal.replace(Regex("\\s+"), " ").trim(), result.goal)
+        assertFalse(result.goal.contains("WORK THREAD DIRECTIVES"))
+        assertEquals(null, result.state.activeKey)
+        assertEquals(1, result.state.anchors.size)
+    }
+
+    @Test
     fun oneOffFileInspectionDoesNotCreateWorkAnchor() {
         val resolved =
             WorkThreadMemory.resolve(

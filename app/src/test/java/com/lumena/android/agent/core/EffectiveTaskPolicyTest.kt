@@ -231,6 +231,48 @@ class EffectiveTaskPolicyTest {
     }
 
     @Test
+    fun complaintFollowUpDoesNotEscalateOriginalReadOnlyGoal() {
+        val root = """
+            Проведи контрольний вебпошук, лише читання.
+            Знайди через web.search офіційну сторінку Python.org.
+            Прочитай її через web.read.
+            Не використовуй python.run або file.write.
+        """.trimIndent()
+        val policy = EffectiveTaskPolicyCompiler.compile(
+            rootGoal = root,
+            currentInstruction = "Що це за відповідь? Чому модель не завершила завдання?"
+        )
+
+        assertEquals(listOf(ToolRisk.READ_ONLY), policy.allowedRisks)
+        assertFalse(EffectiveTaskPolicyCompiler.validateTool(
+            policy, AgentDecision.ToolCall(
+                "file.patch",
+                mapOf("path" to "demo.py", "old" to "a", "new" to "b")
+            )
+        ).allowed)
+        assertFalse(EffectiveTaskPolicyCompiler.validateTool(
+            policy, AgentDecision.ToolCall(
+                "python.tests", mapOf("cwd" to ".")
+            )
+        ).allowed)
+    }
+
+    @Test
+    fun explicitlyRequestedLaterExecutionDoesNotAlsoGrantWriting() {
+        val policy = EffectiveTaskPolicyCompiler.compile(
+            rootGoal = "Тільки прочитай demo.py. Нічого не змінюй.",
+            currentInstruction = "Тепер запусти тести через python.tests."
+        )
+        assertTrue(ToolRisk.EXECUTABLE in policy.allowedRisks)
+        assertFalse(ToolRisk.MUTATING in policy.allowedRisks)
+        assertFalse(EffectiveTaskPolicyCompiler.validateTool(
+            policy, AgentDecision.ToolCall(
+                "file.write", mapOf("path" to "demo.py", "content" to "x")
+            )
+        ).allowed)
+    }
+
+    @Test
     fun explicitMutationAfterReadOnlyRootUsesNewCurrentInstruction() {
         val policy =
             EffectiveTaskPolicyCompiler

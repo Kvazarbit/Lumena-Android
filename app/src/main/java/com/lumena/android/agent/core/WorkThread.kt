@@ -100,6 +100,16 @@ object WorkThreadMemory {
         val continuation =
             isContinuationCue(clean)
 
+        // This memory owns project/code anchors, NOT public web research.
+        // Never splice a stale work anchor (including diagnostic complaints
+        // or pasted model output) into a fresh read-only web request.
+        if (intent == TaskIntent.PUBLIC_WEB) {
+            return WorkThreadResolution(
+                goal = clean,
+                state = normalized.copy(activeKey = null)
+            )
+        }
+
         val explicitMatch = bestMatch(
             anchors = normalized.anchors,
             keys = keys,
