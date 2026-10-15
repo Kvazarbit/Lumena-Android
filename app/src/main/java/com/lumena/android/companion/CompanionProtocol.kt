@@ -15,6 +15,7 @@ import java.security.MessageDigest
 import java.util.Base64
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
+import java.math.BigDecimal
 
 data class CompanionCommand(
     val decision: PlannerDecision,
@@ -156,6 +157,11 @@ object CompanionProtocol {
                     if (key == null || value == null) return@mapNotNull null
                     val rendered = when (value) {
                         is Map<*, *>, is List<*> -> anyAdapter.toJson(value)
+                        // Moshi can deserialize an integer JSON literal as Double:
+                        // preserve integral values as "30", not "30.0".
+                        // Do not modify quoted strings or executable/code payloads.
+                        is Number -> BigDecimal(value.toString())
+                            .stripTrailingZeros().toPlainString()
                         else -> value.toString()
                     }
                     key.toString() to rendered
