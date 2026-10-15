@@ -1,7 +1,6 @@
 package com.lumena.android.ollama
 
 import com.lumena.android.agent.core.AgentController
-import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.local.ToolExecutor
@@ -106,6 +105,10 @@ class WorkflowRunnerStandaloneWebSearchTest {
         assertTrue(decision is com.lumena.android.agent.core.ControllerInstruction.Execute)
         assertEquals(0, decision.state.task.kernel.observed)
         assertTrue(decision.state.task.kernel.evidence.isEmpty())
-        assertEquals(ContextKernel.hash(""), ContextKernel.hash(""))
+        val falseDone = controller.interpret(
+            """{"done":true,"summary":"Successfully retrieved current gold price"}""",
+            decision.state
+        )
+        assertTrue(falseDone !is com.lumena.android.agent.core.ControllerInstruction.Finish)
     }
 }
