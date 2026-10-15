@@ -47,12 +47,12 @@ class CompanionTransportTest(unittest.TestCase):
 
     def test_file_read_line_numbers_accept_moshi_integral_decimal(self):
         sample = Path(self.temp.name) / "lines.txt"
-        sample.write_text("first\\nsecond\\nthird\\n", encoding="utf-8")
+        sample.write_text("first\nsecond\nthird\n", encoding="utf-8")
         result = self.b.execute_tool("file.read", {
             "path": "lines.txt", "start_line": "2.0", "end_line": "2.0"
         })
         self.assertTrue(result["ok"])
-        self.assertEqual("second\\n", result["stdout"])
+        self.assertEqual("second\n", result["stdout"])
         with self.assertRaisesRegex(ValueError, "must be integers"):
             self.b.execute_tool("file.read", {
                 "path": "lines.txt", "start_line": "2.5"
