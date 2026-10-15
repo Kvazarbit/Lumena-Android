@@ -18,6 +18,7 @@ import json
 import os
 import platform
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 import re
 import socket
 import secrets
@@ -316,6 +317,31 @@ def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         parsed = default
     return max(minimum, min(parsed, maximum))
+
+
+def _execution_timeout(value: Any, default: int, maximum: int = 600, minimum: int = 1) -> int:
+    """Normalize integer-valued timeout arguments transported via JSON/Moshi.
+
+    Companion may serialize a JSON integer as '30.0'. Reject fractional,
+    non-finite, malformed and out-of-range values before executing code.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ValueError("timeout must be a finite integer number of seconds")
+    raw = str(value).strip()
+    if not raw or len(raw) > 32:
+        raise ValueError("timeout must be a finite integer number of seconds")
+    try:
+        number = Decimal(raw)
+    except InvalidOperation as exc:
+        raise ValueError("timeout must be a finite integer number of seconds") from exc
+    if not number.is_finite() or number != number.to_integral_value():
+        raise ValueError("timeout must be a finite integer number of seconds")
+    seconds = int(number)
+    if not minimum <= seconds <= maximum:
+        raise ValueError(f"timeout must be between {minimum} and {maximum} seconds")
+    return seconds
 
 
 def _is_workspace_path(path: Path) -> bool:
@@ -3658,7 +3684,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         return run_process(
             argv,
             cwd,
-            int(args.get("timeout", DEFAULT_TIMEOUT)),
+            _execution_timeout(args.get("timeout"), DEFAULT_TIMEOUT),
             request_id=request_id,
             env=env,
         )
@@ -3681,7 +3707,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         return run_process(
             argv,
             cwd,
-            int(args.get("timeout", DEFAULT_TIMEOUT)),
+            _execution_timeout(args.get("timeout"), DEFAULT_TIMEOUT),
             request_id=request_id,
         )
 
@@ -3697,7 +3723,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 # an agent cleanup loop merely because it checked a file.
                 ["python", "-c", "import pathlib,sys; p=pathlib.Path(sys.argv[1]); compile(p.read_bytes(), str(p), 'exec'); print('Syntax OK')", str(script)],
                 cwd,
-                int(args.get("timeout", 60)),
+                _execution_timeout(args.get("timeout"), 60),
                 request_id=request_id,
             )
         argv_text = str(args.get("argv", "")).strip()
@@ -3705,7 +3731,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         return run_process(
             ["python", str(script), *extra],
             cwd,
-            int(args.get("timeout", DEFAULT_TIMEOUT)),
+            _execution_timeout(args.get("timeout"), DEFAULT_TIMEOUT),
             request_id=request_id,
         )
 
@@ -3718,7 +3744,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         return run_process(
             ["python", "-m", "pytest", *extra],
             cwd,
-            int(args.get("timeout", 300)),
+            _execution_timeout(args.get("timeout"), 300),
             request_id=request_id,
         )
 
@@ -3741,7 +3767,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         return run_process(
             [binary, "pull", model],
             HOME,
-            max(60, min(int(args.get("timeout", 600)), 1800)),
+            _execution_timeout(args.get("timeout"), 600, maximum=1800, minimum=60),
             request_id=request_id,
             env=env,
             timeout_cap=1800,
