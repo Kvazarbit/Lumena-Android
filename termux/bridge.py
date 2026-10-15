@@ -18,6 +18,7 @@ import json
 import os
 import platform
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 import re
 import socket
 import secrets
@@ -310,12 +311,41 @@ PUBLIC_HTTPS_OPENER = urllib.request.build_opener(
 )
 
 
+def _integral_number(value: Any) -> int:
+    """Decode a finite integral JSON number, including Moshi's '30.0' text."""
+    if isinstance(value, bool):
+        raise ValueError("expected finite integral number")
+    raw = str(value).strip()
+    if not raw or len(raw) > 32:
+        raise ValueError("expected finite integral number")
+    try:
+        number = Decimal(raw)
+    except InvalidOperation as exc:
+        raise ValueError("expected finite integral number") from exc
+    if not number.is_finite() or number != number.to_integral_value():
+        raise ValueError("expected finite integral number")
+    return int(number)
+
+
 def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     try:
-        parsed = int(value)
-    except (TypeError, ValueError):
+        parsed = _integral_number(value)
+    except ValueError:
         parsed = default
     return max(minimum, min(parsed, maximum))
+
+
+def _execution_timeout(value: Any, default: int, maximum: int = 600, minimum: int = 1) -> int:
+    """Reject malformed/out-of-range child-process timeouts before execution."""
+    if value is None:
+        return default
+    try:
+        seconds = _integral_number(value)
+    except ValueError as exc:
+        raise ValueError("timeout must be a finite integer number of seconds") from exc
+    if not minimum <= seconds <= maximum:
+        raise ValueError(f"timeout must be between {minimum} and {maximum} seconds")
+    return seconds
 
 
 def _is_workspace_path(path: Path) -> bool:
@@ -687,6 +717,12 @@ def http_json(args: dict[str, Any]) -> dict[str, Any]:
 
 def http_get(args: dict[str, Any]) -> dict[str, Any]:
     url = _validated_public_https_url(str(args.get("url", "")).strip())
+    mode = str(args.get("mode", "body")).strip().lower()
+    if mode not in {"body", "links"}:
+        raise ValueError("http.get mode must be body or links")
+    path_contains = str(args.get("path_contains", "")).strip()
+    if len(path_contains) > 120:
+        raise ValueError("http.get path_contains exceeds 120 characters")
     timeout = _bounded_int(args.get("timeout"), 10, 1, 20)
     request = urllib.request.Request(
         url,
@@ -740,12 +776,39 @@ def http_get(args: dict[str, Any]) -> dict[str, Any]:
 
         charset = response.headers.get_content_charset() or "utf-8"
         body = raw.decode(charset, errors="replace")
-        out = {
-            "url": url,
-            "status": getattr(response, "status", 200),
-            "content_type": content_type,
-            "body": body,
-        }
+        status = getattr(response, "status", 200)
+        if mode == "links":
+            if content_type not in {"text/html", "application/xhtml+xml"}:
+                raise ValueError("http.get links mode requires an HTML response")
+            if status != 200:
+                raise ValueError(f"HTTP {status}; links not verified")
+            if any(marker in body.lower() for marker in
+                   ("cf-chl-", "challenge-platform", "anomaly-modal", "g-recaptcha")):
+                raise ValueError("Page requires human verification; use another source")
+            parser = PageLinkParser(url)
+            parser.feed(body)
+            unique: dict[str, dict[str, str]] = {}
+            for link in parser.items:
+                if path_contains and path_contains.lower() not in urllib.parse.urlsplit(link["url"]).path.lower():
+                    continue
+                unique.setdefault(link["url"], link)
+            limit = _bounded_int(args.get("limit"), 50, 1, 80)
+            out = {
+                "url": url,
+                "status": status,
+                "content_type": content_type,
+                "links": list(unique.values())[:limit],
+                "matching_links": len(unique),
+                "truncated": len(unique) > limit,
+                "evidence": "Untrusted HTML links. Validate selected pages; a link is not evidence of page content."
+            }
+        else:
+            out = {
+                "url": url,
+                "status": status,
+                "content_type": content_type,
+                "body": body,
+            }
         return {
             "ok": True,
             "exitCode": 0,
@@ -892,6 +955,47 @@ def _result_url(value: str) -> str | None:
         return urllib.parse.urlunsplit(("https", url.netloc.lower(), url.path or "/", query, ""))
     except ValueError:
         return None
+
+
+class PageLinkParser(HTMLParser):
+    """Bounded link extraction, without executing scripts or fetching targets."""
+
+    def __init__(self, base_url: str):
+        super().__init__(convert_charrefs=True)
+        self.base_url = base_url
+        self.current_href: str | None = None
+        self.label: list[str] = []
+        self.items: list[dict[str, str]] = []
+
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if tag == "a":
+            self._finish()
+            self.current_href = values.get("href")
+            self.label = [values.get("title") or ""]
+        elif tag == "img" and self.current_href is not None:
+            self.label.append(values.get("alt") or "")
+
+    def handle_data(self, data):
+        if self.current_href is not None:
+            self.label.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "a":
+            self._finish()
+
+    def _finish(self):
+        if self.current_href is not None and len(self.items) < 2000:
+            # _result_url rejects unsafe schemes, credentials, IPs and
+            # tracking/fragments. Returned links are UNTRUSTED leads.
+            url = _result_url(urllib.parse.urljoin(self.base_url, self.current_href))
+            if url:
+                self.items.append({
+                    "url": url,
+                    "title": " ".join(" ".join(self.label).split())[:160]
+                })
+        self.current_href = None
+        self.label = []
 
 
 class DuckSearchParser(HTMLParser):
@@ -1074,6 +1178,55 @@ def _web_result(payload: dict[str, Any], error: str | None = None) -> dict[str, 
             "stdout": json.dumps(payload, ensure_ascii=False, separators=(",", ":")), "stderr": "", "error": error}
 
 
+def _search_result_matches_explicit_constraints(query: str, item: dict[str, Any]) -> bool:
+    """Conservative negative filter, NOT a semantic relevance certificate.
+
+    Only enforce explicit quoted phrases and site: constraints. For site:
+    queries with no quoted phrase, reject results mentioning none of the
+    distinctive non-operator query terms. Ordinary searches are unchanged.
+    """
+    url = str(item.get("url") or "")
+    parsed = urllib.parse.urlsplit(url)
+    site = re.search(r"(?i)(?<!\w)site:([a-z0-9.-]+)(/[^\s\"“”]*)?", query)
+    if site:
+        expected_host = site.group(1).lower()
+        host = (parsed.hostname or "").lower()
+        if host != expected_host and not host.endswith("." + expected_host):
+            return False
+        expected_path = site.group(2) or ""
+        if expected_path and not parsed.path.lower().startswith(expected_path.lower()):
+            return False
+
+    # Tokenize punctuation, URI slugs and quoted titles the same way.
+    def normalize(raw: str) -> str:
+        return " ".join(re.findall(r"(?u)\w+", urllib.parse.unquote(raw).casefold()))
+
+    observed = normalize(
+        " ".join(str(item.get(k) or "") for k in ("title", "snippet", "url"))
+    )
+    phrases = [
+        normalize(x) for x in re.findall(r'["“]([^"”]{3,80})["”]', query)
+    ]
+    if phrases and any(phrase not in observed for phrase in phrases):
+        return False
+
+    if site and not phrases:
+        rest = query[:site.start()] + " " + query[site.end():]
+        generic = {
+            "with", "from", "find", "search", "page", "pages", "site",
+            "about", "what", "latest", "current", "images", "image",
+            "photo", "photos", "pictures", "picture", "gallery",
+            "galleries", "online", "the", "and", "www", "http", "https",
+        }
+        terms = {
+            word for word in normalize(rest).split()
+            if len(word) >= 4 and word not in generic
+        }
+        if terms and not any(term in observed.split() for term in terms):
+            return False
+    return True
+
+
 def web_search(
     args: dict[str, Any],
     request_id: str | None = None,
@@ -1124,6 +1277,7 @@ def web_search(
             return _web_result(cached_payload)
 
     attempts = []
+    constrained_rejections = 0
     for provider in providers:
         _record_search_diagnostics(
             status="running",
@@ -1145,6 +1299,9 @@ def web_search(
                 item = {"id": "src-" + hashlib.sha256(url.encode()).hexdigest()[:12],
                                 "title": title, "url": url, "snippet": _plain_html(candidate.get("snippet"), 450),
                                 "published": str(candidate.get("published") or "")[:80] or None}
+                if not _search_result_matches_explicit_constraints(query, item):
+                    constrained_rejections += 1
+                    continue
                 item_chars = len(json.dumps(item, ensure_ascii=False))
                 if result_chars + item_chars > 6000:
                     continue
@@ -1153,6 +1310,8 @@ def web_search(
                 if len(results) >= limit:
                     break
             if not results:
+                if constrained_rejections:
+                    raise ValueError("Search candidates did not match explicit quoted/site constraints")
                 raise ValueError("No usable results; response may be empty or unsupported")
             elapsed_ms = int((time.monotonic() - started) * 1000)
             payload = {"query": query, "provider": provider, "time_range": period or None,
@@ -1191,26 +1350,36 @@ def web_search(
             )
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
+    no_match = constrained_rejections > 0
+    code = "SEARCH_NO_MATCH" if no_match else "SEARCH_EXHAUSTED"
+    failure_class = "NO_RELEVANT_RESULTS" if no_match else "DEPENDENCY_EXHAUSTED"
+    message = (
+        "Search providers returned candidate links, but none satisfied the explicit quoted/site constraints. "
+        "Broaden the query or inspect the official source; do not claim the goal was achieved."
+        if no_match else
+        "Search unavailable after all keyless/configured providers were tried. "
+        "Do not invent current facts; report partial if evidence remains unavailable."
+    )
     result = _web_result(
         {"query": query, "results": [], "attempts": attempts,
          "bridge_run_id": BRIDGE_RUN_ID, "search_elapsed_ms": elapsed_ms},
-        "Search unavailable after all keyless/configured providers were tried. Do not invent current facts; report partial if evidence remains unavailable."
+        message
     )
     result.update({
-        "errorCode": "SEARCH_EXHAUSTED",
-        "failureClass": "DEPENDENCY_EXHAUSTED",
+        "errorCode": code,
+        "failureClass": failure_class,
         "retryable": False,
         "dependency": "web.search",
     })
     _record_search_diagnostics(
-        status="dependency_exhausted",
+        status="no_matching_results" if no_match else "dependency_exhausted",
         request_id=request_id,
         stage="complete",
         provider=providers[-1] if providers else None,
         elapsed_ms=elapsed_ms,
         result_count=0,
         result_chars=0,
-        error_code="SEARCH_EXHAUSTED",
+        error_code=code,
         last_error=attempts[-1]["error"] if attempts else None,
     )
     return result
@@ -3432,6 +3601,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"read_only_roots={','.join('@' + alias for alias, root in READONLY_ALIASES.items() if root.exists()) or '(none)'}\n"
                 f"read_roots_config={READ_ROOTS_FILE}\n"
                 f"version=0.29\n"
+                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
                 f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
@@ -3533,8 +3703,8 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         end_raw = args.get("end_line")
         if start_raw is not None or end_raw is not None:
             try:
-                start_line = int(start_raw) if start_raw is not None else 1
-                end_line = int(end_raw) if end_raw is not None else None
+                start_line = _integral_number(start_raw) if start_raw is not None else 1
+                end_line = _integral_number(end_raw) if end_raw is not None else None
             except (TypeError, ValueError) as exc:
                 raise ValueError("file.read start_line/end_line must be integers") from exc
 
@@ -3658,7 +3828,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         return run_process(
             argv,
             cwd,
-            int(args.get("timeout", DEFAULT_TIMEOUT)),
+            _execution_timeout(args.get("timeout"), DEFAULT_TIMEOUT),
             request_id=request_id,
             env=env,
         )
@@ -3681,7 +3851,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         return run_process(
             argv,
             cwd,
-            int(args.get("timeout", DEFAULT_TIMEOUT)),
+            _execution_timeout(args.get("timeout"), DEFAULT_TIMEOUT),
             request_id=request_id,
         )
 
@@ -3697,7 +3867,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 # an agent cleanup loop merely because it checked a file.
                 ["python", "-c", "import pathlib,sys; p=pathlib.Path(sys.argv[1]); compile(p.read_bytes(), str(p), 'exec'); print('Syntax OK')", str(script)],
                 cwd,
-                int(args.get("timeout", 60)),
+                _execution_timeout(args.get("timeout"), 60),
                 request_id=request_id,
             )
         argv_text = str(args.get("argv", "")).strip()
@@ -3705,7 +3875,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         return run_process(
             ["python", str(script), *extra],
             cwd,
-            int(args.get("timeout", DEFAULT_TIMEOUT)),
+            _execution_timeout(args.get("timeout"), DEFAULT_TIMEOUT),
             request_id=request_id,
         )
 
@@ -3718,7 +3888,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         return run_process(
             ["python", "-m", "pytest", *extra],
             cwd,
-            int(args.get("timeout", 300)),
+            _execution_timeout(args.get("timeout"), 300),
             request_id=request_id,
         )
 
@@ -3741,7 +3911,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         return run_process(
             [binary, "pull", model],
             HOME,
-            max(60, min(int(args.get("timeout", 600)), 1800)),
+            _execution_timeout(args.get("timeout"), 600, maximum=1800, minimum=60),
             request_id=request_id,
             env=env,
             timeout_cap=1800,

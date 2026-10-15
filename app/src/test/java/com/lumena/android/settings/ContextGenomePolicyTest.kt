@@ -21,7 +21,7 @@ class ContextGenomePolicyTest {
                 id = "git",
                 layer = GenomeLayer.ANCHOR,
                 topicKey = "@Lumena-Android",
-                text = "POSITIVE verified git.status clean branch",
+                text = "TOOL_OK verified; goal_not_verified git.status clean branch",
                 importance = 15.0,
                 updatedAt = 3000L
             )
@@ -84,7 +84,7 @@ class ContextGenomePolicyTest {
                 id = "anchor",
                 layer = GenomeLayer.ANCHOR,
                 topicKey = "@Lumena-Android",
-                text = "POSITIVE verified git.status cwd=@Lumena-Android clean",
+                text = "TOOL_OK verified; goal_not_verified git.status cwd=@Lumena-Android clean",
                 importance = 10.0,
                 updatedAt = 5000L
             )

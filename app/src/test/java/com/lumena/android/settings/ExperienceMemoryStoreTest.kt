@@ -52,6 +52,27 @@ class ExperienceMemoryStoreTest {
     }
 
     @Test
+    fun successfulWebSearchIsVerifiedToolUseNotVerifiedUserGoal() {
+        val request = ToolRequest(
+            tool = "web.search",
+            args = mapOf("query" to "exact desired source")
+        )
+        val state = ExperienceMemoryIndex.record(
+            ExperienceMemoryState(),
+            request,
+            ToolResult(ok = true, tool = "web.search", stdout = "unrelated search results"),
+            now = 1000L
+        )
+        val hint = ExperienceMemoryIndex.relevant(
+            state, query = "web.search exact desired source", limit = 1
+        ).single()
+
+        assertTrue(hint.startsWith("TOOL_OK verified; goal_not_verified"))
+        assertFalse(hint.contains("GOAL_VERIFIED"))
+        assertFalse(hint.contains("POSITIVE verified"))
+    }
+
+    @Test
     fun recoveredFailureRemainsHistoricalButPositiveRanksFirst() {
         val request = ToolRequest(
             tool = "python.run",
@@ -76,8 +97,8 @@ class ExperienceMemoryStoreTest {
             limit = 2
         )
 
-        assertTrue(relevant.first().startsWith("POSITIVE verified"))
-        assertTrue(relevant.any { it.startsWith("NEGATIVE resolved") })
+        assertTrue(relevant.first().startsWith("TOOL_OK verified; goal_not_verified"))
+        assertTrue(relevant.any { it.startsWith("TOOL_FAILED recovered_by_tool_ok") })
     }
 
     @Test
@@ -242,7 +263,7 @@ class ExperienceMemoryStoreTest {
 
         assertEquals(1, relevant.size)
         assertTrue(relevant.single().contains("python.run"))
-        assertTrue(relevant.single().contains("NEGATIVE"))
+        assertTrue(relevant.single().contains("TOOL_FAILED"))
     }
 
     @Test

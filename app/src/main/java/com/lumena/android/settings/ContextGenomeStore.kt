@@ -293,9 +293,9 @@ object ContextGenomeStore {
 
         val anchorUnits = projection.anchors.map { anchor ->
             val state = when {
-                anchor.valence == ExperienceValence.POSITIVE -> "POSITIVE verified"
-                anchor.resolvedAt == null -> "NEGATIVE unresolved"
-                else -> "NEGATIVE resolved"
+                anchor.valence == ExperienceValence.POSITIVE -> "TOOL_OK verified; goal_not_verified"
+                anchor.resolvedAt == null -> "TOOL_FAILED unresolved"
+                else -> "TOOL_FAILED recovered_by_tool_ok"
             }
             val target = anchor.target.ifBlank { "(general)" }
             val importance =

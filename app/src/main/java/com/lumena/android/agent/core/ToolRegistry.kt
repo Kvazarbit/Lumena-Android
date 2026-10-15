@@ -53,7 +53,7 @@ object ToolRegistry {
         ToolSpec("system.time", ToolRisk.READ_ONLY, description = "Read the phone's current local date, time and timezone."),
         ToolSpec("system.info", ToolRisk.READ_ONLY, description = "Inspect CPU, memory, storage and Termux/Android environment."),
         ToolSpec("http.json", ToolRisk.READ_ONLY, setOf("url"), "Fetch a public HTTPS JSON API with SSRF, redirect, timeout and size guards."),
-        ToolSpec("http.get", ToolRisk.READ_ONLY, setOf("url"), "Fetch public HTTPS text/HTML with SSRF, redirect, timeout and size guards."),
+        ToolSpec("http.get", ToolRisk.READ_ONLY, setOf("url"), "Fetch public HTTPS text/HTML with SSRF, redirect, timeout and size guards. If Bridge health advertises http_get_links_v1, optional mode=links returns bounded links; path_contains filters URL paths and limit=1..80. HTML links are untrusted leads, not page evidence."),
         ToolSpec("web.search", ToolRisk.READ_ONLY, setOf("query"), "Search the web for source URLs and snippets. Optional limit=1..8, time_range=day/week/month/year. Read selected URLs before claiming facts."),
         ToolSpec("web.read", ToolRisk.READ_ONLY, setOf("url"), "Read public HTTPS page text without scripts/navigation, following up to 3 validated redirects. Optional max_chars=500..12000."),
         ToolSpec("image.search", ToolRisk.READ_ONLY, setOf("query"), "Search images through multiple public providers with query fallback and return safe display-ready previews plus source pages."),
