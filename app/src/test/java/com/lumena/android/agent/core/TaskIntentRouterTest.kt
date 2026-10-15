@@ -1,5 +1,6 @@
 package com.lumena.android.agent.core
 
+import com.lumena.android.modules.MarketplaceModule
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -138,6 +139,40 @@ class TaskIntentRouterTest {
         )
         assertTrue("web.search" in profile.recommendedTools)
         assertTrue("marketplace.search" in profile.recommendedTools)
+    }
+
+    @Test
+    fun dontAnnounceDoneDoesNotRoutePythonWebResearchToMarketplace() {
+        val goal = """
+            Проведи контрольний вебпошук, лише читання.
+            1. Знайди через web.search офіційну сторінку про Python на python.org.
+            2. Прочитай знайдену сторінку через web.read.
+            3. Назви заголовок сторінки, її URL та один факт із прочитаного тексту.
+            Не використовуй python.run, file.write або інші виконавчі чи змінювальні інструменти.
+            Не оголошуй DONE без реальних результатів інструментів.
+        """.trimIndent()
+
+        val profile = TaskIntentRouter.route(goal)
+        assertEquals(TaskIntent.PUBLIC_WEB, profile.intent)
+        assertEquals("web.search", profile.preflight?.tool)
+        assertFalse("marketplace.search" in profile.recommendedTools)
+        assertNull(MarketplaceModule.sourceEvidenceTools(goal))
+    }
+
+    @Test
+    fun ukrainianListingNounsStillRouteToMarketplaceSearch() {
+        for (goal in listOf(
+            "Знайди оголошення про продаж велосипеда у Варшаві",
+            "Пошукай оголошень про продаж велосипеда у Варшаві"
+        )) {
+            val profile = TaskIntentRouter.route(goal)
+            assertEquals(TaskIntent.PUBLIC_WEB, profile.intent)
+            assertEquals("marketplace.search", profile.preflight?.tool)
+            assertEquals(
+                listOf("marketplace.search", "mcp.search"),
+                MarketplaceModule.sourceEvidenceTools(goal)
+            )
+        }
     }
 
     @Test
