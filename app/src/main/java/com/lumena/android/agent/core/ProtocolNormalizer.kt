@@ -92,8 +92,8 @@ class ProtocolNormalizer {
     private fun standaloneSearch(text: String): NormalizationResult? {
         if (text.length > 1_200) return null
         val lines = text.lines()
-            .map(String::trim)
-            .filter(String::isNotBlank)
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
         val callLine = lines.lastOrNull() ?: return null
         val match = singleSearch.matchEntire(callLine)
             ?: return if (lines.size == 1 && callLine.startsWith("web.search(")) {
@@ -154,7 +154,7 @@ class ProtocolNormalizer {
                 ProtocolFailureKind.SYNTAX,
                 "web.search query is not a valid JSON string"
             )
-        if (query.isBlank() || query.length > 240 || query.any(Char::isISOControl)) {
+        if (query.isBlank() || query.length > 240 || query.any { java.lang.Character.isISOControl(it) }) {
             return NormalizationResult.Failure(
                 ProtocolFailureKind.UNSUPPORTED_SHAPE,
                 "web.search query must be nonempty, at most 240 chars, without controls"
