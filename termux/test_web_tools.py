@@ -236,6 +236,43 @@ class WebToolsTest(unittest.TestCase):
         self.assertTrue(again["cached"])
         self.assertEqual(1, fetch.call_count)
 
+    def test_required_text_falls_back_from_irrelevant_provider_candidates(self):
+        wrong = {"url": "https://postal.example/track", "title": "Parcel tracking",
+                 "snippet": "Check shipping status"}
+        right = {"url": "https://photos.example/gallery/wandy-pan/",
+                 "title": "Wandy Pan photo gallery", "snippet": "Series"}
+        with patch.object(
+            self.b, "_search_provider", side_effect=[[wrong], [right]]
+        ) as search:
+            payload = self.payload(self.b.web_search({
+                "query": "Wandy Pan full gallery",
+                "required_text": "Wandy Pan",
+            }))
+        self.assertEqual("bing-rss", payload["provider"])
+        self.assertEqual(2, search.call_count)
+        self.assertEqual("https://photos.example/gallery/wandy-pan/",
+                         payload["results"][0]["url"])
+        self.assertEqual("Wandy Pan", payload["required_text"])
+        self.assertFalse(payload["relevance_verified"])
+        self.assertIn("required_text", payload["attempts"][0]["error"])
+
+    def test_required_text_reports_no_lexical_match_not_positive_success(self):
+        wrong = {"url": "https://postal.example/track", "title": "Parcel tracking",
+                 "snippet": "Shipment status"}
+        with patch.object(self.b, "_search_provider", return_value=[wrong]) as search:
+            result = self.b.web_search({
+                "query": "Wandy Pan gallery",
+                "required_text": "Wandy Pan",
+            })
+        self.assertFalse(result["ok"])
+        self.assertEqual("SEARCH_NO_LEXICAL_MATCH", result["errorCode"])
+        self.assertEqual("NO_RELEVANT_CANDIDATES", result["failureClass"])
+        self.assertEqual(3, search.call_count)
+        payload = json.loads(result["stdout"])
+        self.assertEqual([], payload["results"])
+        self.assertFalse(payload["relevance_verified"])
+        self.assertNotIn("tracking", str(payload.get("results")))
+
     def test_provider_failure_falls_back_without_exposing_key(self):
         with patch.dict(os.environ, {"LUMENA_BRAVE_API_KEY": "test-secret"}), \
                 patch.object(self.b, "_search_provider", side_effect=[ValueError("test-secret denied"),
@@ -462,6 +499,50 @@ class WebToolsTest(unittest.TestCase):
 
         self.assertEqual(1, fetch.call_count)
 
+    def test_web_read_extracts_bounded_same_origin_gallery_links(self):
+        html = """<html><head><title>Catalog</title></head>
+        <body><p>This catalog provides enough public searchable text for a useful
+        read operation and contains links to individual photography entries.</p>
+        <nav><a href="/pl/">Home</a></nav>
+        <a href="/pl/galleries/series-one-123/?utm_source=test">First gallery</a>
+        <a href="/pl/galleries/series-one-123/">Duplicate gallery</a>
+        <a href="/pl/galleries/series-two-456/"><img alt="Second gallery"></a>
+        <a href="https://elsewhere.example/pl/galleries/remote/">External</a>
+        <a href="http://127.0.0.1/pl/galleries/private/">Private</a>
+        <a href="javascript:alert(1)">Script</a>
+        </body></html>"""
+        url = "https://catalog.example/pl/?q=gallery"
+        with patch.object(self.b, "_web_fetch", return_value=(url, "text/html", html)):
+            result = self.b.web_read({
+                "url": url,
+                "include_links": "true",
+                "links_path_contains": "/galleries/",
+                "links_limit": "1",
+            })
+        payload = self.payload(result)
+        self.assertEqual(2, payload["links_found"])
+        self.assertTrue(payload["links_truncated"])
+        self.assertEqual(1, len(payload["links"]))
+        self.assertEqual(
+            "https://catalog.example/pl/galleries/series-one-123/",
+            payload["links"][0]["url"],
+        )
+        self.assertIn("First gallery", payload["links"][0]["text"])
+        self.assertIn("Untrusted", payload["links_evidence"])
+
+    def test_web_read_links_default_off_and_verification_still_blocks(self):
+        html = "<p>" + "A long and readable page. " * 10 + "</p><a href='/x'>X</a>"
+        with patch.object(self.b, "_web_fetch", return_value=("https://example.org/", "text/html", html)):
+            result = self.payload(self.b.web_read({"url": "https://example.org/"}))
+        self.assertNotIn("links", result)
+        challenge = html + "<div class='g-recaptcha'>Verify</div>"
+        with patch.object(self.b, "_web_fetch", return_value=("https://example.org/", "text/html", challenge)):
+            with self.assertRaisesRegex(ValueError, "human verification"):
+                self.b.web_read({"url": "https://example.org/", "include_links": "true"})
+        with patch.object(self.b, "_web_fetch", return_value=("https://example.org/", "text/html", html)):
+            with self.assertRaisesRegex(ValueError, "include_links"):
+                self.b.web_read({"url": "https://example.org/", "include_links": "maybe"})
+
     def test_read_does_not_report_empty_javascript_shell_as_success(self):
         with patch.object(self.b, "_web_fetch", return_value=("https://example.org", "text/html", "<script>content()</script>")):
             with self.assertRaisesRegex(ValueError, "too little"):
@@ -525,6 +606,52 @@ class WebToolsTest(unittest.TestCase):
                     patch.object(self.b.PUBLIC_HTTPS_OPENER, "open", return_value=response):
                 with self.assertRaises(ValueError):
                     self.b._web_fetch("https://example.org")
+
+    def test_bridge_version_and_web_read_error_codes_are_consistent(self):
+        server = self.b.ThreadingHTTPServer(("127.0.0.1", 0), self.b.Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+            connection.request("GET", "/")
+            response = connection.getresponse()
+            self.assertEqual(200, response.status)
+            info = json.loads(response.read())
+            self.assertEqual("0.30", info["version"])
+            health = self.b.execute_tool("health", {})
+            self.assertIn("version=0.30", health["stdout"])
+
+            for detail, error_code, error_class in (
+                ("Page requires human verification; use another source",
+                 "WEB_HUMAN_VERIFICATION", "USER_ACTION_REQUIRED"),
+                ("Upstream HTTP 404; page unavailable or access restricted",
+                 "WEB_HTTP_404", "SOURCE_UNAVAILABLE"),
+            ):
+                with self.subTest(detail=detail), patch.object(
+                    self.b, "_web_fetch", side_effect=ValueError(detail)
+                ):
+                    connection.request(
+                        "POST", "/tool",
+                        body=json.dumps({
+                            "tool": "web.read",
+                            "args": {"url": "https://example.org"},
+                        }),
+                        headers={"Authorization": "Bearer fixture-token",
+                                 "Content-Type": "application/json"},
+                    )
+                    response = connection.getresponse()
+                    self.assertEqual(400, response.status)
+                    payload = json.loads(response.read())
+                    self.assertFalse(payload["ok"])
+                    self.assertEqual(error_code, payload["errorCode"])
+                    self.assertEqual(error_class, payload["failureClass"])
+                    self.assertFalse(payload["retryable"])
+                    self.assertEqual("web.read", payload["dependency"])
+            connection.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
 
     def test_real_http_errors_have_complete_json_and_next_request_works(self):
         server = self.b.ThreadingHTTPServer(("127.0.0.1", 0), self.b.Handler)

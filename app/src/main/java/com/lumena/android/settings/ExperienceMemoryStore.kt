@@ -142,7 +142,7 @@ object ExperienceMemoryIndex {
 
     private fun format(anchor: ExperienceAnchor): String {
         val state = when {
-            anchor.valence == ExperienceValence.POSITIVE -> "POSITIVE verified"
+            anchor.valence == ExperienceValence.POSITIVE -> "POSITIVE TOOL_RESULT verified (goal unverified)"
             anchor.resolvedAt == null -> "NEGATIVE unresolved"
             else -> "NEGATIVE resolved"
         }
