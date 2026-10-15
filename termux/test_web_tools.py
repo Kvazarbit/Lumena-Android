@@ -462,6 +462,50 @@ class WebToolsTest(unittest.TestCase):
 
         self.assertEqual(1, fetch.call_count)
 
+    def test_web_read_extracts_bounded_same_origin_gallery_links(self):
+        html = """<html><head><title>Catalog</title></head>
+        <body><p>This catalog provides enough public searchable text for a useful
+        read operation and contains links to individual photography entries.</p>
+        <nav><a href="/pl/">Home</a></nav>
+        <a href="/pl/galleries/series-one-123/?utm_source=test">First gallery</a>
+        <a href="/pl/galleries/series-one-123/">Duplicate gallery</a>
+        <a href="/pl/galleries/series-two-456/"><img alt="Second gallery"></a>
+        <a href="https://elsewhere.example/pl/galleries/remote/">External</a>
+        <a href="http://127.0.0.1/pl/galleries/private/">Private</a>
+        <a href="javascript:alert(1)">Script</a>
+        </body></html>"""
+        url = "https://catalog.example/pl/?q=gallery"
+        with patch.object(self.b, "_web_fetch", return_value=(url, "text/html", html)):
+            result = self.b.web_read({
+                "url": url,
+                "include_links": "true",
+                "links_path_contains": "/galleries/",
+                "links_limit": "1",
+            })
+        payload = self.payload(result)
+        self.assertEqual(2, payload["links_found"])
+        self.assertTrue(payload["links_truncated"])
+        self.assertEqual(1, len(payload["links"]))
+        self.assertEqual(
+            "https://catalog.example/pl/galleries/series-one-123/",
+            payload["links"][0]["url"],
+        )
+        self.assertIn("First gallery", payload["links"][0]["text"])
+        self.assertIn("Untrusted", payload["links_evidence"])
+
+    def test_web_read_links_default_off_and_verification_still_blocks(self):
+        html = "<p>" + "A long and readable page. " * 10 + "</p><a href='/x'>X</a>"
+        with patch.object(self.b, "_web_fetch", return_value=("https://example.org/", "text/html", html)):
+            result = self.payload(self.b.web_read({"url": "https://example.org/"}))
+        self.assertNotIn("links", result)
+        challenge = html + "<div class='g-recaptcha'>Verify</div>"
+        with patch.object(self.b, "_web_fetch", return_value=("https://example.org/", "text/html", challenge)):
+            with self.assertRaisesRegex(ValueError, "human verification"):
+                self.b.web_read({"url": "https://example.org/", "include_links": "true"})
+        with patch.object(self.b, "_web_fetch", return_value=("https://example.org/", "text/html", html)):
+            with self.assertRaisesRegex(ValueError, "include_links"):
+                self.b.web_read({"url": "https://example.org/", "include_links": "maybe"})
+
     def test_read_does_not_report_empty_javascript_shell_as_success(self):
         with patch.object(self.b, "_web_fetch", return_value=("https://example.org", "text/html", "<script>content()</script>")):
             with self.assertRaisesRegex(ValueError, "too little"):
