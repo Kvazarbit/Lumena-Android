@@ -38,7 +38,8 @@ class ExplicitSearchConstraintTest(unittest.TestCase):
         with patch.object(self.b, "_search_provider", return_value=[unrelated]) as provider:
             result = self.b.web_search({"query": '"Amanda Lopez" "Edgar Mattey"'})
         self.assertFalse(result["ok"])
-        self.assertEqual("SEARCH_EXHAUSTED", result["errorCode"])
+        self.assertEqual("SEARCH_NO_MATCH", result["errorCode"])
+        self.assertEqual("NO_RELEVANT_RESULTS", result["failureClass"])
         self.assertEqual(3, provider.call_count)
         self.assertEqual([], json.loads(result["stdout"])["results"])
 
@@ -53,7 +54,8 @@ class ExplicitSearchConstraintTest(unittest.TestCase):
                 "query": "site:example.org/galleries/ Wandy met-art"
             })
         self.assertFalse(result["ok"])
-        self.assertEqual("SEARCH_EXHAUSTED", result["errorCode"])
+        self.assertEqual("SEARCH_NO_MATCH", result["errorCode"])
+        self.assertEqual("NO_RELEVANT_RESULTS", result["failureClass"])
 
     def test_relevant_site_and_name_candidate_passes_as_untrusted_lead(self):
         candidate = {
