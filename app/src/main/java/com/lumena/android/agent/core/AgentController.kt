@@ -236,6 +236,24 @@ class AgentController(
         }
         return when (val normalized = normalizer.normalize(raw)) {
             is NormalizationResult.Canonical -> {
+                // Text-form model tool proposals are intentionally narrower
+                // than JSON tool calls. A standalone web.search(...) is only
+                // executable for an app-routed web task or an explicit tool
+                // requirement. Do not let a conversational code example cause
+                // a network call simply by looking like a function.
+                if (
+                    normalized.rule == NormalizationRule.STANDALONE_WEB_SEARCH &&
+                    "web.search" !in state.recommendedTools &&
+                    "web.search" !in state.requiredTools
+                ) {
+                    return protocolRetry(
+                        state,
+                        "STANDALONE_SEARCH_INTENT_MISMATCH: web.search(...) was proposed " +
+                            "outside an active web-search task. No tool was executed. " +
+                            "Answer the user's actual request without inventing a search, " +
+                            "or use valid task-scoped JSON protocol."
+                    )
+                }
                 val next = if (normalized.changed) {
                     state.copy(
                         protocolNormalizations = state.protocolNormalizations + 1,
