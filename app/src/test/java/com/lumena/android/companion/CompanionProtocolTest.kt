@@ -7,6 +7,26 @@ import org.junit.Test
 
 class CompanionProtocolTest {
     @Test
+    fun numericToolArgumentsPreserveExactIntegralValues() {
+        val numeric = requireNotNull(CompanionProtocol.parseVisibleText(
+            """LUMENA_TOOL
+            {"tool":"python.run","args":{"script":"example.py","timeout":30},"reason":"test"}"""
+        ))
+        val explicitDecimal = requireNotNull(CompanionProtocol.parseVisibleText(
+            """LUMENA_TOOL
+            {"tool":"python.run","args":{"script":"example.py","timeout":30.5},"reason":"test"}"""
+        ))
+        val stringNumeric = requireNotNull(CompanionProtocol.parseVisibleText(
+            """LUMENA_TOOL
+            {"tool":"python.run","args":{"script":"example.py","timeout":"30"},"reason":"test"}"""
+        ))
+
+        assertEquals("30", numeric.decision.request.args["timeout"])
+        assertEquals("30.5", explicitDecimal.decision.request.args["timeout"])
+        assertEquals("30", stringNumeric.decision.request.args["timeout"])
+        assertEquals(numeric.fingerprint, stringNumeric.fingerprint)
+    }
+    @Test
     fun accessibilityTransportArtifactsAreRepairedForAsciiUrls() {
         assertEquals(
             "https://example.com/path",
