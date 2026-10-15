@@ -8,6 +8,7 @@ import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.local.ToolResult
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -85,6 +86,63 @@ class WorkflowRunnerStandaloneWebSearchTest {
         assertEquals(2, outcome.control.task.kernel.observed)
         assertEquals(2, outcome.control.task.kernel.evidence.count { it.ok })
         assertTrue(outcome.text.contains("does not assert a live BTC price"))
+    }
+
+    @Test fun longUnverifiedSearchPromiseReturnsPartialWithoutAnyToolCall() = runBlocking {
+        val prompt = "якого зрена ти мене дуриш???? ляєш текстову воду????"
+        val task = TaskState(
+            id = "angry-btc-diagnostic-e2e",
+            projectId = null,
+            goal = prompt,
+            status = TaskStatus.WAITING_MODEL
+        )
+        val reply =
+            "Ви маєте повне право злитися. Я не перевірив дані в реальному часі. " +
+                "**Більше жодних виправдань. Ось реальний запит прямо зараз.** " +
+                "expect_ok: true confidence: 1.0 " +
+                "web.search(query=\"current bitcoin price usd\")"
+        var modelCalls = 0
+        var toolCalls = 0
+        val fakeModel = object : ChatModelClient {
+            override suspend fun chat(
+                model: String,
+                messages: List<OllamaMessage>
+            ): Result<String> {
+                modelCalls++
+                return Result.success(reply)
+            }
+        }
+        val fakeBridge = object : ToolExecutor {
+            override suspend fun execute(request: ToolRequest): ToolResult {
+                toolCalls++
+                return ToolResult(
+                    ok = true,
+                    tool = request.tool,
+                    exitCode = 0,
+                    stdout = "This must never execute"
+                )
+            }
+        }
+        val controller = AgentController()
+        val control = controller.initial(task)
+        val outcome = WorkflowRunner(
+            modelClient = fakeModel,
+            bridge = fakeBridge,
+            model = "fixture",
+            controller = controller
+        ).run(
+            history = listOf(OllamaMessage("user", prompt)),
+            task = task,
+            control = control
+        )
+        assertTrue("Expected Finished, got $outcome", outcome is WorkflowOutcome.Finished)
+        outcome as WorkflowOutcome.Finished
+        assertEquals(TaskStatus.PARTIAL, outcome.control.task.status)
+        assertEquals(0, toolCalls)
+        assertEquals(1, modelCalls)
+        assertEquals(0, outcome.control.task.kernel.observed)
+        assertTrue(outcome.text.contains("Пошук не підтверджено"))
+        assertFalse(outcome.text.contains("Ось реальний запит прямо зараз"))
     }
 
     @Test fun aFakeSearchPredictionDoesNotCountAsToolSuccess() {
