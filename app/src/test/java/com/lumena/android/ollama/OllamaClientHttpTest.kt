@@ -1,5 +1,6 @@
 package com.lumena.android.ollama
 
+import com.lumena.android.agent.core.CloudSecretMaskingStats
 import java.io.ByteArrayOutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -355,6 +356,73 @@ class OllamaClientHttpTest {
             assertTrue(requests[0].contains("\"num_predict\":4096"))
             assertTrue(requests[1].contains("\"num_predict\":8192"))
         }
+    }
+
+    private val secretValues = listOf(
+        "abcDEF123456789xyz",
+        "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWX",
+        "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+        "bridge_token",
+        "BSAfixturebravekey123",
+        "fixturejsonsecret987"
+    )
+    private val toolOutputWithSecrets = listOf(
+        "TOOL_RESULT for file.read:",
+        "ok=true",
+        "stdout:",
+        "curl -H 'Authorization: Bearer abcDEF123456789xyz' https://api.example.org",
+        "OPENAI_KEY_HINT sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWX",
+        "remote = https://ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@github.com/o/r.git",
+        "token_file=/data/data/com.termux/files/home/.lumena/bridge_token",
+        "LUMENA_BRAVE_API_KEY=BSAfixturebravekey123",
+        "{\"EXA_API_KEY\": \"fixturejsonsecret987\", \"PATH\": \"/usr/bin\"}",
+        "MAX_RETRIES = 3"
+    ).joinToString("\n")
+
+    @Test fun cloudModelNeverReceivesKnownSecretShapes() {
+        val requests = mutableListOf<String>()
+        val before = CloudSecretMaskingStats.snapshot()
+        withFixture(listOf("""{"message":{"role":"assistant","content":"ok"},"done":true}
+""") , requests) { port, calls ->
+            val result = runBlocking {
+                OllamaClient("http://127.0.0.1:$port").chatStreaming(
+                    model = "gemma4:31b-cloud",
+                    messages = listOf(
+                        OllamaMessage("system", "Lumena system prompt"),
+                        OllamaMessage("user", toolOutputWithSecrets)
+                    ),
+                    onPartial = {}
+                )
+            }
+            assertEquals("ok", result.getOrThrow())
+            assertEquals(1, calls.get())
+        }
+        val body = requests.single()
+        secretValues.forEach { assertTrue("cloud request leaked $it", !body.contains(it)) }
+        assertTrue(body.contains("[MASKED"))
+        // Ordinary code and the system prompt reach the model unchanged.
+        assertTrue(body.contains("MAX_RETRIES = 3"))
+        assertTrue(body.contains("Lumena system prompt"))
+        val after = CloudSecretMaskingStats.snapshot()
+        assertEquals(1L, after.cloudRequests - before.cloudRequests)
+        assertTrue(after.maskedValues - before.maskedValues >= 6)
+    }
+
+    @Test fun localModelStillSeesTheOriginalText() {
+        val requests = mutableListOf<String>()
+        val before = CloudSecretMaskingStats.snapshot()
+        withFixture(listOf("""{"message":{"role":"assistant","content":"ok"},"done":true}
+"""), requests) { port, _ ->
+            val result = runBlocking {
+                OllamaClient("http://127.0.0.1:$port").chat(
+                    "gemma3:4b",
+                    listOf(OllamaMessage("user", toolOutputWithSecrets))
+                )
+            }
+            assertEquals("ok", result.getOrThrow())
+        }
+        assertTrue(requests.single().contains("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"))
+        assertEquals(before.cloudRequests, CloudSecretMaskingStats.snapshot().cloudRequests)
     }
 
     @Test fun cloudMissingDoneDoesNotIncreaseOutputBudget() {

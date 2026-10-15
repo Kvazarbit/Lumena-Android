@@ -302,10 +302,21 @@ class WorkflowRunnerTest {
             goal = "Знайди актуальну інформацію в інтернеті",
             status = TaskStatus.WAITING_MODEL
         )
-        val outcome = WorkflowRunner(modelClient, bridge, "fixture").run(
+        val runner = WorkflowRunner(modelClient, bridge, "fixture")
+        val gated = runner.run(
             history = listOf(OllamaMessage("user", task.goal)),
             task = task
         )
+
+        // The failed search already put provider text into the task, so a
+        // fetch of a URL nobody showed or typed waits for the owner.
+        assertTrue(gated is WorkflowOutcome.NeedsConfirmation)
+        gated as WorkflowOutcome.NeedsConfirmation
+        assertEquals("http.get", gated.pending.plan.request.tool)
+        assertTrue(gated.pending.plan.trustReview.orEmpty().contains("https://example.org"))
+        assertEquals(listOf("web.search"), requests.map { it.tool })
+
+        val outcome = runner.approve(gated.pending)
 
         assertTrue(outcome is WorkflowOutcome.Finished)
         outcome as WorkflowOutcome.Finished

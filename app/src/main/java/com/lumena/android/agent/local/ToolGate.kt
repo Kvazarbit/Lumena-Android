@@ -3,6 +3,7 @@ package com.lumena.android.agent.local
 import com.lumena.android.agent.core.AgentDecision
 import com.lumena.android.agent.core.EffectiveTaskPolicy
 import com.lumena.android.agent.core.EffectiveTaskPolicyCompiler
+import com.lumena.android.agent.core.TaskTaint
 import com.lumena.android.agent.core.ToolRegistry
 
 object ToolGate {
@@ -16,7 +17,9 @@ object ToolGate {
     fun plan(
         decision: PlannerDecision,
         externalSource: Boolean = false,
-        taskPolicy: EffectiveTaskPolicy? = null
+        taskPolicy: EffectiveTaskPolicy? = null,
+        taint: TaskTaint = TaskTaint(),
+        ownerText: String = ""
     ): PlannedTool {
         val call = AgentDecision.ToolCall(
             tool = decision.request.tool,

@@ -2993,6 +2993,52 @@ def cancel_request(request_id: str) -> dict[str, Any]:
     }
 
 
+# Python tools run model-chosen workspace code, so they get an allow-listed
+# environment instead of the bridge's own (bridge token, search API keys, MCP
+# auth_env tokens, real HOME). This is NOT isolation: on Termux the child still
+# runs as the same uid, has network access and can read ~/.lumena/bridge_token.
+PYTHON_CHILD_ENV_NAMES = (
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    # Termux/Android runtime for shebangs (termux-exec) and `am`-based helpers.
+    "PREFIX",
+    "TERMUX_VERSION",
+    "LD_PRELOAD",
+    "ANDROID_ROOT",
+    "ANDROID_DATA",
+    "ANDROID_ART_ROOT",
+    "ANDROID_I18N_ROOT",
+    "ANDROID_RUNTIME_ROOT",
+    "ANDROID_TZDATA_ROOT",
+    "BOOTCLASSPATH",
+    "DEX2OATBOOTCLASSPATH",
+    # A Windows dev host cannot start Python without it; Termux never sets it.
+    "SYSTEMROOT",
+)
+SECRET_ENV_NAME_RE = re.compile(r"KEY|TOKEN|SECRET|PASS|AUTH|CRED|COOKIE|SESSION", re.IGNORECASE)
+PYTHON_CHILD_ROOT = WORKSPACE / ".tmp"
+
+
+def python_child_env() -> dict[str, str]:
+    home = PYTHON_CHILD_ROOT / "python-home"
+    tmp = PYTHON_CHILD_ROOT / "tmp"
+    home.mkdir(parents=True, exist_ok=True)
+    tmp.mkdir(parents=True, exist_ok=True)
+    env = {name: os.environ[name] for name in PYTHON_CHILD_ENV_NAMES if name in os.environ}
+    env.update(
+        (name, value)
+        for name, value in os.environ.items()
+        if name.startswith("PYTHON") and not SECRET_ENV_NAME_RE.search(name)
+    )
+    env.setdefault("PATH", os.defpath)
+    env["HOME"] = str(home)
+    env["TMPDIR"] = str(tmp)
+    return env
+
+
 def run_process(
     argv: list[str],
     cwd: Path,
@@ -3601,7 +3647,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"read_only_roots={','.join('@' + alias for alias, root in READONLY_ALIASES.items() if root.exists()) or '(none)'}\n"
                 f"read_roots_config={READ_ROOTS_FILE}\n"
                 f"version=0.29\n"
-                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1\n"
+                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1,python_clean_env_v1\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
                 f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
@@ -3869,6 +3915,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 cwd,
                 _execution_timeout(args.get("timeout"), 60),
                 request_id=request_id,
+                env=python_child_env(),
             )
         argv_text = str(args.get("argv", "")).strip()
         extra = shlex.split(argv_text) if argv_text else []
@@ -3877,6 +3924,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
             cwd,
             _execution_timeout(args.get("timeout"), DEFAULT_TIMEOUT),
             request_id=request_id,
+            env=python_child_env(),
         )
 
     if tool == "python.tests":
@@ -3890,6 +3938,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
             cwd,
             _execution_timeout(args.get("timeout"), 300),
             request_id=request_id,
+            env=python_child_env(),
         )
 
     if tool == "ollama.status":

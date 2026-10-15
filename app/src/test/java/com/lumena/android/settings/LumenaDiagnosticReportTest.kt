@@ -1,5 +1,8 @@
 package com.lumena.android.settings
 
+import com.lumena.android.agent.core.CloudSecretMaskingStats
+import com.lumena.android.ollama.CloudSecretFilter
+import com.lumena.android.ollama.OllamaMessage
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -445,6 +448,31 @@ class LumenaDiagnosticReportTest {
         assertTrue(report.contains("immune_contested_peaks=2"))
         assertTrue(report.contains("constitution_activation=false"))
         assertTrue(report.contains("laya_execution_authority=false"))
+    }
+
+    @Test
+    fun reportCountsCloudSecretMasksWithoutTheSecrets() {
+        val before = CloudSecretMaskingStats.snapshot()
+        val sent = CloudSecretFilter.outbound(
+            "gemma4:31b-cloud",
+            listOf(
+                OllamaMessage(
+                    "user",
+                    "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\nLUMENA_BRAVE_API_KEY=BSAfixturebravekey123"
+                )
+            )
+        )
+        assertFalse(sent.single().content.contains("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"))
+
+        val report = LumenaDiagnosticFormatter.render(input())
+        val after = CloudSecretMaskingStats.snapshot()
+
+        assertTrue(after.maskedValues - before.maskedValues >= 2)
+        assertTrue(report.contains("[CLOUD_SECRET_MASKING]"))
+        assertTrue(report.contains("masked_values=${after.maskedValues}"))
+        assertTrue(report.contains("cloud_requests=${after.cloudRequests}"))
+        assertTrue(report.contains("scope=since_app_start"))
+        assertFalse(report.contains("BSAfixturebravekey123"))
     }
 
     @Test

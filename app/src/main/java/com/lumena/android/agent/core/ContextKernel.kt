@@ -17,7 +17,8 @@ data class ContextKernelState(
     val inFlight: ActionFlight? = null,
     val worldRevision: Int = 0,
     val observed: Int = 0,
-    val pendingVerification: Set<String> = emptySet()
+    val pendingVerification: Set<String> = emptySet(),
+    val taint: TaskTaint = TaskTaint()
 )
 
 /** A bounded task-local evidence ledger. Model prose never writes this state. */

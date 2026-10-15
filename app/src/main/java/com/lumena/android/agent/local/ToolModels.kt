@@ -53,5 +53,7 @@ data class PlannedTool(
     val allowed: Boolean,
     val requiresConfirmation: Boolean,
     val causeProbeIntent: CauseProbeExecutionIntent? = null,
-    val prediction: OutcomePrediction? = null
+    val prediction: OutcomePrediction? = null,
+    /** Trust Gate explanation shown in the confirmation dialog, if any. */
+    val trustReview: String? = null
 )
