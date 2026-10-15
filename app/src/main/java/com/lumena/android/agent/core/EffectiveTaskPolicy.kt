@@ -62,6 +62,13 @@ object EffectiveTaskPolicyCompiler {
             )
 
     private val readOnlyCues = listOf(
+        // Descriptions of a read-only MODE are not necessarily imperatives.
+        // "Проведи вебпошук, лише читання" must deny ALL mutating/executable
+        // capabilities, not just explicitly named tools.
+        Regex("(?iu)(?:тільки|лише|виключно)\\s+(?:для\\s+)?читання\\b"),
+        Regex("(?iu)(?:только|лишь|исключительно)\\s+(?:для\\s+)?чтения\\b"),
+        Regex("(?iu)(?:tylko|wyłącznie|wylacznie)\\s+(?:do\\s+)?odczytu\\b"),
+        Regex("(?iu)(?:only\\s+reading|reading\\s+only)\\b"),
         Regex("(?iu)(?:тільки|лише)\\s+(?:знайди\\s+і\\s+)?(?:прочитай|переглянь|проаналізуй|перевір)"),
         Regex("(?iu)нічого\\s+не\\s+(?:змінюй|редагуй)"),
         Regex("(?iu)(?:не\\s+змінюй|без\\s+змін)(?:\\s+зараз)?"),
@@ -638,8 +645,12 @@ object EffectiveTaskPolicyCompiler {
                         masked,
                         match.range.first
                     )
+                // Tool names such as python.run must NEVER supply the
+                // positive cue "run" while parsing a forbidden list:
+                // "Не використовуй python.run, file.write".
+                // Mask only tool-name bytes, preserving directive cue positions.
                 val tail =
-                    prefix.takeLast(160)
+                    maskToolNames(prefix.takeLast(160))
                 val negativeMatches =
                     negativeCue
                         .findAll(tail)

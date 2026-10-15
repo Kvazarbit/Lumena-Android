@@ -88,6 +88,77 @@ class WorkflowRunnerStandaloneWebSearchTest {
         assertTrue(outcome.text.contains("does not assert a live BTC price"))
     }
 
+    @Test fun phoneReadOnlyPythonWebGoalCompletesWithoutForbiddenWrite() = runBlocking {
+        val goal = """
+            Проведи контрольний вебпошук, лише читання.
+            1. Знайди через web.search офіційну сторінку про Python на python.org.
+            2. Прочитай знайдену сторінку через web.read.
+            3. Назви заголовок сторінки, її URL та один факт із прочитаного тексту.
+            Не використовуй python.run, file.write або інші виконавчі чи змінювальні інструменти.
+            Не оголошуй DONE без реальних результатів інструментів.
+            Якщо пошук або читання не відбулися, чесно повідом про незавершену задачу.
+        """.trimIndent()
+        val task = TaskState(
+            id = "ci2188-python-org-read-only",
+            projectId = null,
+            goal = goal,
+            status = TaskStatus.WAITING_MODEL
+        )
+        val controller = AgentController()
+        val initial = controller.initial(task).copy(preflightCompleted = true)
+        assertEquals(com.lumena.android.agent.core.TaskIntent.PUBLIC_WEB, initial.intent)
+        assertEquals(setOf("web.search", "web.read"), initial.requiredTools)
+
+        var modelTurns = 0
+        val fakeModel = object : ChatModelClient {
+            override suspend fun chat(
+                model: String, messages: List<OllamaMessage>
+            ): Result<String> {
+                modelTurns++
+                return Result.success(when (modelTurns) {
+                    1 -> """{"tool":"web.search","args":{"query":"official Python page python.org"},"reason":"Find official page"}"""
+                    2 -> """{"tool":"web.read","args":{"url":"https://www.python.org/"},"reason":"Read source content"}"""
+                    else -> """{"done":true,"summary":"Title: Welcome to Python.org. URL: https://www.python.org/. Fact: Python supports functions and control flow."}"""
+                })
+            }
+        }
+        val calls = mutableListOf<ToolRequest>()
+        val fakeBridge = object : ToolExecutor {
+            override suspend fun execute(toolRequest: ToolRequest): ToolResult {
+                calls += toolRequest
+                return when (toolRequest.tool) {
+                    "web.search" -> ToolResult(
+                        ok = true, tool = "web.search", exitCode = 0,
+                        stdout = """{"query":"official Python page python.org","results":[{"url":"https://www.python.org/","title":"Welcome to Python.org"}]}"""
+                    )
+                    "web.read" -> ToolResult(
+                        ok = true, tool = "web.read", exitCode = 0,
+                        stdout = """{"url":"https://www.python.org/","title":"Welcome to Python.org","text":"Python supports functions and control flow."}"""
+                    )
+                    else -> error("Forbidden/unexpected tool used: " + toolRequest.tool)
+                }
+            }
+        }
+
+        val outcome = WorkflowRunner(
+            modelClient = fakeModel, bridge = fakeBridge, model = "fixture",
+            controller = controller
+        ).run(history = listOf(OllamaMessage("user", goal)), task = task, control = initial)
+
+        assertTrue("Expected Finished, got $outcome", outcome is WorkflowOutcome.Finished)
+        outcome as WorkflowOutcome.Finished
+        assertEquals(TaskStatus.DONE, outcome.control.task.status)
+        assertEquals(listOf("web.search", "web.read"), calls.map { it.tool })
+        assertEquals(2, outcome.control.task.kernel.observed)
+        assertTrue(outcome.control.task.goalContract.criteria.all {
+            !it.required || it.status == com.lumena.android.agent.core.CriterionStatus.PASSED
+        })
+        assertEquals(0, outcome.control.task.goalContract.criteria.count {
+            it.id.contains("file.write") || it.id.contains("code-content")
+        })
+        assertTrue(outcome.text.contains("Welcome to Python.org"))
+    }
+
     @Test fun longUnverifiedSearchPromiseReturnsPartialWithoutAnyToolCall() = runBlocking {
         val prompt = "якого зрена ти мене дуриш???? ляєш текстову воду????"
         val task = TaskState(
