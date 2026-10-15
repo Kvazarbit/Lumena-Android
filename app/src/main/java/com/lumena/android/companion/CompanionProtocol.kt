@@ -156,6 +156,15 @@ object CompanionProtocol {
                     if (key == null || value == null) return@mapNotNull null
                     val rendered = when (value) {
                         is Map<*, *>, is List<*> -> anyAdapter.toJson(value)
+                        // Moshi's Any adapter parses JSON integers as Double (30 -> 30.0).
+                        // Preserve an exactly representable integral argument as "30";
+                        // fractional and non-finite inputs remain unmodified for Bridge validation.
+                        is Double -> if (
+                            value.isFinite() &&
+                            value % 1.0 == 0.0 &&
+                            value >= -9_007_199_254_740_991.0 &&
+                            value <= 9_007_199_254_740_991.0
+                        ) value.toLong().toString() else value.toString()
                         else -> value.toString()
                     }
                     key.toString() to rendered
