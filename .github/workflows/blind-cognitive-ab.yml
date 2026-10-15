@@ -1,0 +1,28 @@
+name: Blind Cognitive AB Harness
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/blind_ab.py'
+      - 'scripts/test_blind_ab.py'
+      - 'docs/BLIND_COGNITIVE_AB_V1.uk.md'
+      - '.github/workflows/blind-cognitive-ab.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  harness-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Validate blind benchmark integrity (NO LIVE MODEL)
+        run: |
+          python -m py_compile scripts/blind_ab.py
+          python -m unittest discover -s scripts -p 'test_blind_ab.py' -v
+          echo 'PASS: harness-only synthetic checks. No live Gemma or Lumena evaluated.'
