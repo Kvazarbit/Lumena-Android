@@ -317,11 +317,58 @@ class AgentController(
         }
     }
 
+    private fun reportUnverifiedInlineSearch(
+        text: String,
+        state: AgentControlState
+    ): ControllerInstruction? {
+        if (!TaskExecutionRecap.unverifiedInlineSearchClaim(text, state)) return null
+
+        // An active PUBLIC_WEB task may repair the malformed prose by emitting
+        // one strict registered tool request. For conversation-only requests
+        // (including complaints), do not silently upgrade intent to web access.
+        if (state.intent == TaskIntent.PUBLIC_WEB && state.protocolRetries == 0) {
+            return protocolRetry(
+                state,
+                "UNVERIFIED_INLINE_WEB_SEARCH: Your prose claimed a real search " +
+                    "but the current task has no successful web.search TOOL_RESULT. " +
+                    "The embedded web.search(query=...) is NOT an executed call. " +
+                    "Return exactly ONE canonical tool JSON request, or a truthful " +
+                    "partial response. Never assert fresh data without evidence."
+            )
+        }
+
+        val report =
+            "Пошук не підтверджено. Модель написала web.search(query=...) " +
+                "усередині звичайного тексту та назвала це реальним запитом, " +
+                "але локальний журнал цієї задачі не містить успішного " +
+                "web.search TOOL_RESULT. Це лише текстова пропозиція, " +
+                "а не результат пошуку чи актуальна ціна."
+        return ControllerInstruction.Finish(
+            report,
+            state.copy(
+                task = state.task.copy(
+                    status = TaskStatus.PARTIAL,
+                    lastResult = report,
+                    errors = (state.task.errors + "UNVERIFIED_INLINE_WEB_SEARCH").takeLast(8)
+                )
+            )
+        )
+    }
+
     private fun interpretDecision(
         decision: AgentDecision,
         state: AgentControlState
-    ): ControllerInstruction = when (decision) {
-        is AgentDecision.ToolCall -> interpretTool(decision, state)
+    ): ControllerInstruction {
+        val modelText = when (decision) {
+            is AgentDecision.Reply -> decision.text
+            is AgentDecision.Done -> decision.summary
+            is AgentDecision.Partial -> decision.summary
+            is AgentDecision.ToolCall -> null
+        }
+        modelText?.let { reportUnverifiedInlineSearch(it, state) }?.let { return it }
+
+        return when (decision) {
+            is AgentDecision.ToolCall -> interpretTool(decision, state)
         is AgentDecision.Done -> interpretDone(decision, state)
         is AgentDecision.Partial -> summaryConsistency(decision.summary, state) ?: ControllerInstruction.Finish(
             "Частково виконано.\n${decision.summary}",
@@ -333,6 +380,7 @@ class AgentController(
             )
         )
         is AgentDecision.Reply -> interpretReply(decision, state)
+        }
     }
 
     private fun interpretTool(
