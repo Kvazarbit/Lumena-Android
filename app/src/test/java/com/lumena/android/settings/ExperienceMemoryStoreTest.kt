@@ -76,7 +76,7 @@ class ExperienceMemoryStoreTest {
             limit = 2
         )
 
-        assertTrue(relevant.first().startsWith("POSITIVE verified"))
+        assertTrue(relevant.first().startsWith("POSITIVE TOOL_RESULT verified (goal unverified)"))
         assertTrue(relevant.any { it.startsWith("NEGATIVE resolved") })
     }
 
