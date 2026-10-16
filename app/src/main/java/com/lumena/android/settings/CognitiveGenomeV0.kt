@@ -67,6 +67,8 @@ data class CognitivePrinciple(
     val toolPattern: String,
     val evidenceIds: List<String>,
     val sourceTaskHashes: List<String>,
+    /** Source IDs are not counterexamples; opposing observations are. */
+    val sourceRecordIds: List<String> = emptyList(),
     val counterexampleRecordIds: List<String> = emptyList(),
     val observedSuccesses: Int = 0,
     val observedFailures: Int = 0,
@@ -196,9 +198,12 @@ object CognitiveGenomePolicy {
                 // an entirely bad route: identify each actually FAILED
                 // prefix independently. Different failed steps are different
                 // dead ends even when the full action shape is identical.
-                failures.groupBy { record ->
-                    record.outcomes.indexOfFirst { outcome -> !outcome }
-                }.toSortedMap().forEach { (failedIndex, failedAtStep) ->
+                val byFailedStep = failures.flatMap { record ->
+                    record.outcomes.indices
+                        .filter { index -> !record.outcomes[index] }
+                        .map { index -> index to record }
+                }.groupBy({ it.first }, { it.second })
+                byFailedStep.toSortedMap().forEach { (failedIndex, failedAtStep) ->
                     val failing = failedAtStep.first()
                     val prefix = failing.tools.take(failedIndex + 1)
                     val contested = successes.isNotEmpty()
@@ -218,8 +223,10 @@ object CognitiveGenomePolicy {
                             .distinct().sorted().take(64),
                         sourceTaskHashes = (successes + failedAtStep)
                             .map { it.sourceTaskHash }.distinct().sorted().take(64),
-                        counterexampleRecordIds = (successes + failedAtStep)
-                            .map { it.id }.distinct().sorted().take(64),
+                        sourceRecordIds = failedAtStep.map { it.id }
+                            .distinct().sorted().take(64),
+                        counterexampleRecordIds = successes.map { it.id }
+                            .distinct().sorted().take(64),
                         observedSuccesses = successes.size,
                         observedFailures = failedAtStep.size,
                         failureClasses = failedAtStep
@@ -244,7 +251,9 @@ object CognitiveGenomePolicy {
                     toolPattern = first.tools.joinToString(">"),
                     evidenceIds = shared,
                     sourceTaskHashes = sources,
-                    observedSuccesses = successes.size
+                    observedSuccesses = successes.size,
+                    sourceRecordIds = successes.map { it.id }
+                        .distinct().sorted().take(64)
                 )
             }
         }
@@ -269,7 +278,7 @@ object CognitiveGenomePolicy {
                         .joinToString(">"),
                     evidenceIds = link.evidenceIds.distinct().sorted().take(64),
                     sourceTaskHashes = listOf(link.sourceTaskHash),
-                    counterexampleRecordIds = listOf(link.sourceRecordId),
+                    sourceRecordIds = listOf(link.sourceRecordId),
                     observedSuccesses = link.recoveryOutcomes.count { it },
                     observedFailures = 1 + link.recoveryOutcomes.count { !it },
                     failureClasses = listOfNotNull(link.causeFailureClass)
