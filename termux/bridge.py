@@ -9,6 +9,7 @@ request-scoped cancellation for long-running subprocess tools.
 """
 from __future__ import annotations
 
+import codecs
 import ipaddress
 import hashlib
 import http.client
@@ -3039,6 +3040,59 @@ def python_child_env() -> dict[str, str]:
     return env
 
 
+# python.run approval is bound to the script bytes: the app shows the owner
+# python.preview and sends its sha256 back as approved_sha256. Only the entry
+# script is hashed, not the modules it imports, and the check is not atomic
+# with the start of python. Termux gives no process isolation; not a sandbox.
+PYTHON_PREVIEW_MAX_BYTES = 16 * 1024
+SHA256_HEX_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def python_script(tool: str, args: dict[str, Any]) -> Path:
+    script = safe_path(str(args.get("script", "")), must_exist=True)
+    if not script.is_file() or script.suffix.lower() != ".py":
+        raise ValueError(f"{tool} requires an existing .py file inside the workspace")
+    return script
+
+
+def python_preview(args: dict[str, Any]) -> dict[str, Any]:
+    script = python_script("python.preview", args)
+    data = script.read_bytes()
+    # Incremental decoding holds back a multi-byte character cut by the limit.
+    shown = codecs.getincrementaldecoder("utf-8")(errors="replace").decode(
+        data[:PYTHON_PREVIEW_MAX_BYTES], final=len(data) <= PYTHON_PREVIEW_MAX_BYTES
+    )
+    payload = {
+        "script": script.relative_to(WORKSPACE).as_posix(),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "size": len(data),
+        "content": shown,
+        "truncated": len(data) > PYTHON_PREVIEW_MAX_BYTES,
+    }
+    return {
+        "ok": True,
+        "exitCode": 0,
+        "stdout": json.dumps(payload, ensure_ascii=False),
+        "stderr": "",
+        "error": None,
+    }
+
+
+def require_approved_python_hash(script: Path, args: dict[str, Any]) -> None:
+    approved = str(args.get("approved_sha256", "")).strip().lower()
+    if not SHA256_HEX_RE.fullmatch(approved):
+        raise PermissionError(
+            "python.run requires approved_sha256 from python.preview: "
+            "the owner must see the script content before it runs"
+        )
+    current = hashlib.sha256(script.read_bytes()).hexdigest()
+    if current != approved:
+        raise PermissionError(
+            f"python.run refused: {script.relative_to(WORKSPACE).as_posix()} changed after approval "
+            f"(approved_sha256 {approved[:12]}, current {current[:12]}); preview and approve it again"
+        )
+
+
 def run_process(
     argv: list[str],
     cwd: Path,
@@ -3647,7 +3701,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"read_only_roots={','.join('@' + alias for alias, root in READONLY_ALIASES.items() if root.exists()) or '(none)'}\n"
                 f"read_roots_config={READ_ROOTS_FILE}\n"
                 f"version=0.29\n"
-                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1,python_clean_env_v1\n"
+                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1,python_clean_env_v1,python_run_sha256_v1\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
                 f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
@@ -3901,10 +3955,13 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
             request_id=request_id,
         )
 
+    # App-internal: shown to the owner, never fed to the model, so it is not
+    # in READ_ONLY_BATCH_TOOLS.
+    if tool == "python.preview":
+        return python_preview(args)
+
     if tool in {"python.run", "python.syntax_check"}:
-        script = safe_path(str(args.get("script", "")), must_exist=True)
-        if not script.is_file() or script.suffix.lower() != ".py":
-            raise ValueError(f"{tool} requires an existing .py file inside the workspace")
+        script = python_script(tool, args)
         cwd_arg = str(args.get("cwd", "")).strip()
         cwd = safe_path(cwd_arg, must_exist=True) if cwd_arg else script.parent
         if tool == "python.syntax_check":
@@ -3917,6 +3974,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 request_id=request_id,
                 env=python_child_env(),
             )
+        require_approved_python_hash(script, args)
         argv_text = str(args.get("argv", "")).strip()
         extra = shlex.split(argv_text) if argv_text else []
         return run_process(
