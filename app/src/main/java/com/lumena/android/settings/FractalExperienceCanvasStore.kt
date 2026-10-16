@@ -69,6 +69,21 @@ object FractalExperienceCanvasCodec {
                 FractalExperienceCanvasPolicy.MAX_LANGUAGE_OBSERVATIONS
         )
 
+        // Stored, previously verified experience is historical data, not an
+        // execution request. Validate tool names against kernel-accepted
+        // built-in manifests, regardless of the owner's CURRENT module toggles.
+        // The live ToolRegistry deliberately excludes disabled modules, so
+        // using ToolRegistry.get() here falsely labeled valid history corrupt
+        // whenever an owner disabled Marketplace/MCP after using its tools.
+        // This whitelist only decodes history; ToolGate still consults the
+        // enabled registry for EVERY new execution.
+        val knownHistoricalTools =
+            com.lumena.android.agent.core.ToolRegistry.kernelToolNames() +
+                com.lumena.android.agent.core.ModuleRegistry
+                    .accept(com.lumena.android.agent.core.ModuleRegistry.all())
+                    .flatMap { module -> module.manifest.tools.map { it.spec.name } }
+                    .toSet()
+
         parsed.records.forEach { record ->
             require(record.id.length in 1..128)
             require(record.sourceTaskHash.length in 1..64)
@@ -105,11 +120,7 @@ object FractalExperienceCanvasCodec {
             require(record.contributorModelIds.size <= 16)
             require(record.updatedAt > 0)
             require(record.summary.length <= 900)
-            require(
-                record.tools.all {
-                    com.lumena.android.agent.core.ToolRegistry.get(it) != null
-                }
-            )
+            require(record.tools.all { it in knownHistoricalTools })
         }
 
         parsed.nodes.forEach { node ->

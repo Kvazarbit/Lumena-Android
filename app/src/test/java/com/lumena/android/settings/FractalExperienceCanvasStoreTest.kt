@@ -1,5 +1,9 @@
 package com.lumena.android.settings
 
+import com.lumena.android.agent.core.AgentDecision
+import com.lumena.android.agent.core.ModuleRegistry
+import com.lumena.android.agent.core.ToolRegistry
+import com.lumena.android.modules.MarketplaceModule
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -25,6 +29,68 @@ class FractalExperienceCanvasStoreTest {
         scopeHash = scope,
         outcomes = listOf(true, true)
     )
+
+    @Test
+    fun disabledModuleDoesNotMakePreviouslyVerifiedFractalHistoryCorrupt() {
+        // A historical verified marketplace.search is persisted while enabled.
+        // Turning the module off later must not invalidate this signed-off
+        // history, nor re-enable new marketplace calls through ToolRegistry.
+        val historical = FractalExampleRecord(
+            id = "historical-marketplace-search",
+            kind = CoordinatorExampleKind.VERIFIED_SEQUENCE,
+            sourceTaskHash = "previous-task",
+            tools = listOf("marketplace.search", "file.read"),
+            targets = listOf("query=local offers", "path=notes.txt"),
+            outcomes = listOf(true, true),
+            evidenceIds = listOf("e-marketplace-1"),
+            contributorModelIds = listOf("ollama:gemma"),
+            scopeHash = null,
+            updatedAt = 1_000L,
+            summary = "Previously verified marketplace source discovery"
+        )
+        val json = FractalExperienceCanvasCodec.encode(
+            FractalExperienceCanvasState(records = listOf(historical))
+        )
+
+        ModuleRegistry.withDisabled(setOf(MarketplaceModule.ID)) {
+            assertEquals(null, ToolRegistry.get("marketplace.search"))
+            val parsed = FractalExperienceCanvasCodec.decode(json)
+            assertEquals(1, parsed.records.size)
+            assertEquals(historical.tools, parsed.records.single().tools)
+            assertFalse(
+                ToolRegistry.validate(
+                    AgentDecision.ToolCall(
+                        "marketplace.search", mapOf("query" to "test")
+                    )
+                ).allowed
+            )
+        }
+    }
+
+    @Test
+    fun disablingModulesNeverMakesUnknownHistoricalToolsAcceptable() {
+        val unknown = FractalExampleRecord(
+            id = "unknown-in-history",
+            kind = CoordinatorExampleKind.VERIFIED_SEQUENCE,
+            sourceTaskHash = "previous-task",
+            tools = listOf("shell.exec"),
+            targets = emptyList(),
+            outcomes = listOf(true),
+            evidenceIds = listOf("e-unknown"),
+            contributorModelIds = emptyList(),
+            scopeHash = null,
+            updatedAt = 1_000L,
+            summary = "Unknown tool must remain invalid"
+        )
+        val json = FractalExperienceCanvasCodec.encode(
+            FractalExperienceCanvasState(records = listOf(unknown))
+        )
+        ModuleRegistry.withDisabled(setOf(MarketplaceModule.ID)) {
+            assertThrows(IllegalArgumentException::class.java) {
+                FractalExperienceCanvasCodec.decode(json)
+            }
+        }
+    }
 
     @Test
     fun codecRoundTripRebuildsDeterministicProjection() {
