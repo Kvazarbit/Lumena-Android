@@ -192,31 +192,47 @@ object CognitiveGenomePolicy {
             val sources = members.map { it.sourceTaskHash }
                 .distinct().sorted().take(64)
             if (failures.isNotEmpty()) {
-                negative += CognitivePrinciple(
-                    id = "cg0-negative-$hash",
-                    stage = if (successes.isNotEmpty()) CognitivePrincipleStage.CONTESTED
-                        else CognitivePrincipleStage.NEGATIVE_DEAD_END,
-                    codons = codons,
-                    mechanism = "Observed tool failure. Exact cause is not established by this trace.",
-                    condition = "The same scoped tool shape; re-check dependencies and target state",
-                    scopeHash = first.scopeHash,
-                    toolPattern = first.tools.joinToString(">"),
-                    evidenceIds = shared,
-                    sourceTaskHashes = sources,
-                    counterexampleRecordIds = (successes + failures).map { it.id }
-                        .distinct().sorted().take(64),
-                    observedSuccesses = successes.size,
-                    observedFailures = failures.size,
-                    failureClasses = failures.flatMap { it.failureClasses }
-                        .filterNotNull()
-                        .filter { it.matches(Regex("[A-Z0-9_]{1,80}")) }
-                        .distinct().sorted().take(8),
-                    dependencyFingerprints = failures.flatMap { it.dependencies }
-                        .filterNotNull()
-                        .filter(String::isNotBlank)
-                        .map { FractalExperienceCanvasPolicy.hash(it).take(16) }
-                        .distinct().sorted().take(8)
-                )
+                // A recovered multi-step sequence must not be mislabeled as
+                // an entirely bad route: identify each actually FAILED
+                // prefix independently. Different failed steps are different
+                // dead ends even when the full action shape is identical.
+                failures.groupBy { record ->
+                    record.outcomes.indexOfFirst { outcome -> !outcome }
+                }.toSortedMap().forEach { (failedIndex, failedAtStep) ->
+                    val failing = failedAtStep.first()
+                    val prefix = failing.tools.take(failedIndex + 1)
+                    val contested = successes.isNotEmpty()
+                    negative += CognitivePrinciple(
+                        id = "cg0-negative-$hash-$failedIndex",
+                        stage = if (contested) CognitivePrincipleStage.CONTESTED
+                            else CognitivePrincipleStage.NEGATIVE_DEAD_END,
+                        codons = if (contested) codons else atomsFor(prefix),
+                        mechanism = "Observed failed step/prefix; exact semantic cause is not proven.",
+                        condition = "The same scoped step and dependency state; inspect before retry",
+                        scopeHash = first.scopeHash,
+                        toolPattern = if (contested) first.tools.joinToString(">")
+                            else prefix.joinToString(">"),
+                        evidenceIds = (successes + failedAtStep)
+                            .flatMap { it.evidenceIds }
+                            .filter(String::isNotBlank)
+                            .distinct().sorted().take(64),
+                        sourceTaskHashes = (successes + failedAtStep)
+                            .map { it.sourceTaskHash }.distinct().sorted().take(64),
+                        counterexampleRecordIds = (successes + failedAtStep)
+                            .map { it.id }.distinct().sorted().take(64),
+                        observedSuccesses = successes.size,
+                        observedFailures = failedAtStep.size,
+                        failureClasses = failedAtStep
+                            .mapNotNull { it.failureClasses.getOrNull(failedIndex) }
+                            .filter { it.matches(Regex("[A-Z0-9_]{1,80}")) }
+                            .distinct().sorted().take(8),
+                        dependencyFingerprints = failedAtStep
+                            .mapNotNull { it.dependencies.getOrNull(failedIndex) }
+                            .filter(String::isNotBlank)
+                            .map { FractalExperienceCanvasPolicy.hash(it).take(16) }
+                            .distinct().sorted().take(8)
+                    )
+                }
             } else if (successes.isNotEmpty()) {
                 positive += CognitivePrinciple(
                     id = "cg0-positive-$hash",
