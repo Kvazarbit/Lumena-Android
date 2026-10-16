@@ -49,6 +49,9 @@ import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.core.ToolRegistry
 import com.lumena.android.agent.core.ToolRisk
+import com.lumena.android.agent.core.PythonApprovalLedger
+import com.lumena.android.agent.core.PythonRunApproval
+import com.lumena.android.agent.local.PythonRunPreflight
 import com.lumena.android.agent.local.TermuxBridgeClient
 import com.lumena.android.agent.local.ToolGate
 import com.lumena.android.agent.local.ToolRequest
@@ -87,6 +90,10 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
     var grantPython by remember { mutableStateOf(false) }
     var grantPaths by remember { mutableStateOf("") }
     var resultExpanded by remember { mutableStateOf(false) }
+    // python.run Run once: the script check shown in the card (by fingerprint)
+    // and the versions already run once per task, for a diff.
+    var pythonCheck by remember { mutableStateOf<Pair<String, PythonRunPreflight>?>(null) }
+    var pythonApprovals by remember { mutableStateOf(PythonApprovalLedger()) }
     SideEffect { StateVault.companionBusy = busy }
     var handoffDraft by remember { mutableStateOf(CompanionHandoffStore.load(context)) }
 
@@ -215,7 +222,11 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
         return taskGrant?.allows(command, connection.bridgeUrl, connection.bridgeToken) == true
     }
 
-    fun executeCommand(command: CompanionCommand, automatic: Boolean) {
+    fun executeCommand(
+        command: CompanionCommand,
+        automatic: Boolean,
+        shownPython: PythonRunPreflight? = null
+    ) {
         if (StateVault.restoring || StateVault.startupError != null) return
         if (!CompanionRequestLifecycle.shouldAccept(
                 fingerprint = command.fingerprint,
@@ -267,7 +278,18 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
 
         scope.launch {
             val result = try {
-                TermuxBridgeClient(bridgeUrl, token, context).execute(plan.request)
+                val client = TermuxBridgeClient(bridgeUrl, token, context)
+                if (PythonRunApproval.applies(plan.request.tool)) {
+                    // automatic python.run only comes from a task grant with allowPython.
+                    CompanionPythonApproval.execute(
+                        client,
+                        plan.request,
+                        if (automatic) CompanionPythonApproval.Mode.Grant
+                        else CompanionPythonApproval.Mode.Manual(shownPython)
+                    )
+                } else {
+                    client.execute(plan.request)
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -484,7 +506,7 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
         acceptDetected(command)
     }
 
-    fun runDetected() {
+    fun runDetected(shownPython: PythonRunPreflight? = null) {
         val command = detected ?: return
         if (!CompanionRequestLifecycle.shouldAccept(
                 fingerprint = command.fingerprint,
@@ -496,7 +518,10 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
             if (command.fingerprint == handledFingerprint) detected = null
             return
         }
-        executeCommand(command, automatic = false)
+        (shownPython as? PythonRunPreflight.Bound)?.let {
+            pythonApprovals = pythonApprovals.record(command.taskId ?: command.fingerprint, it.preview)
+        }
+        executeCommand(command, automatic = false, shownPython = shownPython)
     }
 
     LaunchedEffect(safeAuto, token, bridgeUrl, taskGrant) {
@@ -727,12 +752,39 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
             val readOnly = plan.allowed &&
                 ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
             val autoEligible = (safeAuto && readOnly) || grantAllows(command)
+            // Run once for python.run shows the script bytes its hash binds.
+            val python = plan.allowed && !autoEligible && PythonRunApproval.applies(plan.request.tool)
+            if (python) {
+                LaunchedEffect(command.fingerprint, bridgeUrl, token) {
+                    pythonCheck = null
+                    val checked = try {
+                        PythonRunPreflight.prepare(TermuxBridgeClient(bridgeUrl, token, context), plan.request)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        PythonRunPreflight.Refused(
+                            "Не вдалося отримати вміст скрипту: ${error::class.simpleName}: ${error.message}"
+                        )
+                    }
+                    pythonCheck = command.fingerprint to checked
+                }
+            }
+            val pythonShown = pythonCheck?.takeIf { it.first == command.fingerprint }?.second
 
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(plan.request.tool, style = MaterialTheme.typography.titleMedium)
                     Text(plan.reason)
                     Text("Args: ${plan.request.args}", style = MaterialTheme.typography.bodySmall)
+                    if (python) {
+                        val previous = (pythonShown as? PythonRunPreflight.Bound)?.let {
+                            pythonApprovals.previous(command.taskId ?: command.fingerprint, it.preview.script)
+                        }
+                        Text(
+                            CompanionPythonApproval.cardText(pythonShown, previous),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
                     Text(
                         when {
                             !plan.allowed -> "BLOCKED by tool registry"
@@ -743,8 +795,8 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
                     )
                     if (!autoEligible) {
                         Button(
-                            enabled = !busy && plan.allowed,
-                            onClick = { runDetected() }
+                            enabled = !busy && plan.allowed && (!python || pythonShown != null),
+                            onClick = { runDetected(pythonShown) }
                         ) {
                             Text(if (busy) "Working…" else "Run once")
                         }
@@ -768,7 +820,7 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
                                 Switch(checked = grantPython, onCheckedChange = { grantPython = it })
                                 Text("Автоматично запускати Python-скрипти з переліку")
                             }
-                            Text("Python виконується з правами Termux і може звертатися поза цими файлами. Перелік обмежує вибір скрипта, а не його дії.", style = MaterialTheme.typography.bodySmall)
+                            Text("Python виконується з правами Termux і може звертатися поза цими файлами. Перелік обмежує вибір скрипта, а не його дії. Вміст кожної версії скрипту перед автозапуском тобі не показується.", style = MaterialTheme.typography.bodySmall)
                             Button(enabled = !busy, onClick = {
                                 val connection = LumenaPreferences.load(context)
                                 val grant = CompanionTaskGrant.create(command, grantPaths,

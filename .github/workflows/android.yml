@@ -346,6 +346,7 @@ jobs:
               "com.lumena.android.ollama.WorkflowRunnerTrustGateTest",
               "com.lumena.android.agent.core.PythonRunApprovalTest",
               "com.lumena.android.ollama.WorkflowRunnerPythonApprovalTest",
+              "com.lumena.android.companion.CompanionPythonApprovalTest",
           ]
           total = 0
           for name in checks:

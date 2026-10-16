@@ -21,6 +21,7 @@ import com.lumena.android.agent.core.TrustGate
 import com.lumena.android.agent.core.TaskIntentRouter
 import com.lumena.android.agent.core.ShortTurnCue
 import com.lumena.android.agent.local.PlannedTool
+import com.lumena.android.agent.local.PythonRunPreflight
 import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.CauseProbeExecutionIntent
 import com.lumena.android.agent.local.OutcomePrediction
@@ -556,7 +557,7 @@ class WorkflowRunner(
                     // their sha256 travels in the request the bridge checks.
                     val python =
                         if (PythonRunApproval.applies(planned.request.tool)) {
-                            preparePythonRun(planned.request)
+                            PythonRunPreflight.prepare(bridge, planned.request)
                         } else {
                             null
                         }
@@ -788,7 +789,7 @@ class WorkflowRunner(
                 if (preview == null || pending.plan.request.args[PythonRunApproval.HASH_ARG] != preview.sha256) {
                     PythonRunApproval.MISSING_PREVIEW_MESSAGE
                 } else {
-                    pythonHashRefusal(localBridge)
+                    PythonRunPreflight.bridgeRefusal(localBridge)
                 }
             if (refusal != null) {
                 val stopped = pending.control.copy(
@@ -1208,58 +1209,6 @@ class WorkflowRunner(
         )
         return if (taint == kernel.taint) state
         else state.copy(task = state.task.copy(kernel = kernel.copy(taint = taint)))
-    }
-
-    private sealed interface PythonRunPreflight {
-        data class Bound(val request: ToolRequest, val preview: PythonScriptPreview) : PythonRunPreflight
-        /** python.run never started; the model sees it as a failed tool call. */
-        data class NotStarted(val result: ToolResult) : PythonRunPreflight
-        /** The owner must act (update or reach the bridge); the task stops. */
-        data class Refused(val message: String) : PythonRunPreflight
-    }
-
-    /** Null when the bridge advertises the sha256 check, else why python.run is blocked. */
-    private suspend fun pythonHashRefusal(localBridge: ToolExecutor): String? {
-        val health = localBridge.execute(ToolRequest("health"))
-        return when {
-            !health.ok ->
-                "python.run заблоковано: не вдалося перевірити Termux bridge (${health.error ?: "health failed"})."
-            PythonRunApproval.bridgeSupports(health.stdout) -> null
-            else -> PythonRunApproval.BRIDGE_UPDATE_MESSAGE
-        }
-    }
-
-    private suspend fun preparePythonRun(request: ToolRequest): PythonRunPreflight {
-        val localBridge = bridge
-            ?: return PythonRunPreflight.Refused("Bridge token is required for ${request.tool}")
-        pythonHashRefusal(localBridge)?.let { return PythonRunPreflight.Refused(it) }
-        val result = localBridge.execute(
-            ToolRequest(PythonRunApproval.PREVIEW_TOOL, PythonRunApproval.previewArgs(request.args))
-        )
-        if (!result.ok) {
-            return PythonRunPreflight.NotStarted(
-                ToolResult(
-                    ok = false,
-                    tool = request.tool,
-                    stderr = result.stderr,
-                    error = "python.run не запускався: не вдалося прочитати скрипт для підтвердження: " +
-                        (result.error ?: "python.preview failed"),
-                    errorCode = result.errorCode,
-                    failureClass = result.failureClass,
-                    retryable = result.retryable,
-                    dependency = result.dependency
-                )
-            )
-        }
-        val preview = PythonRunApproval.parsePreview(result.stdout)
-            ?: return PythonRunPreflight.Refused(
-                "python.run заблоковано: bridge повернув некоректний python.preview. " +
-                    PythonRunApproval.BRIDGE_UPDATE_MESSAGE
-            )
-        return PythonRunPreflight.Bound(
-            request.copy(args = PythonRunApproval.bind(request.args, preview)),
-            preview
-        )
     }
 
     private fun markInFlight(state: AgentControlState, request: ToolRequest): AgentControlState = state.copy(

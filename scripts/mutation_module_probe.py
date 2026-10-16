@@ -84,6 +84,9 @@ MUTANTS = (
      "python:test_python_run_hash.py"),
     ("python-run-unbound-approval", CORE / "PythonRunApproval.kt",
      "args + (HASH_ARG to preview.sha256)", "args", "*PythonRunApprovalTest"),
+    ("companion-python-incoming-hash", Path("app/src/main/java/com/lumena/android/companion/CompanionPythonApproval.kt"),
+     "request.copy(args = PythonRunApproval.bind(request.args, check.preview))", "request",
+     "*CompanionPythonApprovalTest"),
 )
 
 
