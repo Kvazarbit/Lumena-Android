@@ -27,6 +27,9 @@ data class PythonApprovalLedger(
     fun previous(taskId: String, script: String): PythonScriptPreview? =
         approved[key(taskId, script)]
 
+    /** Red-test stub: the per-task set of approved hashes lands in the next commit. */
+    fun approved(taskId: String, script: String, sha256: String): Boolean = true
+
     fun record(taskId: String, preview: PythonScriptPreview): PythonApprovalLedger {
         val key = key(taskId, preview.script)
         val updated = (approved - key) + (key to preview)

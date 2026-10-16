@@ -1,7 +1,9 @@
 package com.lumena.android.companion
 
+import com.lumena.android.agent.core.PythonApprovalLedger
 import com.lumena.android.agent.core.PythonRunApproval
 import com.lumena.android.agent.core.PythonScriptPreview
+import com.lumena.android.agent.local.PlannerDecision
 import com.lumena.android.agent.local.PythonRunPreflight
 import com.lumena.android.agent.local.ToolExecutor
 import com.lumena.android.agent.local.ToolRequest
@@ -10,6 +12,7 @@ import java.security.MessageDigest
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -23,6 +26,7 @@ class CompanionPythonApprovalTest {
     private val v1 = "print('report v1')\n"
     private val v2 = "print('report v1')\nimport os\nos.remove('data.db')\n"
     private val forged = "0".repeat(64)
+    private val key = "task:session-1\u0000task-1"
     private val incoming = ToolRequest(
         "python.run",
         mapOf("script" to script, PythonRunApproval.HASH_ARG to forged)
@@ -110,20 +114,94 @@ class CompanionPythonApprovalTest {
     }
 
     @Test
-    fun taskGrantBindsTheCurrentFileAndIgnoresTheIncomingHash() = runBlocking {
-        val bridge = FakeBridge(v2)
+    fun taskGrantAutoRunsOnlyAVersionTheOwnerAlreadyRanOnce() = runBlocking {
+        val bridge = FakeBridge(v1)
+        // The owner saw v1 in the card and pressed Run once.
+        val shownV1 = PythonRunPreflight.prepare(bridge, incoming) as PythonRunPreflight.Bound
+        CompanionPythonApproval.execute(bridge, incoming, CompanionPythonApproval.Mode.Manual(shownV1))
+        val ledger = PythonApprovalLedger().record(key, shownV1.preview)
+        bridge.calls.clear()
 
-        val result = CompanionPythonApproval.execute(bridge, incoming, CompanionPythonApproval.Mode.Grant)
+        // ChatGPT rewrites the script under the same path.
+        bridge.content = v2
+        val checkV2 = PythonRunPreflight.prepare(bridge, incoming)
+        assertFalse(CompanionPythonApproval.grantMayProceed(checkV2, ledger, key))
+        val unseen = CompanionPythonApproval.execute(
+            bridge, incoming, CompanionPythonApproval.Mode.Grant(checkV2, ledger, key)
+        )
+        assertFalse(unseen.ok)
+        assertFalse(unseen.outcomeUnknown)
+        assertTrue("an unseen version reached the bridge", bridge.pythonRuns().isEmpty())
+        val card = CompanionPythonApproval.cardText(checkV2, ledger.previous(key, script))
+        assertTrue(card, card.lines().any { it == "+ os.remove('data.db')" })
 
-        assertTrue(result.ok)
-        assertEquals(sha256(v2), bridge.pythonRuns().single().args[PythonRunApproval.HASH_ARG])
+        // The version already run once still runs under the grant, with its own hash.
+        bridge.content = v1
+        val checkV1 = PythonRunPreflight.prepare(bridge, incoming)
+        assertTrue(CompanionPythonApproval.grantMayProceed(checkV1, ledger, key))
+        val ran = CompanionPythonApproval.execute(
+            bridge, incoming, CompanionPythonApproval.Mode.Grant(checkV1, ledger, key)
+        )
+        assertTrue(ran.ok)
+        assertEquals(sha256(v1), bridge.pythonRuns().single().args[PythonRunApproval.HASH_ARG])
     }
 
     @Test
-    fun taskGrantAgainstAnOldBridgeIsRefusedWithoutReadingOrRunning() = runBlocking {
-        val bridge = FakeBridge(v1, features = OLD_FEATURES)
+    fun taskGrantWithoutARunOnceInThisTaskNeedsTheCard() = runBlocking {
+        val bridge = FakeBridge(v1)
+        val check = PythonRunPreflight.prepare(bridge, incoming) as PythonRunPreflight.Bound
+        val otherTask = PythonApprovalLedger().record("task:session-1\u0000task-2", check.preview)
 
-        val result = CompanionPythonApproval.execute(bridge, incoming, CompanionPythonApproval.Mode.Grant)
+        for (ledger in listOf(PythonApprovalLedger(), otherTask)) {
+            assertFalse(CompanionPythonApproval.grantMayProceed(check, ledger, key))
+            CompanionPythonApproval.execute(bridge, incoming, CompanionPythonApproval.Mode.Grant(check, ledger, key))
+        }
+        assertFalse(CompanionPythonApproval.grantMayProceed(null, PythonApprovalLedger().record(key, check.preview), key))
+        assertTrue(bridge.pythonRuns().isEmpty())
+    }
+
+    @Test
+    fun ledgerKeepsEveryVersionRunOnceInTheTask() {
+        val ledger = PythonApprovalLedger().record(key, preview(v1)).record(key, preview(v2))
+
+        assertTrue(ledger.approved(key, script, sha256(v1)))
+        assertTrue(ledger.approved(key, script, sha256(v2)))
+        assertFalse(ledger.approved(key, script, sha256("print('v3')\n")))
+        assertFalse(ledger.approved(key, "tools/other.py", sha256(v1)))
+        assertFalse(ledger.approved("task:session-2\u0000task-1", script, sha256(v1)))
+        assertEquals(preview(v2), ledger.previous(key, script))
+    }
+
+    @Test
+    fun taskKeySeparatesSessionsAndSingleCommands() {
+        fun command(session: String?, task: String?, fingerprint: String) = CompanionCommand(
+            decision = PlannerDecision(incoming, "fixture"),
+            rawJson = "{}",
+            fingerprint = fingerprint,
+            sessionId = session,
+            taskId = task
+        )
+
+        assertEquals(key, CompanionPythonApproval.taskKey(command("session-1", "task-1", "a")))
+        assertEquals(key, CompanionPythonApproval.taskKey(command("session-1", "task-1", "b")))
+        assertNotEquals(key, CompanionPythonApproval.taskKey(command("session-2", "task-1", "a")))
+        assertNotEquals(
+            CompanionPythonApproval.taskKey(command(null, null, "a")),
+            CompanionPythonApproval.taskKey(command(null, null, "b"))
+        )
+    }
+
+    @Test
+    fun taskGrantAgainstAnOldBridgeOnlyReturnsTheRefusal() = runBlocking {
+        val bridge = FakeBridge(v1, features = OLD_FEATURES)
+        val check = PythonRunPreflight.prepare(bridge, incoming)
+        val ledger = PythonApprovalLedger().record(key, preview(v1))
+
+        // Nothing would run, so the refusal may go back to ChatGPT without a click.
+        assertTrue(CompanionPythonApproval.grantMayProceed(check, ledger, key))
+        val result = CompanionPythonApproval.execute(
+            bridge, incoming, CompanionPythonApproval.Mode.Grant(check, ledger, key)
+        )
 
         assertFalse(result.ok)
         assertFalse(result.outcomeUnknown)
@@ -134,8 +212,12 @@ class CompanionPythonApprovalTest {
     @Test
     fun taskGrantWithAMissingScriptReturnsTheErrorWithoutRunning() = runBlocking {
         val bridge = FakeBridge(v1, previewError = "FileNotFoundError: /workspace/tools/report.py")
+        val check = PythonRunPreflight.prepare(bridge, incoming)
 
-        val result = CompanionPythonApproval.execute(bridge, incoming, CompanionPythonApproval.Mode.Grant)
+        assertTrue(CompanionPythonApproval.grantMayProceed(check, PythonApprovalLedger(), key))
+        val result = CompanionPythonApproval.execute(
+            bridge, incoming, CompanionPythonApproval.Mode.Grant(check, PythonApprovalLedger(), key)
+        )
 
         assertFalse(result.ok)
         assertTrue(result.error.orEmpty(), result.error.orEmpty().contains("FileNotFoundError"))

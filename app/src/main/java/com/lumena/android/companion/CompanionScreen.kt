@@ -284,8 +284,15 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
                     CompanionPythonApproval.execute(
                         client,
                         plan.request,
-                        if (automatic) CompanionPythonApproval.Mode.Grant
-                        else CompanionPythonApproval.Mode.Manual(shownPython)
+                        if (automatic) {
+                            CompanionPythonApproval.Mode.Grant(
+                                shownPython,
+                                pythonApprovals,
+                                CompanionPythonApproval.taskKey(command)
+                            )
+                        } else {
+                            CompanionPythonApproval.Mode.Manual(shownPython)
+                        }
                     )
                 } else {
                     client.execute(plan.request)
@@ -519,7 +526,7 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
             return
         }
         (shownPython as? PythonRunPreflight.Bound)?.let {
-            pythonApprovals = pythonApprovals.record(command.taskId ?: command.fingerprint, it.preview)
+            pythonApprovals = pythonApprovals.record(CompanionPythonApproval.taskKey(command), it.preview)
         }
         executeCommand(command, automatic = false, shownPython = shownPython)
     }
@@ -778,7 +785,7 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
                     Text("Args: ${plan.request.args}", style = MaterialTheme.typography.bodySmall)
                     if (python) {
                         val previous = (pythonShown as? PythonRunPreflight.Bound)?.let {
-                            pythonApprovals.previous(command.taskId ?: command.fingerprint, it.preview.script)
+                            pythonApprovals.previous(CompanionPythonApproval.taskKey(command), it.preview.script)
                         }
                         Text(
                             CompanionPythonApproval.cardText(pythonShown, previous),

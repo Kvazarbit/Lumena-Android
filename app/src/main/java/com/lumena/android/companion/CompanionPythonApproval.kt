@@ -1,5 +1,6 @@
 package com.lumena.android.companion
 
+import com.lumena.android.agent.core.PythonApprovalLedger
 import com.lumena.android.agent.core.PythonRunApproval
 import com.lumena.android.agent.core.PythonScriptPreview
 import com.lumena.android.agent.core.TaskTaint
@@ -21,15 +22,22 @@ object CompanionPythonApproval {
         /** Run once: only the version shown in the card ([check] from [PythonRunPreflight.prepare]). */
         data class Manual(val check: PythonRunPreflight?) : Mode
 
-        /**
-         * Task grant with allowPython. The owner pre-approved Python for this
-         * task without seeing each version of the script: the app binds
-         * whatever the file holds right now, so here the hash only stops a
-         * swap between this read and the bridge starting python. It is not a
-         * per-version owner approval.
-         */
-        object Grant : Mode
+        /** Red-test stub: still runs the current file; the seen-version rule lands next. */
+        data class Grant(
+            val check: PythonRunPreflight?,
+            val ledger: PythonApprovalLedger,
+            val taskKey: String
+        ) : Mode
     }
+
+    /** Ledger key for one Companion task (session + task), or for a single command. */
+    fun taskKey(command: CompanionCommand): String =
+        if (command.taskId.isNullOrBlank()) "command:${command.fingerprint}"
+        else "task:${command.sessionId.orEmpty()}\u0000${command.taskId}"
+
+    /** Red-test stub. */
+    fun grantMayProceed(check: PythonRunPreflight?, ledger: PythonApprovalLedger, taskKey: String): Boolean =
+        check != null
 
     fun cardText(check: PythonRunPreflight?, previous: PythonScriptPreview?): String = when (check) {
         null -> "Отримую вміст скрипту з bridge…"
@@ -51,7 +59,7 @@ object CompanionPythonApproval {
                     request.copy(args = PythonRunApproval.bind(request.args, check.preview))
                 }
             }
-            Mode.Grant -> when (val prepared = PythonRunPreflight.prepare(executor, request)) {
+            is Mode.Grant -> when (val prepared = PythonRunPreflight.prepare(executor, request)) {
                 is PythonRunPreflight.Bound -> prepared.request
                 is PythonRunPreflight.NotStarted -> return prepared.result
                 is PythonRunPreflight.Refused -> return refused(request, prepared.message)
