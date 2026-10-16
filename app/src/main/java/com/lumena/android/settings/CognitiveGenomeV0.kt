@@ -157,17 +157,32 @@ object CognitiveGenomePolicy {
 
     fun derive(state: FractalExperienceCanvasState): List<CognitivePrinciple> {
         // Only historical tool receipts with shape-consistent outcomes.
+        // Validate against the STABLE accepted manifests, not the current
+        // enabled-modules list. Disabled modules are valid historical sources
+        // but cannot be executed through the live ToolGate.
+        val knownHistoricalTools =
+            com.lumena.android.agent.core.ToolRegistry.kernelToolNames() +
+                com.lumena.android.agent.core.ModuleRegistry
+                    .accept(com.lumena.android.agent.core.ModuleRegistry.all())
+                    .flatMap { module -> module.manifest.tools.map { it.spec.name } }
+                    .toSet()
         val records = state.records.filter {
             it.tools.isNotEmpty() &&
                 it.tools.size == it.outcomes.size &&
-                it.evidenceIds.isNotEmpty()
+                it.evidenceIds.isNotEmpty() &&
+                it.tools.all { name -> name in knownHistoricalTools } &&
+                (it.kind != CoordinatorExampleKind.FAILED_RECOVERY ||
+                    it.outcomes.any { outcome -> !outcome })
         }
         val grouped = records.groupBy(::shapeKey)
         val positive = mutableListOf<CognitivePrinciple>()
         val negative = mutableListOf<CognitivePrinciple>()
 
         grouped.toSortedMap().forEach { (shape, members) ->
-            val successes = members.filter { it.outcomes.all { outcome -> outcome } }
+            val successes = members.filter {
+                it.kind == CoordinatorExampleKind.VERIFIED_SEQUENCE &&
+                    it.outcomes.all { outcome -> outcome }
+            }
             val failures = members.filter { it.outcomes.any { outcome -> !outcome } }
             val first = members.first()
             val hash = FractalExperienceCanvasPolicy.hash(shape).take(20)
