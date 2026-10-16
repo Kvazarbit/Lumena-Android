@@ -189,7 +189,13 @@ data class DiagnosticFractalExperienceView(
     val userValueRecords: Int = 0,
     val userValueActive: Int = 0,
     val userValueAudit: List<String> = emptyList(),
-    val userValueCandidates: List<String> = emptyList()
+    val userValueCandidates: List<String> = emptyList(),
+    val genomeContracts: Int = 0,
+    val genomePositiveCandidates: Int = 0,
+    val genomeNegativeDeadEnds: Int = 0,
+    val genomeRecoveryCandidates: Int = 0,
+    val genomeContested: Int = 0,
+    val genomeIndependentGoalProofs: Int = 0
 )
 
 data class LumenaDiagnosticInput(
@@ -916,6 +922,24 @@ object LumenaDiagnosticFormatter {
             appendLine("laya_execution_authority=false")
             appendLine()
 
+            appendLine("[COGNITIVE_GENOME_V0]")
+            appendLine("codec=CG0 four_atoms=O,H,A,V")
+            appendLine("source=fractal_canvas_read_only_projection")
+            appendLine("authority=advisory_only")
+            appendLine("automatic_kernel_promotion=false")
+            appendLine("universal_success_claim=false")
+            if (fractal.error.isNotBlank()) {
+                appendLine("state=UNAVAILABLE_DUE_TO_FRACTAL_ERROR")
+            } else {
+                appendLine("kernel_contracts=" + fractal.genomeContracts)
+                appendLine("positive_tool_candidates=" + fractal.genomePositiveCandidates)
+                appendLine("negative_dead_ends=" + fractal.genomeNegativeDeadEnds)
+                appendLine("recovery_candidates=" + fractal.genomeRecoveryCandidates)
+                appendLine("contested=" + fractal.genomeContested)
+                appendLine("independent_goal_proofs=" + fractal.genomeIndependentGoalProofs)
+            }
+            appendLine()
+
             appendLine("[E2E_FACTS]")
             appendLine(
                 "verified_project_applications=" +
@@ -1294,6 +1318,12 @@ object LumenaDiagnosticReport {
                     stats.userValueRecords,
                 userValueActive =
                     stats.userValueActive,
+                genomeContracts = stats.genomeContracts,
+                genomePositiveCandidates = stats.genomePositiveCandidates,
+                genomeNegativeDeadEnds = stats.genomeNegativeDeadEnds,
+                genomeRecoveryCandidates = stats.genomeRecoveryCandidates,
+                genomeContested = stats.genomeContested,
+                genomeIndependentGoalProofs = stats.genomeIndependentGoalProofs,
                 userValueAudit =
                     FractalExperienceCanvasStore
                         .activeUserValueWeights(
