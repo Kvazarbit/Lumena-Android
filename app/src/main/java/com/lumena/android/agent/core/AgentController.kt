@@ -1095,9 +1095,28 @@ class AgentController(
                         "\\\""
                 ).containsMatchIn(trimmed)
             }
+        // Gemma sometimes prefixes a genuine tool proposal with prose and
+        // expect_ok/confidence annotations, e.g.:
+        // "Зараз відкриваю файл. expect_ok: true confidence: 1.0
+        //  {"file.read": {"path": "example.py"}}"
+        // This is NOT an executable request: only a standalone validated
+        // protocol object may pass through ToolRegistry and ToolGate.
+        val embeddedAnnotatedToolProposal =
+            (trimmed.contains("expect_ok", ignoreCase = true) ||
+                trimmed.contains("confidence:", ignoreCase = true)) &&
+                ToolRegistry.all().any { spec ->
+                    Regex(
+                        Regex.escape("\"") +
+                            Regex.escape(spec.name) +
+                            Regex.escape("\"") +
+                            "\\s*:\\s*\\{",
+                        RegexOption.IGNORE_CASE
+                    ).containsMatchIn(trimmed)
+                }
         val looksLikeBrokenProtocol =
             hasProtocolJsonShape ||
                 embeddedRegisteredRequest ||
+                embeddedAnnotatedToolProposal ||
                 (trimmed.startsWith("{") && Regex("\"[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\"\\s*:").containsMatchIn(trimmed)) ||
                 trimmed.contains("<tool_call>", ignoreCase = true)
 
@@ -1121,8 +1140,22 @@ class AgentController(
                 ).containsMatchIn(trimmed)
             }
         val lowerReply = trimmed.lowercase()
-        val unexecutedActionClaim =
+        // A planned file read is not an answer, even if the model mentions
+        // a filename rather than spelling the registered file.read tool.
+        // In particular, do not mark a one-word GENERAL goal DONE simply
+        // because the model says "Зараз відкриваю ...".
+        val pendingFileReadPromise =
             !state.toolUsed &&
+                Regex(
+                    "(?iu)(?:зараз|тепер)\\s+" +
+                        "(?:відкриваю|відкрию|прочитаю|читаю|перегляну|переглядаю)"
+                ).containsMatchIn(trimmed) &&
+                (registeredToolMention ||
+                    Regex("(?iu)[a-z0-9_.-]+\\.(?:py|kt|java|js|html|json|md)")
+                        .containsMatchIn(trimmed))
+        val unexecutedActionClaim =
+            pendingFileReadPromise ||
+                (!state.toolUsed &&
                 registeredToolMention &&
                 listOf(
                     "я запущ",
@@ -1143,7 +1176,7 @@ class AgentController(
                     "zaraz uruchom",
                     "sprawdzę",
                     "sprawdze"
-                ).any(lowerReply::contains)
+                ).any(lowerReply::contains))
         if (unexecutedActionClaim) {
             return protocolRetry(
                 state,
