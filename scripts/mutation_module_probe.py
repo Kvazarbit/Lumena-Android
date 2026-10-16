@@ -78,6 +78,12 @@ MUTANTS = (
      '            _execution_timeout(args.get("timeout"), DEFAULT_TIMEOUT),\n'
      '            request_id=request_id,\n',
      "python:test_python_child_env.py"),
+    # python.run approval bound to the script bytes (sha256).
+    ("python-run-stale-hash", Path("termux/bridge.py"),
+     "if current != approved:", "if False:",
+     "python:test_python_run_hash.py"),
+    ("python-run-unbound-approval", CORE / "PythonRunApproval.kt",
+     "args + (HASH_ARG to preview.sha256)", "args", "*PythonRunApprovalTest"),
 )
 
 

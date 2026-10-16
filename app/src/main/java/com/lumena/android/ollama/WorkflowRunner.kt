@@ -13,6 +13,7 @@ import com.lumena.android.agent.core.ReflexRuntimeAdvice
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.core.EffectiveTaskPolicyCompiler
+import com.lumena.android.agent.core.PythonRunApproval
 import com.lumena.android.agent.core.PythonScriptPreview
 import com.lumena.android.agent.core.ToolRegistry
 import com.lumena.android.agent.core.ToolRisk
@@ -497,7 +498,7 @@ class WorkflowRunner(
                     }
 
                     val requestId = buildRequestId(state)
-                    val planned = ToolGate.plan(
+                    var planned = ToolGate.plan(
                         PlannerDecision(
                             request = ToolRequest(
                                 tool = instruction.call.tool,
@@ -551,16 +552,49 @@ class WorkflowRunner(
                         )
                     }
 
+                    // python.run: the owner approves the script bytes, and
+                    // their sha256 travels in the request the bridge checks.
+                    val python =
+                        if (PythonRunApproval.applies(planned.request.tool)) {
+                            preparePythonRun(planned.request)
+                        } else {
+                            null
+                        }
+                    if (python is PythonRunPreflight.Refused) {
+                        val stopped = state.copy(
+                            task = state.task.copy(
+                                status = TaskStatus.FAILED,
+                                errors = (state.task.errors + python.message).takeLast(8)
+                            )
+                        )
+                        publish(stopped, onState)
+                        onProgress("STOP\n${python.message}")
+                        return WorkflowOutcome.Failed(python.message, current, stopped)
+                    }
+                    if (python is PythonRunPreflight.Bound) {
+                        planned = planned.copy(request = python.request)
+                        onProgress(
+                            "PYTHON PREVIEW · ${python.preview.script} · " +
+                                "${python.preview.sizeBytes} B · sha256 ${python.preview.sha256.take(16)}"
+                        )
+                    }
+                    val notStarted = (python as? PythonRunPreflight.NotStarted)?.result
+
                     onProgress(toolCallTrace(planned))
                     planned.trustReview?.let(onProgress)
                     val assistantToolMessage = OllamaMessage("assistant", reply.take(12_000))
                     val toolHistory = current + assistantToolMessage
 
                     // The controller decides by tool risk; ToolGate adds the
-                    // Trust Gate for egress after untrusted content.
+                    // Trust Gate for egress after untrusted content. A
+                    // python.run whose script could not be read has nothing
+                    // to show the owner and goes back to the model instead.
                     val requiresConfirmation =
-                        instruction.requiresConfirmation ||
-                            planned.requiresConfirmation
+                        notStarted == null && (
+                            instruction.requiresConfirmation ||
+                                planned.requiresConfirmation ||
+                                python is PythonRunPreflight.Bound
+                            )
                     val approvedForTask =
                         requiresConfirmation &&
                             isApprovedForTask(state.task.id, planned.request)
@@ -573,7 +607,8 @@ class WorkflowRunner(
                             plan = planned,
                             history = toolHistory,
                             control = state,
-                            images = collectedImages.toList()
+                            images = collectedImages.toList(),
+                            pythonPreview = (python as? PythonRunPreflight.Bound)?.preview
                         )
                         publish(state, onState)
                         return WorkflowOutcome.NeedsConfirmation(pending)
@@ -589,11 +624,14 @@ class WorkflowRunner(
                         state
                     )
 
-                    onProgress("TOOL RUNNING · ${planned.request.tool}")
+                    onProgress(
+                        if (notStarted == null) "TOOL RUNNING · ${planned.request.tool}"
+                        else "TOOL NOT STARTED · ${planned.request.tool} · ${notStarted.error.orEmpty().take(300)}"
+                    )
                     state = markInFlight(state, planned.request)
                     publish(state, onState)
                     val startedNs = System.nanoTime()
-                    val rawResult = executeWithTelemetry(
+                    val rawResult = notStarted ?: executeWithTelemetry(
                         localBridge,
                         planned.request,
                         onToolTelemetry
@@ -741,6 +779,29 @@ class WorkflowRunner(
             pending.history,
             pending.control
         )
+
+        // The bridge may have been replaced since the dialog opened; an old
+        // one would ignore approved_sha256 and run whatever the file holds.
+        if (PythonRunApproval.applies(pending.plan.request.tool)) {
+            val preview = pending.pythonPreview
+            val refusal =
+                if (preview == null || pending.plan.request.args[PythonRunApproval.HASH_ARG] != preview.sha256) {
+                    PythonRunApproval.MISSING_PREVIEW_MESSAGE
+                } else {
+                    pythonHashRefusal(localBridge)
+                }
+            if (refusal != null) {
+                val stopped = pending.control.copy(
+                    task = pending.control.task.copy(
+                        status = TaskStatus.FAILED,
+                        errors = (pending.control.task.errors + refusal).takeLast(8)
+                    )
+                )
+                publish(stopped, onState)
+                onProgress("STOP\n$refusal")
+                return WorkflowOutcome.Failed(refusal, pending.history, stopped)
+            }
+        }
 
         onProgress(toolCallTrace(pending.plan))
         onProgress("TOOL RUNNING · ${pending.plan.request.tool}")
@@ -1147,6 +1208,58 @@ class WorkflowRunner(
         )
         return if (taint == kernel.taint) state
         else state.copy(task = state.task.copy(kernel = kernel.copy(taint = taint)))
+    }
+
+    private sealed interface PythonRunPreflight {
+        data class Bound(val request: ToolRequest, val preview: PythonScriptPreview) : PythonRunPreflight
+        /** python.run never started; the model sees it as a failed tool call. */
+        data class NotStarted(val result: ToolResult) : PythonRunPreflight
+        /** The owner must act (update or reach the bridge); the task stops. */
+        data class Refused(val message: String) : PythonRunPreflight
+    }
+
+    /** Null when the bridge advertises the sha256 check, else why python.run is blocked. */
+    private suspend fun pythonHashRefusal(localBridge: ToolExecutor): String? {
+        val health = localBridge.execute(ToolRequest("health"))
+        return when {
+            !health.ok ->
+                "python.run заблоковано: не вдалося перевірити Termux bridge (${health.error ?: "health failed"})."
+            PythonRunApproval.bridgeSupports(health.stdout) -> null
+            else -> PythonRunApproval.BRIDGE_UPDATE_MESSAGE
+        }
+    }
+
+    private suspend fun preparePythonRun(request: ToolRequest): PythonRunPreflight {
+        val localBridge = bridge
+            ?: return PythonRunPreflight.Refused("Bridge token is required for ${request.tool}")
+        pythonHashRefusal(localBridge)?.let { return PythonRunPreflight.Refused(it) }
+        val result = localBridge.execute(
+            ToolRequest(PythonRunApproval.PREVIEW_TOOL, PythonRunApproval.previewArgs(request.args))
+        )
+        if (!result.ok) {
+            return PythonRunPreflight.NotStarted(
+                ToolResult(
+                    ok = false,
+                    tool = request.tool,
+                    stderr = result.stderr,
+                    error = "python.run не запускався: не вдалося прочитати скрипт для підтвердження: " +
+                        (result.error ?: "python.preview failed"),
+                    errorCode = result.errorCode,
+                    failureClass = result.failureClass,
+                    retryable = result.retryable,
+                    dependency = result.dependency
+                )
+            )
+        }
+        val preview = PythonRunApproval.parsePreview(result.stdout)
+            ?: return PythonRunPreflight.Refused(
+                "python.run заблоковано: bridge повернув некоректний python.preview. " +
+                    PythonRunApproval.BRIDGE_UPDATE_MESSAGE
+            )
+        return PythonRunPreflight.Bound(
+            request.copy(args = PythonRunApproval.bind(request.args, preview)),
+            preview
+        )
     }
 
     private fun markInFlight(state: AgentControlState, request: ToolRequest): AgentControlState = state.copy(

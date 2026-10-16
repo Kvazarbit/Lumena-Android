@@ -101,6 +101,8 @@ import com.lumena.android.settings.AdaptiveWebResearchStore
 import com.lumena.android.agent.core.ContextKernel
 import com.lumena.android.agent.core.ContextKernelState
 import com.lumena.android.agent.core.TrustGate
+import com.lumena.android.agent.core.PythonApprovalLedger
+import com.lumena.android.agent.core.PythonRunApproval
 import com.lumena.android.agent.core.EvidenceApplicationStatus
 import com.lumena.android.agent.core.CodeTaskAnchor
 import com.lumena.android.agent.core.FollowUpGoal
@@ -201,6 +203,8 @@ fun WorkflowChatScreen(
     val systemMessage = remember { OllamaMessage("system", LocalWorkflowAgent.systemPrompt) }
 
     val taskApprovals = remember { mutableStateMapOf<String, Set<String>>() }
+    // Script versions approved per task: the next python.run dialog diffs against them.
+    var pythonApprovals by remember { mutableStateOf(PythonApprovalLedger()) }
 
     val bubbles = remember {
         mutableStateListOf<ChatBubble>().apply {
@@ -2265,6 +2269,7 @@ fun WorkflowChatScreen(
             if (cacheForTask) {
                 grantApprovalForTask(taskId, requested.plan.request)
             }
+            requested.pythonPreview?.let { pythonApprovals = pythonApprovals.record(taskId, it) }
             pending = null
             currentTask = requested.control.task.copy(status = TaskStatus.EXECUTING)
             busy = true
@@ -2326,8 +2331,18 @@ fun WorkflowChatScreen(
                 val trust = requested.plan.trustReview
                     ?.let { "$it\n\n" }
                     .orEmpty()
+                val python = requested.pythonPreview?.let { preview ->
+                    PythonRunApproval.render(
+                        preview,
+                        previous = pythonApprovals.previous(requested.control.task.id, preview.script),
+                        taint = requested.control.task.kernel.taint
+                    ) + "\n\n"
+                } ?: if (PythonRunApproval.canApprove(requested.plan.request.tool, null)) "" else {
+                    PythonRunApproval.MISSING_PREVIEW_MESSAGE + "\n\n"
+                }
                 Text(
-                    trust +
+                    python +
+                        trust +
                         taskPlan +
                         "${requested.plan.reason}\n\nTool: ${requested.plan.request.tool}\nArgs: ${requested.plan.request.args}" +
                         verify +
@@ -2337,11 +2352,13 @@ fun WorkflowChatScreen(
                 )
             },
             confirmButton = {
+                // python.run without the script bytes cannot be approved blind.
+                val approvable = PythonRunApproval.canApprove(requested.plan.request.tool, requested.pythonPreview)
                 Column(horizontalAlignment = Alignment.End) {
-                    TextButton(onClick = { approvePending(cacheForTask = false) }) {
+                    TextButton(enabled = approvable, onClick = { approvePending(cacheForTask = false) }) {
                         Text("Allow once")
                     }
-                    TextButton(onClick = { approvePending(cacheForTask = true) }) {
+                    TextButton(enabled = approvable, onClick = { approvePending(cacheForTask = true) }) {
                         Text("Allow same action for task")
                     }
                 }

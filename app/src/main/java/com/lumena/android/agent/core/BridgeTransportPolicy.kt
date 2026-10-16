@@ -11,7 +11,9 @@ package com.lumena.android.agent.core
 object BridgeTransportPolicy {
     private val internalReadOnly = setOf(
         "laya.status",
-        "laya.predict"
+        "laya.predict",
+        // Reads the script bytes shown in the python.run confirmation.
+        "python.preview"
     )
 
     fun canRetry(tool: String): Boolean {
