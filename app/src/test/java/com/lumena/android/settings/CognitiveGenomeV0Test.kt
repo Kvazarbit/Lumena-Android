@@ -127,8 +127,9 @@ class CognitiveGenomeV0Test {
         }
         assertEquals(1, disputed.observedSuccesses)
         assertEquals(1, disputed.observedFailures)
-        assertTrue(disputed.counterexampleRecordIds.contains("negative"))
+        assertTrue(disputed.sourceRecordIds.contains("negative"))
         assertTrue(disputed.counterexampleRecordIds.contains("positive"))
+        assertFalse(disputed.counterexampleRecordIds.contains("negative"))
         assertTrue(disputed.failureClasses.contains("INVALID_INPUT"))
         assertFalse(disputed.dependencyFingerprints.contains("/very/private/path"))
         assertTrue(derived.none {
@@ -163,6 +164,9 @@ class CognitiveGenomeV0Test {
         assertEquals(listOf("e-recovered"), recovered.evidenceIds)
         assertTrue(dead.observedFailures > 0)
         assertTrue(recovered.observedFailures > 0)
+        assertEquals(listOf("recovered"), dead.sourceRecordIds)
+        assertEquals(listOf("recovered"), recovered.sourceRecordIds)
+        assertTrue(dead.counterexampleRecordIds.isEmpty())
         assertEquals(0, recovered.independentGoalProofs)
     }
 
@@ -264,7 +268,7 @@ class CognitiveGenomeV0Test {
         assertEquals(CognitiveGenomePolicy.MAX_DERIVED, rules.size)
         assertTrue(rules.any {
             it.stage == CognitivePrincipleStage.NEGATIVE_DEAD_END &&
-                it.counterexampleRecordIds.contains("important-negative")
+                it.sourceRecordIds.contains("important-negative")
         })
         assertEquals(4, rules.count {
             it.stage == CognitivePrincipleStage.KERNEL_CONTRACT
@@ -292,6 +296,38 @@ class CognitiveGenomeV0Test {
         })
         assertTrue(rules.all {
             CognitiveGenomeCodec.decode(it.codons).isNotEmpty()
+        })
+    }
+
+    @Test
+    fun multipleFailuresInOneComplexPathAreNotSilentlyLost() {
+        val failedTwice = trace(
+            id = "two-dead-ends",
+            kind = CoordinatorExampleKind.FAILED_RECOVERY,
+            tools = listOf("python.run", "file.read", "python.tests"),
+            outcomes = listOf(false, false, true),
+            failureClasses = listOf("TIMEOUT", "NOT_FOUND", null)
+        )
+        val rules = CognitiveGenomePolicy.derive(
+            FractalExperienceCanvasState(records = listOf(failedTwice))
+        )
+        val negative = rules.filter {
+            it.stage == CognitivePrincipleStage.NEGATIVE_DEAD_END
+        }
+        assertEquals(2, negative.size)
+        assertEquals(
+            setOf("python.run", "python.run>file.read"),
+            negative.map { it.toolPattern }.toSet()
+        )
+        assertEquals(
+            setOf("TIMEOUT", "NOT_FOUND"),
+            negative.flatMap { it.failureClasses }.toSet()
+        )
+        assertTrue(negative.all {
+            it.sourceRecordIds == listOf("two-dead-ends")
+        })
+        assertFalse(rules.any {
+            it.stage == CognitivePrincipleStage.RECOVERY_CANDIDATE
         })
     }
 
