@@ -70,6 +70,9 @@ data class CognitivePrinciple(
     val counterexampleRecordIds: List<String> = emptyList(),
     val observedSuccesses: Int = 0,
     val observedFailures: Int = 0,
+    /** Sanitized structured failure codes; never free-form model error prose. */
+    val failureClasses: List<String> = emptyList(),
+    val dependencyFingerprints: List<String> = emptyList(),
     /** No independent task-level verification is derivable from tool records. */
     val independentGoalProofs: Int = 0,
     /** Test names are review pointers, NOT runtime receipts or 100% proof. */
@@ -164,7 +167,7 @@ object CognitiveGenomePolicy {
         val negative = mutableListOf<CognitivePrinciple>()
 
         grouped.toSortedMap().forEach { (shape, members) ->
-            val successes = members.filter { it.outcomes.all(Boolean::booleanValue) }
+            val successes = members.filter { it.outcomes.all { outcome -> outcome } }
             val failures = members.filter { it.outcomes.any { outcome -> !outcome } }
             val first = members.first()
             val hash = FractalExperienceCanvasPolicy.hash(shape).take(20)
@@ -188,7 +191,16 @@ object CognitiveGenomePolicy {
                     counterexampleRecordIds = (successes + failures).map { it.id }
                         .distinct().sorted().take(64),
                     observedSuccesses = successes.size,
-                    observedFailures = failures.size
+                    observedFailures = failures.size,
+                    failureClasses = failures.flatMap { it.failureClasses }
+                        .filterNotNull()
+                        .filter { it.matches(Regex("[A-Z0-9_]{1,80}")) }
+                        .distinct().sorted().take(8),
+                    dependencyFingerprints = failures.flatMap { it.dependencies }
+                        .filterNotNull()
+                        .filter(String::isNotBlank)
+                        .map { FractalExperienceCanvasPolicy.hash(it).take(16) }
+                        .distinct().sorted().take(8)
                 )
             } else if (successes.isNotEmpty()) {
                 positive += CognitivePrinciple(
@@ -228,7 +240,11 @@ object CognitiveGenomePolicy {
                     sourceTaskHashes = listOf(link.sourceTaskHash),
                     counterexampleRecordIds = listOf(link.sourceRecordId),
                     observedSuccesses = link.recoveryOutcomes.count { it },
-                    observedFailures = 1 + link.recoveryOutcomes.count { !it }
+                    observedFailures = 1 + link.recoveryOutcomes.count { !it },
+                    failureClasses = listOfNotNull(link.causeFailureClass)
+                        .filter { it.matches(Regex("[A-Z0-9_]{1,80}")) },
+                    dependencyFingerprints = listOfNotNull(link.causeDependency)
+                        .map { FractalExperienceCanvasPolicy.hash(it).take(16) }
                 )
             }
 
@@ -271,6 +287,7 @@ object CognitiveGenomePolicy {
             " successes=" + rule.observedSuccesses +
             " failures=" + rule.observedFailures +
             " independent_goal_proofs=" + rule.independentGoalProofs +
+            " failure_classes=" + rule.failureClasses.joinToString(",") +
             " · advisory only; not permission or universal truth.")
             .take(500)
 
