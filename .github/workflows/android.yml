@@ -341,6 +341,7 @@ jobs:
               "com.lumena.android.ollama.WorkflowRunnerExecutionReceiptTest",
               "com.lumena.android.ollama.WorkflowRunnerStandaloneWebSearchTest",
               "com.lumena.android.agent.core.TrustGateTest",
+              "com.lumena.android.settings.CognitiveGenomeV0Test",
               "com.lumena.android.agent.core.SecretMaskerTest",
               "com.lumena.android.agent.local.ToolGateTrustTest",
               "com.lumena.android.ollama.WorkflowRunnerTrustGateTest",
