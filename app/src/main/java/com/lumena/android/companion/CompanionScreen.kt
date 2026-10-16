@@ -470,6 +470,9 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
         val plan = planFor(command)
         when {
             !plan.allowed -> status = "Blocked tool request: ${plan.reason}"
+            // The card reads the script first; only a version already run once auto-runs.
+            PythonRunApproval.applies(plan.request.tool) && grantAllows(command) ->
+                status = "Дозвіл задачі для Python: без натискання запускається лише версія, яку ти вже запускав через Run once. Деталі в картці нижче."
             !busy && ((safeAuto && isSafeReadOnly(command)) || grantAllows(command)) -> {
                 status = "Approved automatic tool detected."
                 executeCommand(command, automatic = true)
@@ -758,11 +761,13 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
             val plan = planFor(command)
             val readOnly = plan.allowed &&
                 ToolRegistry.get(plan.request.tool)?.risk == ToolRisk.READ_ONLY
-            val autoEligible = (safeAuto && readOnly) || grantAllows(command)
-            // Run once for python.run shows the script bytes its hash binds.
-            val python = plan.allowed && !autoEligible && PythonRunApproval.applies(plan.request.tool)
+            // python.run always shows the script bytes its hash binds; a task
+            // grant never makes it auto-eligible by itself (see the effect).
+            val python = plan.allowed && PythonRunApproval.applies(plan.request.tool)
+            val pythonGrant = python && grantAllows(command)
+            val autoEligible = (safeAuto && readOnly) || (grantAllows(command) && !python)
             if (python) {
-                LaunchedEffect(command.fingerprint, bridgeUrl, token) {
+                LaunchedEffect(command.fingerprint, bridgeUrl, token, taskGrant) {
                     pythonCheck = null
                     val checked = try {
                         PythonRunPreflight.prepare(TermuxBridgeClient(bridgeUrl, token, context), plan.request)
@@ -774,9 +779,25 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
                         )
                     }
                     pythonCheck = command.fingerprint to checked
+                    // Under a task grant only a version already run once in this task runs without a click.
+                    if (
+                        !busy && grantAllows(command) &&
+                        CompanionPythonApproval.grantMayProceed(
+                            checked,
+                            pythonApprovals,
+                            CompanionPythonApproval.taskKey(command)
+                        )
+                    ) {
+                        executeCommand(command, automatic = true, shownPython = checked)
+                    }
                 }
             }
             val pythonShown = pythonCheck?.takeIf { it.first == command.fingerprint }?.second
+            val pythonGrantRuns = pythonGrant && CompanionPythonApproval.grantMayProceed(
+                pythonShown,
+                pythonApprovals,
+                CompanionPythonApproval.taskKey(command)
+            )
 
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -796,6 +817,10 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
                         when {
                             !plan.allowed -> "BLOCKED by tool registry"
                             autoEligible -> "Дозволено автоматичне виконання"
+                            pythonGrantRuns ->
+                                "Дозвіл задачі: цю версію скрипту ти вже запускав через Run once, тож вона запускається автоматично."
+                            pythonGrant && pythonShown != null ->
+                                "Дозвіл задачі не запускає версію скрипту, якої ти не бачив: переглянь її вище й натисни Run once."
                             else -> taskGrant?.denial(command, bridgeUrl, token) ?: "Потрібен разовий запуск або дозвіл для задачі."
                         },
                         style = MaterialTheme.typography.bodySmall
@@ -827,7 +852,7 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
                                 Switch(checked = grantPython, onCheckedChange = { grantPython = it })
                                 Text("Автоматично запускати Python-скрипти з переліку")
                             }
-                            Text("Python виконується з правами Termux і може звертатися поза цими файлами. Перелік обмежує вибір скрипта, а не його дії. Вміст кожної версії скрипту перед автозапуском тобі не показується.", style = MaterialTheme.typography.bodySmall)
+                            Text("Python виконується з правами Termux і може звертатися поза цими файлами. Перелік обмежує вибір скрипта, а не його дії. Без натискання запускається лише версія скрипту, яку ти вже бачив і запустив через Run once у цій задачі; нову версію Lumena покаже в картці.", style = MaterialTheme.typography.bodySmall)
                             Button(enabled = !busy, onClick = {
                                 val connection = LumenaPreferences.load(context)
                                 val grant = CompanionTaskGrant.create(command, grantPaths,

@@ -87,6 +87,9 @@ MUTANTS = (
     ("companion-python-incoming-hash", Path("app/src/main/java/com/lumena/android/companion/CompanionPythonApproval.kt"),
      "request.copy(args = PythonRunApproval.bind(request.args, check.preview))", "request",
      "*CompanionPythonApprovalTest"),
+    ("companion-grant-unseen-version", Path("app/src/main/java/com/lumena/android/companion/CompanionPythonApproval.kt"),
+     "is PythonRunPreflight.Bound -> ledger.approved(taskKey, check.preview.script, check.preview.sha256)",
+     "is PythonRunPreflight.Bound -> true", "*CompanionPythonApprovalTest"),
 )
 
 

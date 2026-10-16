@@ -22,24 +22,31 @@ data class PythonScriptPreview(
  * a diff.
  */
 data class PythonApprovalLedger(
-    private val approved: Map<String, PythonScriptPreview> = emptyMap()
+    private val approved: Map<String, PythonScriptPreview> = emptyMap(),
+    private val hashes: Map<String, List<String>> = emptyMap()
 ) {
+    /** The version approved last, for a diff. */
     fun previous(taskId: String, script: String): PythonScriptPreview? =
         approved[key(taskId, script)]
 
-    /** Red-test stub: the per-task set of approved hashes lands in the next commit. */
-    fun approved(taskId: String, script: String, sha256: String): Boolean = true
+    /** True when the owner already saw and approved exactly these bytes of [script] in this task. */
+    fun approved(taskId: String, script: String, sha256: String): Boolean =
+        sha256 in hashes[key(taskId, script)].orEmpty()
 
     fun record(taskId: String, preview: PythonScriptPreview): PythonApprovalLedger {
         val key = key(taskId, preview.script)
-        val updated = (approved - key) + (key to preview)
-        return PythonApprovalLedger(updated.entries.toList().takeLast(MAX_ENTRIES).associate { it.key to it.value })
+        val kept = ((approved - key) + (key to preview)).entries.toList()
+            .takeLast(MAX_ENTRIES)
+            .associate { it.key to it.value }
+        val seen = (hashes[key].orEmpty() - preview.sha256 + preview.sha256).takeLast(MAX_HASHES_PER_SCRIPT)
+        return PythonApprovalLedger(kept, (hashes + (key to seen)).filterKeys { it in kept })
     }
 
     private fun key(taskId: String, script: String): String = "$taskId\u0000$script"
 
     companion object {
         const val MAX_ENTRIES = 24
+        const val MAX_HASHES_PER_SCRIPT = 16
     }
 }
 

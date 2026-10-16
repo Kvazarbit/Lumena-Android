@@ -22,7 +22,13 @@ object CompanionPythonApproval {
         /** Run once: only the version shown in the card ([check] from [PythonRunPreflight.prepare]). */
         data class Manual(val check: PythonRunPreflight?) : Mode
 
-        /** Red-test stub: still runs the current file; the seen-version rule lands next. */
+        /**
+         * Task grant with allowPython. A grant names scripts, not their
+         * content: it runs without a click only a version the owner already
+         * saw in the card and ran once in this task ([grantMayProceed]).
+         * Any other version goes back to the Run once card, so ChatGPT
+         * cannot rewrite a granted script and have it run unseen.
+         */
         data class Grant(
             val check: PythonRunPreflight?,
             val ledger: PythonApprovalLedger,
@@ -35,9 +41,19 @@ object CompanionPythonApproval {
         if (command.taskId.isNullOrBlank()) "command:${command.fingerprint}"
         else "task:${command.sessionId.orEmpty()}\u0000${command.taskId}"
 
-    /** Red-test stub. */
+    /**
+     * Under a task grant: true when Companion may continue without a click.
+     * A readable script must be a version already run once in this task,
+     * by sha256, the same rule as the chat's task approval cache. An
+     * unreadable script or a refused bridge never starts python, so only
+     * that error goes back to ChatGPT.
+     */
     fun grantMayProceed(check: PythonRunPreflight?, ledger: PythonApprovalLedger, taskKey: String): Boolean =
-        check != null
+        when (check) {
+            null -> false
+            is PythonRunPreflight.Bound -> ledger.approved(taskKey, check.preview.script, check.preview.sha256)
+            is PythonRunPreflight.NotStarted, is PythonRunPreflight.Refused -> true
+        }
 
     fun cardText(check: PythonRunPreflight?, previous: PythonScriptPreview?): String = when (check) {
         null -> "Отримую вміст скрипту з bridge…"
@@ -48,21 +64,23 @@ object CompanionPythonApproval {
     }
 
     suspend fun execute(executor: ToolExecutor, request: ToolRequest, mode: Mode): ToolResult {
-        val bound = when (mode) {
-            is Mode.Manual -> when (val check = mode.check) {
-                null -> return notStarted(request, "вміст скрипту ще не показано в картці Companion")
-                is PythonRunPreflight.NotStarted -> return check.result
-                is PythonRunPreflight.Refused -> return refused(request, check.message)
-                is PythonRunPreflight.Bound -> {
-                    // The bridge may have been replaced since the card was shown.
-                    PythonRunPreflight.bridgeRefusal(executor)?.let { return refused(request, it) }
-                    request.copy(args = PythonRunApproval.bind(request.args, check.preview))
-                }
-            }
-            is Mode.Grant -> when (val prepared = PythonRunPreflight.prepare(executor, request)) {
-                is PythonRunPreflight.Bound -> prepared.request
-                is PythonRunPreflight.NotStarted -> return prepared.result
-                is PythonRunPreflight.Refused -> return refused(request, prepared.message)
+        val check = when (mode) {
+            is Mode.Manual -> mode.check
+            is Mode.Grant -> mode.check.takeIf { grantMayProceed(it, mode.ledger, mode.taskKey) }
+                ?: return notStarted(
+                    request,
+                    "цю версію скрипту ти ще не запускав через Run once у цій задачі; переглянь її в картці Companion",
+                    "PYTHON_RUN_NEEDS_OWNER"
+                )
+        }
+        val bound = when (check) {
+            null -> return notStarted(request, "вміст скрипту ще не показано в картці Companion", "PYTHON_RUN_NOT_SHOWN")
+            is PythonRunPreflight.NotStarted -> return check.result
+            is PythonRunPreflight.Refused -> return refused(request, check.message)
+            is PythonRunPreflight.Bound -> {
+                // The bridge may have been replaced since the script was read.
+                PythonRunPreflight.bridgeRefusal(executor)?.let { return refused(request, it) }
+                request.copy(args = PythonRunApproval.bind(request.args, check.preview))
             }
         }
         return executor.execute(bound)
@@ -78,11 +96,11 @@ object CompanionPythonApproval {
         dependency = "termux_bridge"
     )
 
-    private fun notStarted(request: ToolRequest, why: String) = ToolResult(
+    private fun notStarted(request: ToolRequest, why: String, code: String) = ToolResult(
         ok = false,
         tool = request.tool,
         error = "python.run не запускався: $why",
-        errorCode = "PYTHON_RUN_NOT_SHOWN",
+        errorCode = code,
         failureClass = "AUTH_OR_CONFIG",
         retryable = false
     )
