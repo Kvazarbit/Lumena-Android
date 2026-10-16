@@ -33,7 +33,13 @@ data class FractalExperienceCanvasStats(
     val causeContested: Int = 0,
     val causeRejected: Int = 0,
     val userValueRecords: Int = 0,
-    val userValueActive: Int = 0
+    val userValueActive: Int = 0,
+    val genomeContracts: Int = 0,
+    val genomePositiveCandidates: Int = 0,
+    val genomeNegativeDeadEnds: Int = 0,
+    val genomeRecoveryCandidates: Int = 0,
+    val genomeContested: Int = 0,
+    val genomeIndependentGoalProofs: Int = 0
 )
 
 object FractalExperienceCanvasCodec {
@@ -363,6 +369,18 @@ object FractalExperienceCanvasStore {
         }
     }
 
+    /** Read-only model-neutral principles derived from existing Canvas bytes.
+     * No separate storage, migration, permission grant, or auto-activation.
+     * The full provenance stays in the original Fractal records.
+     */
+    fun cognitiveGenome(
+        context: Context,
+        limit: Int = 32
+    ): List<CognitivePrinciple> = synchronized(lock) {
+        CognitiveGenomePolicy.derive(load(context))
+            .take(limit.coerceIn(1, CognitiveGenomePolicy.MAX_DERIVED))
+    }
+
     fun trailSummaries(context: Context): List<FractalTrailSummary> =
         synchronized(lock) {
             FractalTaskTrailPolicy.summaries(load(context))
@@ -457,6 +475,9 @@ object FractalExperienceCanvasStore {
                 .distinct()
             val causal =
                 FractalCausalExperiencePolicy.stats(state.records)
+            val genome = CognitiveGenomePolicy.summary(
+                CognitiveGenomePolicy.derive(state)
+            )
             FractalExperienceCanvasStats(
                 records = state.records.size,
                 nodes = state.nodes.size,
@@ -514,7 +535,13 @@ object FractalExperienceCanvasStore {
                 userValueActive =
                     FractalUserValueWeightPolicy
                         .active(state)
-                        .size
+                        .size,
+                genomeContracts = genome.contractPrinciples,
+                genomePositiveCandidates = genome.positiveCandidates,
+                genomeNegativeDeadEnds = genome.negativeDeadEnds,
+                genomeRecoveryCandidates = genome.recoveryCandidates,
+                genomeContested = genome.contested,
+                genomeIndependentGoalProofs = genome.independentGoalProofs
             )
         }
 
