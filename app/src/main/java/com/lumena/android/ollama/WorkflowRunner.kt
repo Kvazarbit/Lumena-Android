@@ -13,6 +13,7 @@ import com.lumena.android.agent.core.ReflexRuntimeAdvice
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.core.EffectiveTaskPolicyCompiler
+import com.lumena.android.agent.core.PythonScriptPreview
 import com.lumena.android.agent.core.ToolRegistry
 import com.lumena.android.agent.core.ToolRisk
 import com.lumena.android.agent.core.TrustGate
@@ -40,7 +41,9 @@ data class PendingWorkflowTool(
     val plan: PlannedTool,
     val history: List<OllamaMessage>,
     val control: AgentControlState,
-    val images: List<WorkflowImage> = emptyList()
+    val images: List<WorkflowImage> = emptyList(),
+    /** For python.run: the script bytes whose sha256 is bound into the request. */
+    val pythonPreview: PythonScriptPreview? = null
 ) {
     val taskPlan: List<String>
         get() = control.plan

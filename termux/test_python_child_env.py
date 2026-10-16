@@ -4,6 +4,7 @@ This is not isolation: on Termux the child still runs as the same uid, has
 network access and can read ~/.lumena/bridge_token. A clean environment only
 removes the secrets the bridge itself holds in its environment.
 """
+import hashlib
 import importlib.util
 import json
 import os
@@ -74,7 +75,8 @@ class PythonChildEnvTest(unittest.TestCase):
         )
 
     def _python_run_env(self) -> dict:
-        result = self.b.execute_tool("python.run", {"script": "dump_env.py"})
+        approved = hashlib.sha256((self.workspace / "dump_env.py").read_bytes()).hexdigest()
+        result = self.b.execute_tool("python.run", {"script": "dump_env.py", "approved_sha256": approved})
         self.assertTrue(result["ok"], (result.get("error") or result.get("stderr") or "")[:800])
         return json.loads(result["stdout"])
 

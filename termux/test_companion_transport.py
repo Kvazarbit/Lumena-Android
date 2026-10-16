@@ -1,5 +1,6 @@
 """Offline regressions for Companion numeric tool args and bounded HTML link mode."""
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -36,6 +37,8 @@ class CompanionTransportTest(unittest.TestCase):
         spec.loader.exec_module(self.b)
         self.script = Path(self.temp.name) / "safe_fixture.py"
         self.script.write_text("print('fixture')\n", encoding="utf-8")
+        # python.run needs the hash the owner approved via python.preview.
+        self.approved = hashlib.sha256(self.script.read_bytes()).hexdigest()
         self.addCleanup(self.env.stop)
         self.addCleanup(self.temp.cleanup)
 
@@ -62,6 +65,7 @@ class CompanionTransportTest(unittest.TestCase):
         with patch.object(self.b, "run_process", return_value={"ok": True}) as runner:
             result = self.b.execute_tool("python.run", {
                 "script": "safe_fixture.py",
+                "approved_sha256": self.approved,
                 "timeout": "30.0"
             })
         self.assertTrue(result["ok"])
@@ -86,13 +90,16 @@ class CompanionTransportTest(unittest.TestCase):
                 with patch.object(self.b, "run_process") as runner:
                     with self.assertRaisesRegex(ValueError, "timeout"):
                         self.b.execute_tool("python.run", {
-                            "script": "safe_fixture.py", "timeout": value
+                            "script": "safe_fixture.py", "timeout": value,
+                            "approved_sha256": self.approved,
                         })
                     runner.assert_not_called()
 
     def test_missing_timeout_uses_original_default(self):
         with patch.object(self.b, "run_process", return_value={"ok": True}) as runner:
-            self.b.execute_tool("python.run", {"script": "safe_fixture.py"})
+            self.b.execute_tool("python.run", {
+                "script": "safe_fixture.py", "approved_sha256": self.approved
+            })
             self.assertEqual(self.b.DEFAULT_TIMEOUT, runner.call_args.args[2])
 
     def _http_get(self, html, args):
