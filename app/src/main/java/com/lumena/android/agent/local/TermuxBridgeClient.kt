@@ -24,7 +24,8 @@ import kotlin.coroutines.resume
 class TermuxBridgeClient(
     baseUrl: String,
     token: String,
-    private val context: Context? = null
+    private val context: Context? = null,
+    private val approvalSigner: () -> ApprovalSigner? = { null }
 ) : ToolExecutor {
     private val token = LumenaPreferences.normalizeBridgeToken(token)
     private val base: HttpUrl = normalizeLoopbackBaseUrl(baseUrl)
