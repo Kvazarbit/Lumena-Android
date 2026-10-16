@@ -1,5 +1,14 @@
 # Lumena Cognitive Exoskeleton Roadmap
 
+> **2026-10-16 — Cognitive Genome V0: four-base OHAV principles and negative paths.**
+> See [detailed implementation and acceptance plan](COGNITIVE_GENOME_GOLDEN_PRINCIPLES_IMPLEMENTATION_PLAN.uk.md).
+> V0 is an isolated, read-only Fractal projection with strict codons, locally
+> specified kernel contracts, positive candidates, negative dead ends, recovered
+> pathways and contested source evidence. Model-level benefit, universal "100%"
+> reliability, phone acceptance, large-scale archives and activation are NOT
+> claimed; review CI and phone evidence separately. No auto-merge.
+
+
 > **2026-10-09 — PC-first/Opus audit hardening handoff:** [детальний план, 10 дефектів,
 > 11 mutation probes, privacy/typo/Pracuj/Bridge acceptance та блокування
 > перенесення неперевірених 24 оцінок на телефон](pc-preference-evaluation-and-module-hardening.uk.md).
