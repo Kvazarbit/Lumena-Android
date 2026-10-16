@@ -1329,7 +1329,7 @@ class AgentControllerTest {
 
         val reply = controller.interpret(
             "Зараз відкриваю його. expect_ok: true confidence: 1.0 " +
-                "{\\"file.read\\": {\\"path\\": \\"aquarium_brain_logic.py\\"}}",
+                "{\"file.read\": {\"path\": \"aquarium_brain_logic.py\"}}",
             state
         )
 
