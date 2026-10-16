@@ -15,6 +15,7 @@ import com.lumena.android.agent.core.TaskStatus
 import com.lumena.android.agent.core.EffectiveTaskPolicyCompiler
 import com.lumena.android.agent.core.ToolRegistry
 import com.lumena.android.agent.core.ToolRisk
+import com.lumena.android.agent.core.TrustGate
 import com.lumena.android.agent.core.TaskIntentRouter
 import com.lumena.android.agent.core.ShortTurnCue
 import com.lumena.android.agent.local.PlannedTool
@@ -122,7 +123,7 @@ class WorkflowRunner(
         onState: (AgentControlState) -> Unit = {}
     ): WorkflowOutcome {
         var current = history
-        var state = control ?: controller.initial(task)
+        var state = withHistoryTaint(control ?: controller.initial(task), history)
         val collectedImages = initialImages.toMutableList()
         var protocolTurns = 0
         publish(state, onState)
@@ -287,10 +288,14 @@ class WorkflowRunner(
                         retryable = result.retryable,
                         dependency = result.dependency
                     )
-                    state = applyReflexAdvice(
-                        transition = transition,
-                        baseState = transition.state.copy(preflightCompleted = true),
-                        onProgress = onProgress
+                    state = observeTaint(
+                        applyReflexAdvice(
+                            transition = transition,
+                            baseState = transition.state.copy(preflightCompleted = true),
+                            onProgress = onProgress
+                        ),
+                        request,
+                        result
                     )
                     publish(state, onState)
                     onProgress(
@@ -502,7 +507,9 @@ class WorkflowRunner(
                         ),
                         taskPolicy =
                             state.task
-                                .effectivePolicy
+                                .effectivePolicy,
+                        taint = state.task.kernel.taint,
+                        ownerText = state.task.currentInstruction
                     ).copy(
                         causeProbeIntent =
                             instruction.call.causeHypothesis
@@ -542,14 +549,23 @@ class WorkflowRunner(
                     }
 
                     onProgress(toolCallTrace(planned))
+                    planned.trustReview?.let(onProgress)
                     val assistantToolMessage = OllamaMessage("assistant", reply.take(12_000))
                     val toolHistory = current + assistantToolMessage
 
+                    // The controller decides by tool risk; ToolGate adds the
+                    // Trust Gate for egress after untrusted content.
+                    val requiresConfirmation =
+                        instruction.requiresConfirmation ||
+                            planned.requiresConfirmation
                     val approvedForTask =
-                        instruction.requiresConfirmation &&
+                        requiresConfirmation &&
                             isApprovedForTask(state.task.id, planned.request)
 
-                    if (instruction.requiresConfirmation && !approvedForTask) {
+                    if (requiresConfirmation && !approvedForTask) {
+                        state = state.copy(
+                            task = state.task.copy(status = TaskStatus.WAITING_CONFIRMATION)
+                        )
                         val pending = PendingWorkflowTool(
                             plan = planned,
                             history = toolHistory,
@@ -611,10 +627,14 @@ class WorkflowRunner(
                         retryable = result.retryable,
                         dependency = result.dependency
                     )
-                    state = applyReflexAdvice(
-                        transition = transition,
-                        baseState = transition.state,
-                        onProgress = onProgress
+                    state = observeTaint(
+                        applyReflexAdvice(
+                            transition = transition,
+                            baseState = transition.state,
+                            onProgress = onProgress
+                        ),
+                        planned.request,
+                        result
                     )
                     publish(state, onState)
                     onProgress(toolResultTrace(planned.request.tool, result.stdout, result.stderr, result.error, result.ok))
@@ -762,7 +782,8 @@ class WorkflowRunner(
             retryable = result.retryable,
             dependency = result.dependency
         )
-        publish(transition.state, onState)
+        val observed = observeTaint(transition.state, pending.plan.request, result)
+        publish(observed, onState)
 
         val next = pending.history + LocalWorkflowAgent.toolResultMessage(
             tool = pending.plan.request.tool,
@@ -786,7 +807,7 @@ class WorkflowRunner(
             return WorkflowOutcome.Finished(
                 reason,
                 next,
-                transition.state,
+                observed,
                 images = (pending.images + approvedImages)
                     .distinctBy { it.thumbnailUrl }
                     .take(8)
@@ -794,13 +815,13 @@ class WorkflowRunner(
         }
 
         transition.stopReason?.let { reason ->
-            return WorkflowOutcome.Failed(reason, next, transition.state)
+            return WorkflowOutcome.Failed(reason, next, observed)
         }
 
         return run(
             history = next,
-            task = transition.state.task,
-            control = transition.state,
+            task = observed.task,
+            control = observed,
             initialImages = (pending.images + approvedImages)
                 .distinctBy { it.thumbnailUrl }
                 .take(8),
@@ -1088,6 +1109,41 @@ class WorkflowRunner(
         // Persist before acknowledging state or dispatching the next external effect.
         checkpoint(state)
         onState(state)
+    }
+
+    /** Seeds taint from app-generated tool results already in the history. */
+    private fun withHistoryTaint(
+        state: AgentControlState,
+        history: List<OllamaMessage>
+    ): AgentControlState {
+        val kernel = state.task.kernel
+        val taint = TrustGate.fromHistory(
+            kernel.taint,
+            history.filter { it.role == "user" }.map { it.content }
+        )
+        return if (taint == kernel.taint) state
+        else state.copy(task = state.task.copy(kernel = kernel.copy(taint = taint)))
+    }
+
+    /** Taint is recorded from the executed request and its full result. */
+    private fun observeTaint(
+        state: AgentControlState,
+        request: ToolRequest,
+        result: ToolResult
+    ): AgentControlState {
+        val kernel = state.task.kernel
+        val output = listOf(result.stdout, result.stderr, result.error.orEmpty())
+            .filter(String::isNotBlank)
+            .joinToString("\n")
+        val taint = TrustGate.observe(
+            kernel.taint,
+            tool = request.tool,
+            args = request.args,
+            output = output,
+            step = state.task.step
+        )
+        return if (taint == kernel.taint) state
+        else state.copy(task = state.task.copy(kernel = kernel.copy(taint = taint)))
     }
 
     private fun markInFlight(state: AgentControlState, request: ToolRequest): AgentControlState = state.copy(

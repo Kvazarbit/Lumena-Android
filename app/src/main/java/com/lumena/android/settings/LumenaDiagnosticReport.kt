@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import com.lumena.android.agent.core.ConstitutionCharter
 import com.lumena.android.agent.core.BridgeCompatibility
+import com.lumena.android.agent.core.CloudSecretMaskingStats
 import com.lumena.android.agent.core.ModuleRegistry
 import com.lumena.android.agent.core.HistoricalRecordOrigin
 import com.lumena.android.agent.core.TaskState
@@ -469,6 +470,20 @@ object LumenaDiagnosticFormatter {
                 appendLine("partial=${charter.partial}")
                 appendLine("pending=${charter.pending}")
             }
+            appendLine()
+
+            appendLine("[CLOUD_SECRET_MASKING]")
+            CloudSecretMaskingStats.snapshot().let { masking ->
+                appendLine("scope=since_app_start")
+                appendLine("cloud_requests=${masking.cloudRequests}")
+                appendLine("requests_with_masks=${masking.requestsWithMasks}")
+                appendLine("masked_values=${masking.maskedValues}")
+                masking.byKind.forEach { (kind, count) ->
+                    appendLine("masked_${kind.name.lowercase()}=$count")
+                }
+                appendLine("last_cloud_model=${masking.lastCloudModel ?: "(none)"}")
+            }
+            appendLine("limits=known secret shapes only; local models receive original text")
             appendLine()
 
             appendLine("[MODULES]")

@@ -99,6 +99,8 @@ import com.lumena.android.settings.LocalSessionStore
 import com.lumena.android.settings.ContextCheckpointStore
 import com.lumena.android.settings.AdaptiveWebResearchStore
 import com.lumena.android.agent.core.ContextKernel
+import com.lumena.android.agent.core.ContextKernelState
+import com.lumena.android.agent.core.TrustGate
 import com.lumena.android.agent.core.EvidenceApplicationStatus
 import com.lumena.android.agent.core.CodeTaskAnchor
 import com.lumena.android.agent.core.FollowUpGoal
@@ -417,7 +419,9 @@ fun WorkflowChatScreen(
             ),
             taskPolicy =
                 control.task
-                    .effectivePolicy
+                    .effectivePolicy,
+            taint = control.task.kernel.taint,
+            ownerText = control.task.currentInstruction
         ).copy(
             causeProbeIntent =
                 it.causeProbeIntent
@@ -1794,6 +1798,10 @@ fun WorkflowChatScreen(
             effectivePolicy =
                 effectivePolicy,
             status = TaskStatus.WAITING_MODEL,
+            // Replies of a tainted task stay in this chat's history.
+            kernel = ContextKernelState(
+                taint = TrustGate.inherit(previous?.kernel?.taint)
+            ),
             previousExecutionReceipt =
                 previous
                     ?.takeIf {
@@ -2315,11 +2323,17 @@ fun WorkflowChatScreen(
                 val verify = requested.control.verificationReason
                     ?.let { "\n\nVerification pending: $it" }
                     .orEmpty()
+                val trust = requested.plan.trustReview
+                    ?.let { "$it\n\n" }
+                    .orEmpty()
                 Text(
-                    taskPlan +
+                    trust +
+                        taskPlan +
                         "${requested.plan.reason}\n\nTool: ${requested.plan.request.tool}\nArgs: ${requested.plan.request.args}" +
                         verify +
-                        "\n\nYou can allow this exact action once, or remember this exact tool + args until this task finishes."
+                        "\n\nYou can allow this exact action once, or remember this exact tool + args until this task finishes.",
+                    // A full URL plus the taint source can outgrow the dialog.
+                    modifier = Modifier.verticalScroll(rememberScrollState())
                 )
             },
             confirmButton = {

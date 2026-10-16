@@ -60,6 +60,24 @@ MUTANTS = (
     ("mcp-required", Path("termux/bridge.py"),
      "        if missing:\n            return None\n    return args",
      "        if False:\n            return None\n    return args", "python"),
+    # Trust Gate: egress review, query-data rule, cloud masking, clean env.
+    ("trust-gate-confirmation", Path("app/src/main/java/com/lumena/android/agent/local/ToolGate.kt"),
+     "validation.requiresConfirmation ||\n                    trustReview != null",
+     "validation.requiresConfirmation", "*ToolGateTrustTest"),
+    ("trust-gate-new-query-data", CORE / "TrustGate.kt",
+     "if (samePage.any { known -> isSubMultiset(wanted.params, known.params) }) return null",
+     "if (samePage.isNotEmpty()) return null", "*TrustGateTest"),
+    ("cloud-secret-filter", Path("app/src/main/java/com/lumena/android/ollama/OllamaClient.kt"),
+     "val outbound = CloudSecretFilter.outbound(model, messages)",
+     "val outbound = messages", "*OllamaClientHttpTest"),
+    ("python-clean-env", Path("termux/bridge.py"),
+     '["python", str(script), *extra],\n            cwd,\n'
+     '            _execution_timeout(args.get("timeout"), DEFAULT_TIMEOUT),\n'
+     '            request_id=request_id,\n            env=python_child_env(),\n',
+     '["python", str(script), *extra],\n            cwd,\n'
+     '            _execution_timeout(args.get("timeout"), DEFAULT_TIMEOUT),\n'
+     '            request_id=request_id,\n',
+     "python:test_python_child_env.py"),
 )
 
 
@@ -73,9 +91,11 @@ def kill_one(name, path_rel, old_str, new_str, selector, dry_run=False):
     if dry_run:
         print(f"READY {name}: {path_rel}")
         return
-    if selector == "python":
+    is_python = selector.startswith("python")
+    if is_python:
+        pattern = selector.partition(":")[2] or "test_mcp_search.py"
         command = [sys.executable, "-m", "unittest", "discover",
-                   "-s", "termux", "-p", "test_mcp_search.py", "-v"]
+                   "-s", "termux", "-p", pattern, "-v"]
     else:
         command = ["gradle", "--max-workers=2", "--no-build-cache",
                    ":app:testDebugUnitTest", "--tests", selector]
@@ -91,7 +111,7 @@ def kill_one(name, path_rel, old_str, new_str, selector, dry_run=False):
             raise RuntimeError(f"{name}: timeout is not mutation proof") from exc
         if run.returncode == 0:
             raise RuntimeError(f"{name}: SURVIVED")
-        if selector == "python":
+        if is_python:
             output = run.stdout + "\n" + run.stderr
             if "FAIL: test_" not in output:
                 raise RuntimeError(f"{name}: import/infra error, not a test assertion: {output[-1000:]}")

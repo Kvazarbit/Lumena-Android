@@ -226,7 +226,8 @@ class OllamaClient(
                 activeModel = model
                 outputExpansionUsed = false
             }
-            var requestMessages = messages
+            val outbound = CloudSecretFilter.outbound(model, messages)
+            var requestMessages = outbound
             var smallerContext = false
             var text: String
             while (true) {
@@ -245,7 +246,7 @@ class OllamaClient(
                             failure.reason, failure.tokens, outputRecoveryExhausted = true
                         )
                         outputExpansionUsed = true
-                        requestMessages = messages + OllamaMessage("user",
+                        requestMessages = outbound + OllamaMessage("user",
                             "The previous response hit the output limit and was not executed. " +
                             "Regenerate exactly ONE short complete JSON object. " +
                             "For code use small separate files or file.patch on a known unique marker, " +

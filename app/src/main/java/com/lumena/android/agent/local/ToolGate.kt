@@ -5,6 +5,7 @@ import com.lumena.android.agent.core.EffectiveTaskPolicy
 import com.lumena.android.agent.core.EffectiveTaskPolicyCompiler
 import com.lumena.android.agent.core.TaskTaint
 import com.lumena.android.agent.core.ToolRegistry
+import com.lumena.android.agent.core.TrustGate
 
 object ToolGate {
     fun approvalKey(request: ToolRequest): String = buildString {
@@ -44,6 +45,19 @@ object ToolGate {
                 ?: decision.request.tool
         val policyAllowed =
             policyDecision?.allowed != false
+        // Trust Gate: after untrusted text entered the task, network egress
+        // outside what this task saw or the owner typed waits for the owner.
+        val trustReview =
+            if (validation.allowed && policyAllowed) {
+                TrustGate.review(
+                    taint = taint,
+                    tool = canonical,
+                    args = decision.request.args,
+                    ownerText = ownerText
+                )
+            } else {
+                null
+            }
 
         return PlannedTool(
             request = ToolRequest(
@@ -59,7 +73,9 @@ object ToolGate {
                 validation.allowed &&
                     policyAllowed,
             requiresConfirmation =
-                validation.requiresConfirmation
+                validation.requiresConfirmation ||
+                    trustReview != null,
+            trustReview = trustReview?.render()
         )
     }
 }

@@ -98,15 +98,18 @@ object ConstitutionCharter {
             part = CharterPart.SOVEREIGNTY,
             title = "Межі повноважень",
             statement = "Model output, memory, modules and imported experience cannot grant permissions or bypass ToolRegistry, ToolGate or confirmation.",
-            rationale = "Досвід може покращувати вибір, але не розширювати повноваження: інакше застарілий, імпортований чи вигаданий текст тихо збільшує те, що можна виконати.",
-            enforcement = CharterEnforcement.ENFORCED,
-            enforcementPoints = listOf("ToolRegistry", "ToolGate", "ConstitutionKernel"),
+            rationale = "Досвід може покращувати вибір, але не розширювати повноваження: інакше застарілий, імпортований чи вигаданий текст тихо збільшує те, що можна виконати. Зовнішній текст (сторінка, MCP, вивід python) теж не дає повноважень: після нього мережевий вихід поза баченими URL чекає на власника — це код (TrustGate), а не фраза в промпті.",
+            enforcement = CharterEnforcement.PARTIAL,
+            enforcementPoints = listOf("ToolRegistry", "ToolGate", "ConstitutionKernel", "TrustGate"),
             testRefs = listOf(
                 "ConstitutionKernelTest.policyDenialNeverFallsThroughToAlternativeRoute",
-                "ToolRegistryTest.sameReadOnlyToolFromExternalChatNeedsConfirmation"
+                "ToolRegistryTest.sameReadOnlyToolFromExternalChatNeedsConfirmation",
+                "TrustGateTest.taintedTaskCannotSendDataToUnseenUrlWithoutConfirmation",
+                "WorkflowRunnerTrustGateTest.injectedPageCannotExfiltrateFileThroughAutomaticHttpGet"
             ),
             invariantIds = listOf("INV-AUTHORITY-001"),
-            capsuleKeys = listOf("P", "A")
+            capsuleKeys = listOf("P", "A"),
+            gap = "Taint бачить інструменти цієї задачі й попередньої задачі цього чату, але не текст, що повертається через пам'ять, evidence graph чи історичні факти з інших чатів. Вибір серед уже відомих URL — повільний прихований канал, обмежений лише бюджетом кроків."
         ),
         CharterArticle(
             id = "ART-3",
@@ -235,12 +238,17 @@ object ConstitutionCharter {
             statement = "Private messages and personal data stay on this phone; never send them anywhere unless the owner asks.",
             rationale = "Lumena бачить телефон власника. Без цього обов'язку зручність перетворюється на витік.",
             enforcement = CharterEnforcement.PARTIAL,
-            enforcementPoints = listOf("ListingNoticeExtractor", "StateArchive", "termux/bridge.py"),
+            enforcementPoints = listOf(
+                "ListingNoticeExtractor", "StateArchive", "termux/bridge.py",
+                "TrustGate", "SecretMasker", "CloudSecretFilter"
+            ),
             testRefs = listOf(
                 "ListingAttentionPolicyTest.privateChatIsNeverScoredOrCaptured",
-                "StateArchiveTest.rejectsTraversalAndUnknownSecretEntries"
+                "StateArchiveTest.rejectsTraversalAndUnknownSecretEntries",
+                "WorkflowRunnerTrustGateTest.injectedPageCannotExfiltrateFileThroughAutomaticHttpGet",
+                "OllamaClientHttpTest.cloudModelNeverReceivesKnownSecretShapes"
             ),
-            gap = "Немає єдиного аудиту політики експорту (критерій готовності 8 у roadmap).",
+            gap = "Немає єдиного аудиту політики експорту (критерій готовності 8 у roadmap). Залишковий ризик: Termux не дає ізоляції процесів — python.run/python.tests працюють з тим самим uid, мають мережу і можуть прочитати ~/.lumena/bridge_token; чисте оточення bridge прибирає лише секрети з env, це не sandbox. Маскування перед *-cloud ловить лише відомі форми секретів; ollama.generate через bridge і Companion не маскуються.",
             modelFacing = true
         ),
         CharterArticle(
