@@ -2,6 +2,7 @@
 """Lumena owner-only APK signing, safely reusable across Android CI runs.
 
 Examples (Termux):
+  python sign_lumena.py --encrypt-backup              # once: plaintext ZIP -> encrypted bundle
   python sign_lumena.py --run-id 38171667500 --allow-pr
   python sign_lumena.py --run-id 38171667500 --allow-pr --verify-only
 
@@ -12,12 +13,35 @@ public run metadata; GITHUB_TOKEN can be set to avoid API rate limits.
 Security: verify GitHub run/artifact identity and its SHA-256, use only a pinned
 apksigner.jar, verify APK package/version/ABI, verify owner's existing key and
 signed certificate; never send, log, generate or export the signing key.
+
+Owner backup at rest: signing reads ~/.lumena/Lumena-signing.enc and asks for its
+passphrase on the terminal. The plaintext backup ZIP is refused unless
+--allow-plaintext-backup is given. The encrypted file format (version 1) uses only
+the Python standard library, because Termux Python may lack `cryptography`:
+
+  header = b"LUMENA-SIGN-ENC\\n" | version=1 | log2(N) | r | p | salt[32] | nonce[16]
+  K      = scrypt(UTF-8 of NFC(passphrase), salt, N, r, p, dkLen=64)
+  Kenc   = K[0:32], Kmac = K[32:64]    (two independent PBKDF2 output blocks)
+  stream = HMAC-SHA256(Kenc, nonce | uint64_be(0)) | HMAC-SHA256(Kenc, nonce | uint64_be(1)) | ...
+  body   = original backup ZIP XOR stream
+  tag    = HMAC-SHA256(Kmac, header | body)    -> file = header | body | tag
+
+Encrypt-then-MAC: the tag covers the whole header (including the KDF parameters)
+and is checked in constant time before anything is decrypted. This is HMAC-SHA256
+used as a PRF in counter mode, a textbook construction from standard primitives,
+not a vetted AEAD such as AES-GCM or ChaCha20-Poly1305, and it has not been
+independently reviewed. Its strength rests on HMAC-SHA256 being a PRF and on the
+passphrase. It protects the backup at rest (file reads by bridge tools, copies,
+device backups); it cannot protect against a process running as the same user
+while you sign, which could read memory or alter this script.
 """
 from __future__ import annotations
 
 import argparse
 import base64
+import getpass
 import hashlib
+import hmac
 import io
 import json
 import os
@@ -27,8 +51,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import urllib.error
 import urllib.request
+import warnings
 import zipfile
 
 REPO = "Kvazarbit/Lumena-Android"
@@ -45,6 +71,22 @@ MAX_ARTIFACT = 100 * 1024 * 1024
 MAX_APK = 130 * 1024 * 1024
 MAX_JAR = 35 * 1024 * 1024
 MAX_BACKUP = 4 * 1024 * 1024
+# Encrypted owner backup, format version 1 (see the module docstring).
+ENC_MAGIC = b"LUMENA-SIGN-ENC\n"
+ENC_VERSION = 1
+ENC_SALT_LEN = 32
+ENC_NONCE_LEN = 16
+ENC_TAG_LEN = 32
+ENC_HEADER_LEN = len(ENC_MAGIC) + 4 + ENC_SALT_LEN + ENC_NONCE_LEN
+# scrypt N=2^17, r=8, p=1 needs 128 MiB: OWASP's scrypt minimum, fine on a phone.
+SCRYPT_LOG2_N = 17
+SCRYPT_R = 8
+SCRYPT_P = 1
+# Accepted on decryption: no weaker than 2^15 and at most 256 MiB, so a crafted
+# header can neither request a trivially weak KDF nor exhaust phone memory.
+SCRYPT_MIN_LOG2_N = 15
+SCRYPT_MAX_MEMORY = 256 * 1024 * 1024
+MIN_PASSPHRASE = 12
 HEX_SHA = re.compile(r"[0-9a-f]{64}")
 HEX_GIT_SHA = re.compile(r"[0-9a-f]{40}")
 
@@ -208,10 +250,15 @@ def apk_metadata(apk: Path, run_number: int) -> tuple[str, int]:
     return version, int(code)
 
 
+def state_dir() -> Path:
+    return Path.home() / ".lumena"
+
+
 def backup_location(value: Path | None) -> Path:
+    """The legacy plaintext backup ZIP: input of --encrypt-backup."""
     if value is not None:
         return value.expanduser()
-    preferred = Path.home() / ".lumena" / "Lumena-private-signing-backup.zip"
+    preferred = state_dir() / "Lumena-private-signing-backup.zip"
     if preferred.is_file():
         return preferred
     legacy = DOWNLOAD / "Lumena-private-signing-backup.zip"
@@ -220,14 +267,96 @@ def backup_location(value: Path | None) -> Path:
     return legacy
 
 
-def load_owner_backup(path: Path) -> tuple[dict, bytes]:
-    if not path.is_file() or path.stat().st_size > MAX_BACKUP:
-        raise SigningError("Owner signing backup missing/oversized: " + str(path))
-    with zipfile.ZipFile(path) as z:
-        bundle = json.loads(one_entry(z, "LUMENA_SIGNING_BUNDLE.json", 2_000_000))
-        cert_info = [i for i in z.infolist() if Path(i.filename).name == "lumena-signing-certificate.der"]
-        if cert_info and sha256_bytes(one_entry(z, "lumena-signing-certificate.der", 128_000)) != CERT_SHA256:
-            raise SigningError("Backup certificate does not match Lumena owner pin")
+def encrypted_backup_location(value: Path | None) -> Path:
+    return value.expanduser() if value is not None else state_dir() / "Lumena-signing.enc"
+
+
+def read_secret(prompt: str) -> str:
+    """Reads a passphrase from the terminal without echo, never from a pipe."""
+    try:
+        with warnings.catch_warnings():
+            # getpass falls back to an echoing stdin read when it cannot reach a
+            # terminal; a piped or visible passphrase is refused instead.
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            return getpass.getpass(prompt)
+    except getpass.GetPassWarning:
+        raise SigningError("No terminal to read the passphrase without echo; refusing to read it") from None
+    except (EOFError, KeyboardInterrupt):
+        raise SigningError("Passphrase entry cancelled") from None
+
+
+def scrypt_parameters_ok(log2_n: int, r: int, p: int) -> bool:
+    return (SCRYPT_MIN_LOG2_N <= log2_n <= 30 and 1 <= r <= 32 and 1 <= p <= 16
+            and 128 * r * ((1 << log2_n) + 2 + p) <= SCRYPT_MAX_MEMORY)
+
+
+def derive_keys(passphrase: str, salt: bytes, log2_n: int, r: int, p: int) -> tuple[bytes, bytes]:
+    if not hasattr(hashlib, "scrypt"):
+        raise SigningError("This Python has no hashlib.scrypt (needs OpenSSL 1.1+); cannot open the encrypted backup")
+    # OpenSSL needs 128*r*(N+2+p) bytes; its 32 MiB default maxmem is too small.
+    memory = 128 * r * ((1 << log2_n) + 2 + p) + (1 << 20)
+    try:
+        secret = unicodedata.normalize("NFC", passphrase).encode("utf-8")
+        key = hashlib.scrypt(secret, salt=salt, n=1 << log2_n, r=r, p=p, maxmem=memory, dklen=64)
+    except (ValueError, MemoryError):
+        raise SigningError("scrypt key derivation failed (unusable passphrase or not enough memory)") from None
+    return key[:32], key[32:]
+
+
+def keystream_xor(key: bytes, nonce: bytes, data: bytes) -> bytes:
+    blocks = (len(data) + 31) // 32
+    stream = b"".join(hmac.digest(key, nonce + i.to_bytes(8, "big"), "sha256") for i in range(blocks))
+    mixed = int.from_bytes(data, "big") ^ int.from_bytes(stream[:len(data)], "big")
+    return mixed.to_bytes(len(data), "big")
+
+
+def encrypt_backup_bytes(plaintext: bytes, passphrase: str) -> bytes:
+    """Encrypt-then-MAC of the backup ZIP; the format is described in the module docstring."""
+    if not 1 <= len(plaintext) <= MAX_BACKUP:
+        raise SigningError("Owner signing backup is empty or oversized")
+    log2_n, r, p = SCRYPT_LOG2_N, SCRYPT_R, SCRYPT_P
+    if not scrypt_parameters_ok(log2_n, r, p):
+        raise SigningError("Refusing weak or oversized scrypt parameters")
+    salt, nonce = os.urandom(ENC_SALT_LEN), os.urandom(ENC_NONCE_LEN)
+    header = ENC_MAGIC + bytes((ENC_VERSION, log2_n, r, p)) + salt + nonce
+    enc_key, mac_key = derive_keys(passphrase, salt, log2_n, r, p)
+    body = keystream_xor(enc_key, nonce, plaintext)
+    return header + body + hmac.digest(mac_key, header + body, "sha256")
+
+
+def decrypt_backup_bytes(blob: bytes, passphrase: str) -> bytes:
+    if not ENC_HEADER_LEN + 1 + ENC_TAG_LEN <= len(blob) <= ENC_HEADER_LEN + MAX_BACKUP + ENC_TAG_LEN:
+        raise SigningError("Encrypted signing bundle is truncated or oversized")
+    if not blob.startswith(ENC_MAGIC):
+        raise SigningError("Not a Lumena encrypted signing bundle")
+    version, log2_n, r, p = blob[len(ENC_MAGIC):len(ENC_MAGIC) + 4]
+    if version != ENC_VERSION:
+        raise SigningError("Unsupported encrypted signing bundle version")
+    if not scrypt_parameters_ok(log2_n, r, p):
+        raise SigningError("Encrypted signing bundle has unsupported scrypt parameters")
+    salt = blob[len(ENC_MAGIC) + 4:ENC_HEADER_LEN - ENC_NONCE_LEN]
+    nonce = blob[ENC_HEADER_LEN - ENC_NONCE_LEN:ENC_HEADER_LEN]
+    header, body, tag = blob[:ENC_HEADER_LEN], blob[ENC_HEADER_LEN:-ENC_TAG_LEN], blob[-ENC_TAG_LEN:]
+    enc_key, mac_key = derive_keys(passphrase, salt, log2_n, r, p)
+    # Authenticate everything before decrypting anything.
+    if not hmac.compare_digest(tag, hmac.digest(mac_key, header + body, "sha256")):
+        raise SigningError("Encrypted signing bundle rejected: wrong passphrase, or the file was modified or corrupted")
+    return keystream_xor(enc_key, nonce, body)
+
+
+def parse_owner_backup(data: bytes) -> tuple[dict, bytes]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            raw = one_entry(z, "LUMENA_SIGNING_BUNDLE.json", 2_000_000)
+            cert_info = [i for i in z.infolist() if Path(i.filename).name == "lumena-signing-certificate.der"]
+            if cert_info and sha256_bytes(one_entry(z, "lumena-signing-certificate.der", 128_000)) != CERT_SHA256:
+                raise SigningError("Backup certificate does not match Lumena owner pin")
+    except zipfile.BadZipFile:
+        raise SigningError("Owner signing backup is not a valid ZIP") from None
+    try:
+        bundle = json.loads(raw)
+    except ValueError:
+        raise SigningError("Malformed signing bundle JSON") from None
     if not isinstance(bundle, dict) or any(not isinstance(bundle.get(k), str) or not bundle[k] for k in ("alias", "password", "keystore_base64")):
         raise SigningError("Signing backup does not contain the required fields")
     try:
@@ -239,10 +368,121 @@ def load_owner_backup(path: Path) -> tuple[dict, bytes]:
     return bundle, key_bytes
 
 
-def sign_and_verify(apk_bytes: bytes, jar_bytes: bytes, backup: Path, out: Path, run_number: int, version: str) -> str:
+def read_backup_file(path: Path) -> bytes:
+    if not path.is_file() or path.stat().st_size > ENC_HEADER_LEN + MAX_BACKUP + ENC_TAG_LEN:
+        raise SigningError("Owner signing backup missing/oversized: " + str(path))
+    return path.read_bytes()
+
+
+def load_owner_backup(path: Path, *, read_passphrase=None, allow_plaintext: bool = False) -> tuple[dict, bytes]:
+    """Owner key material, decrypted in memory only; plaintext ZIPs need explicit consent."""
+    data = read_backup_file(path)
+    if data.startswith(ENC_MAGIC):
+        passphrase = (read_passphrase or read_secret)("Passphrase for " + path.name + ": ")
+        return parse_owner_backup(decrypt_backup_bytes(data, passphrase))
+    if not data.startswith(b"PK") or len(data) > MAX_BACKUP:
+        raise SigningError("Unrecognized owner signing backup format: " + str(path))
+    if not allow_plaintext:
+        raise SigningError(
+            "Plaintext signing backup refused: " + str(path) + ". Encrypt it once with"
+            " 'python sign_lumena.py --encrypt-backup --backup " + str(path) + "'; the passphrase"
+            " is then asked each time you sign. To sign from the plaintext anyway, add --allow-plaintext-backup.")
+    banner = "!" * 72
+    print(banner, file=sys.stderr)
+    print("WARNING: SIGNING FROM A PLAINTEXT BACKUP (--allow-plaintext-backup):", path, file=sys.stderr)
+    print("The owner signing key and its password are unencrypted in that file; any process", file=sys.stderr)
+    print("running as this user, including Lumena bridge tools, can read and copy them.", file=sys.stderr)
+    print("Encrypt it once: python sign_lumena.py --encrypt-backup --backup", path, file=sys.stderr)
+    print(banner, file=sys.stderr)
+    return parse_owner_backup(data)
+
+
+def new_passphrase(read_passphrase) -> str:
+    first = read_passphrase("New passphrase for the encrypted signing bundle: ")
+    if len(unicodedata.normalize("NFC", first)) < MIN_PASSPHRASE:
+        raise SigningError(f"Passphrase must have at least {MIN_PASSPHRASE} characters; nothing was written")
+    second = read_passphrase("Repeat the passphrase: ")
+    if not hmac.compare_digest(unicodedata.normalize("NFC", first).encode("utf-8", "surrogatepass"),
+                               unicodedata.normalize("NFC", second).encode("utf-8", "surrogatepass")):
+        raise SigningError("Passphrases do not match; nothing was written")
+    return first
+
+
+def write_private_file(path: Path, data: bytes) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # O_EXCL refuses an existing file or symlink; O_BINARY keeps Windows from translating newlines.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+    try:
+        with os.fdopen(fd, "wb") as writer:
+            writer.write(data)
+            writer.flush()
+            os.fsync(writer.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+
+
+def encrypt_owner_backup(plaintext_path: Path, encrypted_path: Path, *, read_passphrase=None,
+                         delete_plaintext: bool = False) -> None:
+    """One-time conversion of the plaintext backup ZIP; deletes it only on explicit request."""
+    read_passphrase = read_passphrase or read_secret
+    plaintext = read_backup_file(plaintext_path)
+    if plaintext.startswith(ENC_MAGIC):
+        raise SigningError("Already an encrypted signing bundle: " + str(plaintext_path))
+    if len(plaintext) > MAX_BACKUP:
+        raise SigningError("Owner signing backup missing/oversized: " + str(plaintext_path))
+    parse_owner_backup(plaintext)
+    if os.path.lexists(encrypted_path):
+        if not delete_plaintext:
+            raise SigningError("Encrypted signing bundle already exists, refusing to overwrite: " + str(encrypted_path)
+                               + ". To remove the plaintext after checking it against this bundle, add --delete-plaintext.")
+        # Deleting later: the existing bundle must open and hold exactly this backup.
+        stored = decrypt_backup_bytes(read_backup_file(encrypted_path),
+                                      read_passphrase("Passphrase for " + encrypted_path.name + ": "))
+        if not hmac.compare_digest(stored, plaintext):
+            raise SigningError("The encrypted bundle does not match this plaintext backup; nothing was deleted")
+        print("PASS: existing encrypted bundle opens and matches the plaintext backup:", encrypted_path)
+    else:
+        passphrase = new_passphrase(read_passphrase)
+        write_private_file(encrypted_path, encrypt_backup_bytes(plaintext, passphrase))
+        try:
+            # Round trip from disk with the same passphrase before anything relies on it.
+            if not hmac.compare_digest(decrypt_backup_bytes(read_backup_file(encrypted_path), passphrase), plaintext):
+                raise SigningError("Encrypted signing bundle failed its round-trip check")
+        except BaseException:
+            encrypted_path.unlink(missing_ok=True)
+            raise
+        print("PASS: encrypted and verified:", encrypted_path)
+    if delete_plaintext:
+        plaintext_path.unlink()
+        print("Deleted plaintext backup:", plaintext_path)
+        print("Deleting does not securely erase flash storage, and copies made earlier (Download, PC, cloud) remain.")
+        return
+    print("PLAINTEXT BACKUP NOT deleted:", plaintext_path)
+    print("Copy", encrypted_path, "to a second safe place first. Without the passphrase the bundle cannot")
+    print("be opened, and without the key Lumena cannot be updated in place. Then remove the plaintext:")
+    print("  python sign_lumena.py --encrypt-backup --backup '" + str(plaintext_path) + "' --delete-plaintext")
+
+
+def signing_backup(backup: Path | None, encrypted: Path | None, allow_plaintext: bool) -> Path:
+    if allow_plaintext:
+        return backup_location(backup)
+    if backup is not None:
+        # An explicit file: its content decides, and a plaintext ZIP is refused on load.
+        return backup.expanduser()
+    path = encrypted_backup_location(encrypted)
+    if not path.is_file():
+        raise SigningError("Encrypted signing bundle not found: " + str(path) + ". Create it once from the"
+                           " plaintext backup ZIP with: python sign_lumena.py --encrypt-backup")
+    return path
+
+
+def sign_and_verify(apk_bytes: bytes, jar_bytes: bytes, backup: Path, out: Path, run_number: int, version: str,
+                    *, read_passphrase=None, allow_plaintext: bool = False) -> str:
     if out.exists() or not out.parent.is_dir():
         raise SigningError("Refusing to overwrite output or missing destination folder: " + str(out))
-    bundle, key_bytes = load_owner_backup(backup)
+    # Decrypted key material stays in memory and, below, in the temporary signing directory only.
+    bundle, key_bytes = load_owner_backup(backup, read_passphrase=read_passphrase, allow_plaintext=allow_plaintext)
     with tempfile.TemporaryDirectory(prefix="lumena-owner-sign-") as directory:
         tmp = Path(directory)
         apk = tmp / "unsigned.apk"
@@ -287,15 +527,30 @@ def sign_and_verify(apk_bytes: bytes, jar_bytes: bytes, backup: Path, out: Path,
     return checksum
 
 
-def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--run-id", type=int, required=True, help="GitHub Actions run ID from its URL")
+def main(argv: list[str] | None = None, *, read_passphrase=None) -> int:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--run-id", type=int, help="GitHub Actions run ID from its URL (required for signing)")
     p.add_argument("--allow-pr", action="store_true", help="Explicitly approve signing an unmerged same-repo PR build")
     p.add_argument("--artifact", type=Path, help="Local ZIP downloaded from the specified GitHub run")
-    p.add_argument("--backup", type=Path, help="Local owner backup ZIP; defaults to ~/.lumena or legacy Download")
+    p.add_argument("--backup", type=Path, help="Plaintext owner backup ZIP (input of --encrypt-backup); defaults to ~/.lumena or legacy Download")
+    p.add_argument("--encrypted-backup", type=Path, help="Encrypted owner bundle; defaults to ~/.lumena/Lumena-signing.enc")
+    p.add_argument("--allow-plaintext-backup", action="store_true", help="Sign from the plaintext backup ZIP anyway (prints a warning)")
+    p.add_argument("--encrypt-backup", action="store_true", help="One-time step: encrypt the plaintext backup ZIP into the encrypted bundle and verify it")
+    p.add_argument("--delete-plaintext", action="store_true", help="With --encrypt-backup: delete the plaintext ZIP once the encrypted bundle is verified against it")
     p.add_argument("--out", type=Path, help="Signed APK output; refuses overwriting an existing file")
     p.add_argument("--verify-only", action="store_true", help="Verify provenance, ZIP and APK metadata without handling the key")
     args = p.parse_args(argv)
+    if args.delete_plaintext and not args.encrypt_backup:
+        p.error("--delete-plaintext only works together with --encrypt-backup")
+    if args.encrypt_backup:
+        if (args.run_id is not None or args.allow_pr or args.artifact or args.out or args.verify_only
+                or args.allow_plaintext_backup):
+            p.error("--encrypt-backup is a separate one-time step; run it without signing options")
+        encrypt_owner_backup(backup_location(args.backup), encrypted_backup_location(args.encrypted_backup),
+                             read_passphrase=read_passphrase, delete_plaintext=args.delete_plaintext)
+        return 0
+    if args.run_id is None:
+        p.error("--run-id is required for signing")
 
     run, artifact = trusted_run(args.run_id, allow_pr=args.allow_pr)
     number = run["run_number"]
@@ -315,7 +570,9 @@ def main(argv: list[str] | None = None) -> int:
         print("PASS: verified source and APK; no signing key opened or APK signed")
         return 0
     output = args.out or DOWNLOAD / f"Lumena-v{version}-arm64.apk"
-    checksum = sign_and_verify(apk_bytes, jar_bytes, backup_location(args.backup), output, number, version)
+    backup = signing_backup(args.backup, args.encrypted_backup, args.allow_plaintext_backup)
+    checksum = sign_and_verify(apk_bytes, jar_bytes, backup, output, number, version,
+                               read_passphrase=read_passphrase, allow_plaintext=args.allow_plaintext_backup)
     print("PASS: owner-signed APK SHA-256:", checksum)
     print("SIGNED APK:", output)
     print("To update the existing app without uninstalling: termux-open", str(output))
