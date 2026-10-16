@@ -1315,6 +1315,55 @@ class AgentControllerTest {
     }
 
     @Test
+    fun ci2233AquariumAnnotatedPseudoToolDoesNotFinishWithoutEvidence() {
+        val state = controller.initial(
+            TaskState(
+                id = "ci2233-aquarium-phantom-read",
+                projectId = null,
+                goal = "акваріума",
+                currentInstruction = "акваріума",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        assertEquals(TaskIntent.GENERAL, state.intent)
+
+        val reply = controller.interpret(
+            "Зараз відкриваю його. expect_ok: true confidence: 1.0 " +
+                "{\\"file.read\\": {\\"path\\": \\"aquarium_brain_logic.py\\"}}",
+            state
+        )
+
+        assertTrue(reply is ControllerInstruction.AskModelAgain)
+        reply as ControllerInstruction.AskModelAgain
+        assertTrue(reply.state.task.status != TaskStatus.DONE)
+        assertEquals(0, reply.state.task.kernel.evidence.size)
+        assertFalse(reply.state.toolUsed)
+        assertTrue(reply.feedback.contains("no proposed tool was executed", ignoreCase = true) ||
+            reply.feedback.contains("No proposed tool was executed"))
+    }
+
+    @Test
+    fun ci2233AquariumFileReadPromiseWithoutJsonDoesNotFinish() {
+        val state = controller.initial(
+            TaskState(
+                id = "ci2233-aquarium-file-read-promise",
+                projectId = null,
+                goal = "акваріума",
+                currentInstruction = "акваріума",
+                status = TaskStatus.WAITING_MODEL
+            )
+        )
+        val reply = controller.interpret(
+            "Зараз відкриваю aquarium_brain_logic.py.",
+            state
+        )
+        assertTrue(reply is ControllerInstruction.AskModelAgain)
+        reply as ControllerInstruction.AskModelAgain
+        assertTrue(reply.state.task.status != TaskStatus.DONE)
+        assertFalse(reply.state.toolUsed)
+    }
+
+    @Test
     fun explanatoryGeneralReplyMayMentionToolWithoutClaimingExecution() {
         val generalTask =
             TaskState(
