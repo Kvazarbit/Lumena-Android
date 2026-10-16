@@ -156,13 +156,43 @@ class CognitiveGenomeV0Test {
         val recovered = rules.single {
             it.stage == CognitivePrincipleStage.RECOVERY_CANDIDATE
         }
-        assertEquals("CG0:AOV", dead.codons)
+        assertEquals("CG0:A", dead.codons)
+        assertEquals("python.run", dead.toolPattern)
         assertEquals("CG0:AOV", recovered.codons)
         assertEquals(listOf("e-recovered"), dead.evidenceIds)
         assertEquals(listOf("e-recovered"), recovered.evidenceIds)
         assertTrue(dead.observedFailures > 0)
         assertTrue(recovered.observedFailures > 0)
         assertEquals(0, recovered.independentGoalProofs)
+    }
+
+    @Test
+    fun differentFailedStepsYieldDistinctNegativePrefixes() {
+        val first = trace(
+            "fail-first",
+            outcomes = listOf(false, true, true),
+            failureClasses = listOf("TIMEOUT", null, null)
+        )
+        val second = trace(
+            "fail-second",
+            outcomes = listOf(true, false, true),
+            failureClasses = listOf(null, "INVALID_INPUT", null)
+        )
+        val deadEnds = CognitiveGenomePolicy.derive(
+            FractalExperienceCanvasState(records = listOf(first, second))
+        ).filter {
+            it.stage == CognitivePrincipleStage.NEGATIVE_DEAD_END
+        }
+        assertEquals(2, deadEnds.size)
+        assertEquals(
+            setOf("file.read", "file.read>python.run"),
+            deadEnds.map { it.toolPattern }.toSet()
+        )
+        assertTrue(deadEnds.all { it.observedFailures == 1 })
+        assertEquals(
+            setOf("TIMEOUT", "INVALID_INPUT"),
+            deadEnds.flatMap { it.failureClasses }.toSet()
+        )
     }
 
     @Test
