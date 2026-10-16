@@ -9,6 +9,7 @@ request-scoped cancellation for long-running subprocess tools.
 """
 from __future__ import annotations
 
+import base64
 import ipaddress
 import hashlib
 import http.client
@@ -3638,6 +3639,7 @@ def context_snapshot(args: dict[str, Any]) -> dict[str, Any]:
 def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None) -> dict[str, Any]:
     if tool == "health":
         search_diag = _read_search_diagnostics()
+        approval_state, _, approval_fingerprint = approval_key_state()
         return {
             "ok": True,
             "exitCode": 0,
@@ -3647,8 +3649,10 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"read_only_roots={','.join('@' + alias for alias, root in READONLY_ALIASES.items() if root.exists()) or '(none)'}\n"
                 f"read_roots_config={READ_ROOTS_FILE}\n"
                 f"version=0.29\n"
-                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1,python_clean_env_v1\n"
+                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1,python_clean_env_v1,signed_approvals_v1\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
+                f"approval_signing={approval_state}\n"
+                f"approval_key_fingerprint={approval_fingerprint or '(none)'}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
                 f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
                 f"last_web_search_provider={search_diag.get('provider') or '(none)'}\n"
@@ -3969,6 +3973,263 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
     raise ValueError(f"Unknown or disabled tool: {tool}")
 
 
+# Signed approvals (Trust Gate V2a).
+#
+# Threat model, stated plainly. The bearer token alone authorizes READ_ONLY
+# tools. After the owner pairs the bridge (writes the app's public key to
+# ~/.lumena/approval_pubkey from their own Termux shell; no HTTP endpoint
+# accepts a key), every other tool also needs a short-lived, single-use
+# approval signed by a non-exportable Android Keystore key that only the
+# Lumena app can use. This stops a token holder WITHOUT code execution in
+# Termux: another Android app calling 127.0.0.1:8765, or a leaked token.
+# It does nothing against code already running as the Termux uid: such code
+# can rewrite or delete approval_pubkey, edit bridge.py, or just do directly
+# whatever the bridge could do. A valid signature shows the request came
+# through the Lumena app's own code path; it does not show that a human
+# tapped "approve". This is not a sandbox and gives no process isolation.
+APPROVAL_VERSION = "lumena-approval-v1"
+APPROVAL_PUBKEY_FILE = Path(
+    os.environ.get("LUMENA_APPROVAL_PUBKEY", str(STATE_DIR / "approval_pubkey"))
+).expanduser()
+APPROVAL_MAX_TTL_MS = 120_000
+APPROVAL_MAX_FUTURE_SKEW_MS = 5_000
+APPROVAL_MAX_LIVE_NONCES = 4096
+APPROVAL_NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+APPROVAL_SIG_RE = re.compile(r"^[A-Za-z0-9_-]{8,200}$")
+# An approval issued before this process started is refused, so approvals
+# seen by an earlier bridge run cannot be replayed after its nonces are gone.
+BRIDGE_STARTED_AT_MS = int(time.time() * 1000)
+# Token-only tools on a paired bridge. This is an allow-list: MUTATING and
+# EXECUTABLE tools, unknown tools and tools added later all need a signature.
+APPROVAL_EXEMPT_EXTRA_TOOLS = ("inspect.batch", "laya.status", "laya.predict")
+APPROVAL_EXEMPT_TOOLS = frozenset(READ_ONLY_BATCH_TOOLS) | frozenset(APPROVAL_EXEMPT_EXTRA_TOOLS)
+_APPROVAL_NONCES: dict[str, int] = {}
+_APPROVAL_LOCK = threading.Lock()
+
+# NIST P-256 (secp256r1). Pure Python: Termux Python has no `cryptography`
+# by default. Only signature VERIFICATION runs here, on public data, so
+# timing side channels do not matter.
+_P256_P = 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF
+_P256_A = _P256_P - 3
+_P256_B = 0x5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B
+_P256_N = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+_P256_G = (
+    0x6B17D1F2E12C4247F8BCE6E563A440F277037D812DEB33A0F4A13945D898C296,
+    0x4FE342E2FE1A7F9B8EE7EB4A7C0F9E162BCE33576B315ECECBB6406837BF51F5,
+)
+# X.509 SubjectPublicKeyInfo header for an uncompressed P-256 point.
+_P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200")
+_JACOBIAN_INFINITY = (1, 1, 0)
+
+
+def _p256_double(point: tuple[int, int, int]) -> tuple[int, int, int]:
+    x, y, z = point
+    if z == 0 or y == 0:
+        return _JACOBIAN_INFINITY
+    p = _P256_P
+    yy = y * y % p
+    s = 4 * x * yy % p
+    m = (3 * x * x + _P256_A * pow(z, 4, p)) % p
+    x3 = (m * m - 2 * s) % p
+    y3 = (m * (s - x3) - 8 * yy * yy) % p
+    return x3, y3, 2 * y * z % p
+
+
+def _p256_add(first: tuple[int, int, int], second: tuple[int, int, int]) -> tuple[int, int, int]:
+    if first[2] == 0:
+        return second
+    if second[2] == 0:
+        return first
+    p = _P256_P
+    x1, y1, z1 = first
+    x2, y2, z2 = second
+    z1z1 = z1 * z1 % p
+    z2z2 = z2 * z2 % p
+    u1 = x1 * z2z2 % p
+    u2 = x2 * z1z1 % p
+    s1 = y1 * z2 * z2z2 % p
+    s2 = y2 * z1 * z1z1 % p
+    if u1 == u2:
+        return _p256_double(first) if s1 == s2 else _JACOBIAN_INFINITY
+    h = (u2 - u1) % p
+    r = (s2 - s1) % p
+    hh = h * h % p
+    hhh = h * hh % p
+    v = u1 * hh % p
+    x3 = (r * r - hhh - 2 * v) % p
+    y3 = (r * (v - x3) - s1 * hhh) % p
+    return x3, y3, h * z1 * z2 % p
+
+
+def p256_point_from_spki(der: bytes) -> tuple[int, int]:
+    if len(der) != 91 or not der.startswith(_P256_SPKI_PREFIX) or der[26] != 0x04:
+        raise ValueError("not an uncompressed P-256 SubjectPublicKeyInfo")
+    x = int.from_bytes(der[27:59], "big")
+    y = int.from_bytes(der[59:91], "big")
+    if x >= _P256_P or y >= _P256_P or (y * y - (x * x * x + _P256_A * x + _P256_B)) % _P256_P:
+        raise ValueError("public key is not a point on P-256")
+    return x, y
+
+
+def _der_ecdsa_signature(der: bytes) -> tuple[int, int]:
+    if len(der) < 8 or len(der) > 72 or der[0] != 0x30 or der[1] != len(der) - 2:
+        raise ValueError("bad signature encoding")
+    values = []
+    pos = 2
+    for _ in range(2):
+        if pos + 2 > len(der) or der[pos] != 0x02:
+            raise ValueError("bad signature encoding")
+        length = der[pos + 1]
+        pos += 2
+        body = der[pos:pos + length]
+        if length == 0 or length > 33 or len(body) != length or body[0] & 0x80:
+            raise ValueError("bad signature encoding")
+        if length > 1 and body[0] == 0 and not body[1] & 0x80:
+            raise ValueError("bad signature encoding")
+        values.append(int.from_bytes(body, "big"))
+        pos += length
+    if pos != len(der):
+        raise ValueError("bad signature encoding")
+    return values[0], values[1]
+
+
+def p256_verify(public_point: tuple[int, int], message: bytes, der_signature: bytes) -> bool:
+    """ECDSA P-256 with SHA-256, as Java's SHA256withECDSA (DER r, s)."""
+    try:
+        r, s = _der_ecdsa_signature(der_signature)
+    except ValueError:
+        return False
+    n = _P256_N
+    if not (1 <= r < n and 1 <= s < n):
+        return False
+    e = int.from_bytes(hashlib.sha256(message).digest(), "big")
+    w = pow(s, -1, n)
+    u1 = e * w % n
+    u2 = r * w % n
+    g = (_P256_G[0], _P256_G[1], 1)
+    q = (public_point[0], public_point[1], 1)
+    gq = _p256_add(g, q)
+    acc = _JACOBIAN_INFINITY
+    for bit in range(max(u1.bit_length(), u2.bit_length()) - 1, -1, -1):
+        acc = _p256_double(acc)
+        pick = ((u1 >> bit) & 1, (u2 >> bit) & 1)
+        if pick == (1, 1):
+            acc = _p256_add(acc, gq)
+        elif pick == (1, 0):
+            acc = _p256_add(acc, g)
+        elif pick == (0, 1):
+            acc = _p256_add(acc, q)
+    if acc[2] == 0:
+        return False
+    z_inv = pow(acc[2], -1, _P256_P)
+    return acc[0] * z_inv * z_inv % _P256_P % n == r
+
+
+def _approval_field(data: bytes) -> bytes:
+    return len(data).to_bytes(4, "big") + data
+
+
+def approval_args_sha256(args: dict[str, Any]) -> str:
+    """SHA-256 of args: count, then key/value pairs sorted by UTF-8 key bytes,
+    every string a 4-byte big-endian length plus UTF-8. Mirrors
+    ApprovalCanonical.argsSha256 in the app."""
+    items = []
+    for key, value in args.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise TypeError("signed approval args must all be strings")
+        items.append((key.encode("utf-8"), value.encode("utf-8")))
+    items.sort()
+    encoded = len(items).to_bytes(4, "big") + b"".join(
+        _approval_field(key) + _approval_field(value) for key, value in items
+    )
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def approval_message(tool: str, args_sha256: str, nonce: str, issued_at: int, expires_at: int) -> bytes:
+    fields = (APPROVAL_VERSION, tool, args_sha256, nonce, str(issued_at), str(expires_at))
+    return b"".join(_approval_field(field.encode("utf-8")) for field in fields)
+
+
+def approval_key_state() -> tuple[str, tuple[int, int] | None, str | None]:
+    """("unpaired" | "paired" | "invalid_key", public point, fingerprint).
+
+    Read on every call, so pairing and unpairing need no bridge restart."""
+    try:
+        raw = APPROVAL_PUBKEY_FILE.read_text(encoding="ascii")
+    except FileNotFoundError:
+        return "unpaired", None, None
+    except (OSError, UnicodeDecodeError):
+        return "invalid_key", None, None
+    parts = raw.split()
+    try:
+        if len(parts) != 2 or parts[0] != "ecdsa-p256":
+            raise ValueError("expected: ecdsa-p256 <base64 SubjectPublicKeyInfo>")
+        der = base64.b64decode(parts[1], validate=True)
+        point = p256_point_from_spki(der)
+    except ValueError:
+        return "invalid_key", None, None
+    return "paired", point, hashlib.sha256(der).hexdigest()[:16]
+
+
+def approval_denial(tool: str, args: dict[str, Any], approval: Any) -> tuple[str, str] | None:
+    """(errorCode, error) when a /tool request must be refused, else None."""
+    if tool in APPROVAL_EXEMPT_TOOLS:
+        return None
+    state, point, _ = approval_key_state()
+    if state == "unpaired":
+        return None
+    if point is None:
+        return ("APPROVAL_KEY_INVALID",
+                f"{APPROVAL_PUBKEY_FILE} is not a valid ecdsa-p256 key; re-pair from Lumena "
+                f"(Copy pairing) or delete the file to go back to token-only")
+
+    def invalid(reason: str) -> tuple[str, str]:
+        return "APPROVAL_INVALID", f"Signed approval refused for {tool}: {reason}"
+
+    if approval is None:
+        return ("APPROVAL_REQUIRED",
+                f"Signed approval required: this bridge is paired and {tool} is not read-only. "
+                f"If the Lumena app was reinstalled, re-pair it (Copy pairing).")
+    if not isinstance(approval, dict):
+        return invalid("approval must be an object")
+    nonce = approval.get("nonce")
+    issued_at = approval.get("issuedAt")
+    expires_at = approval.get("expiresAt")
+    signature = approval.get("sig")
+    if not isinstance(nonce, str) or not APPROVAL_NONCE_RE.fullmatch(nonce):
+        return invalid("bad nonce")
+    if type(issued_at) is not int or type(expires_at) is not int:
+        return invalid("issuedAt/expiresAt must be integer epoch milliseconds")
+    if not isinstance(signature, str) or not APPROVAL_SIG_RE.fullmatch(signature):
+        return invalid("bad signature encoding")
+    if not 0 < expires_at - issued_at <= APPROVAL_MAX_TTL_MS:
+        return invalid(f"lifetime must be 1..{APPROVAL_MAX_TTL_MS} ms")
+    if issued_at < BRIDGE_STARTED_AT_MS:
+        return invalid("approval was issued before this bridge started")
+    now_ms = int(time.time() * 1000)
+    if issued_at > now_ms + APPROVAL_MAX_FUTURE_SKEW_MS:
+        return invalid("issuedAt is in the future")
+    if now_ms > expires_at:
+        return invalid("approval expired")
+    try:
+        message = approval_message(tool, approval_args_sha256(args), nonce, issued_at, expires_at)
+        der = base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4))
+    except (TypeError, ValueError):
+        return invalid("args must be strings")
+    if not p256_verify(point, message, der):
+        return invalid("signature does not verify for this tool, args and paired key")
+    with _APPROVAL_LOCK:
+        for seen, until in list(_APPROVAL_NONCES.items()):
+            if until < now_ms:
+                del _APPROVAL_NONCES[seen]
+        if nonce in _APPROVAL_NONCES:
+            return invalid("nonce was already used")
+        if len(_APPROVAL_NONCES) >= APPROVAL_MAX_LIVE_NONCES:
+            return invalid("too many live approvals; retry shortly")
+        _APPROVAL_NONCES[nonce] = expires_at
+    return None
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "LumenaBridge/0.29"
     protocol_version = "HTTP/1.1"
@@ -4041,6 +4302,26 @@ class Handler(BaseHTTPRequestHandler):
             request_id = str(request_id_raw).strip() if request_id_raw is not None else None
             if request_id and not REQUEST_ID_RE.fullmatch(request_id):
                 raise ValueError("Invalid requestId")
+
+            denial = approval_denial(tool, args, payload.get("approval"))
+            if denial is not None:
+                error_code, error = denial
+                refused = {
+                    "ok": False,
+                    "tool": tool,
+                    "exitCode": None,
+                    "stdout": "",
+                    "stderr": "",
+                    "error": error,
+                    "errorCode": error_code,
+                    "failureClass": "AUTH_OR_CONFIG",
+                    "retryable": False,
+                    "dependency": "termux_bridge",
+                }
+                if request_id:
+                    refused["requestId"] = request_id
+                self._json(403, refused)
+                return
 
             result = execute_tool(tool, args, request_id=request_id)
             result["tool"] = tool
