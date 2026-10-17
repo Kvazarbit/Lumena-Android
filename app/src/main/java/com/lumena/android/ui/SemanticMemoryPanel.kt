@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
@@ -18,6 +20,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,29 +52,48 @@ import kotlinx.coroutines.withContext
 
 /**
  * Explicit owner controls only. No unattended indexing, prompt injection,
- * ToolGate execution or model download. All inference is loopback /api/embed.
+ * ToolGate execution or model download. Inference uses loopback Ollama or in-process LiteRT.
  */
 @Composable
 fun SemanticMemoryPanel(ollamaUrl: String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var enabled by remember { mutableStateOf("semantic-memory" !in ModuleSettings.disabled(context)) }
-    var tag by remember { mutableStateOf("embeddinggemma-2") }
-    var backend by remember { mutableStateOf("ollama") }
+    var tag by rememberSaveable { mutableStateOf("embeddinggemma-2") }
+    var backend by rememberSaveable { mutableStateOf("ollama") }
     var job by remember { mutableStateOf<Job?>(null) }
     var query by remember { mutableStateOf("") }
-    var selectedScope by remember { mutableStateOf<String?>(null) }
+    var selectedScope by rememberSaveable { mutableStateOf<String?>(null) }
+    var scopeMenu by remember { mutableStateOf(false) }
     var availableScopes by remember { mutableStateOf<List<String>>(emptyList()) }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Модель та її сумісність ще не перевірені на цьому телефоні.") }
     var hits by remember { mutableStateOf<List<SemanticHit>>(emptyList()) }
     var indexed by remember { mutableStateOf(0) }
 
-    fun loadDocuments(limit: Int): List<SemanticDocument> =
+    fun loadDocuments(): List<SemanticDocument> =
         SemanticMemoryPolicy.documents(
-            FractalExperienceCanvasStore.cognitiveGenome(context, limit = 256),
-            limit = limit
+            FractalExperienceCanvasStore.cognitiveGenome(
+                context, limit = com.lumena.android.settings.CognitiveGenomePolicy.MAX_ARCHIVED_DERIVED
+            ),
+            limit = com.lumena.android.settings.CognitiveGenomePolicy.MAX_ARCHIVED_DERIVED
         )
+
+    // Read stored source scopes on entry, including after process recreation.
+    // This performs no inference and does not depend on indexing being run again.
+    LaunchedEffect(enabled) {
+        if (enabled) {
+            try {
+                val docs = withContext(Dispatchers.IO) { loadDocuments() }
+                availableScopes = docs.mapNotNull { it.scopeHash }.distinct().sorted()
+                if (selectedScope != null && selectedScope !in availableScopes) selectedScope = null
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                status = "SOURCE_UNAVAILABLE: " + failure::class.java.simpleName
+            }
+        }
+    }
 
     suspend fun <T> withEmbedding(block: suspend (LocalEmbeddingProvider) -> T): T {
         val provider: LocalEmbeddingProvider =
@@ -219,12 +242,12 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
                         val identity = provider.inspectModel(requestedModel())
                         // No index entries before successful real embedding canary.
                         provider.embed(identity, listOf("Lumena local embedding readiness check."))
-                        val docs = withContext(Dispatchers.IO) {
-                            loadDocuments(SemanticMemoryPolicy.MAX_SESSION)
-                        }
-                        require(docs.isNotEmpty()) { "Немає Fractal принципів для індексації" }
+                        val allDocs = withContext(Dispatchers.IO) { loadDocuments() }
+                        val cached = withContext(Dispatchers.IO) { SemanticMemoryStore.revisions(context, identity) }
+                        val docs = SemanticMemoryPolicy.pending(allDocs, cached)
+                        require(allDocs.isNotEmpty()) { "Немає Fractal принципів для індексації" }
                         indexed = 0
-                        availableScopes = docs.mapNotNull { it.scopeHash }.distinct().take(8)
+                        availableScopes = allDocs.mapNotNull { it.scopeHash }.distinct().sorted()
                         for (batch in docs.chunked(SemanticMemoryPolicy.MAX_BATCH)) {
                             kotlinx.coroutines.currentCoroutineContext().ensureActive()
                             check(ModuleRegistry.isEnabled("semantic-memory")) {
@@ -239,12 +262,14 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
                             status = "Індексовано " + indexed + "/" + docs.size +
                                 " SHADOW принципів (живі джерела не змінено)"
                         }
-                        status = "INDEXED: " + indexed + " · " + identity.name +
+                        val remaining = allDocs.count { cached[it.id] != it.revision } - indexed
+                        status = "INDEXED: " + indexed + " · ще не індексовано: " + remaining +
+                            " · " + identity.name +
                             " · digest " + identity.digest.take(12) + ". TOOLGATE незмінний."
                     }
                 }
             }) {
-                Text(if (busy) "Обробка…" else "Індексувати до 48 принципів вручну")
+                Text(if (busy) "Обробка…" else "Індексувати наступні 48 принципів")
             }
             Text(status, style = MaterialTheme.typography.bodySmall)
             if (busy) {
@@ -260,12 +285,21 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
                 style = MaterialTheme.typography.labelSmall
             )
             if (availableScopes.isNotEmpty()) {
-                TextButton(enabled = enabled && !busy, onClick = { selectedScope = null }) {
-                    Text("Пошук лише у глобальних правилах")
+                TextButton(enabled = enabled && !busy, onClick = { scopeMenu = true }) {
+                    Text("Вибрати область (" + availableScopes.size + " проєктів)")
                 }
-                availableScopes.take(6).forEach { option ->
-                    TextButton(enabled = enabled && !busy, onClick = { selectedScope = option }) {
-                        Text("Область " + option.take(20))
+                DropdownMenu(expanded = scopeMenu, onDismissRequest = { scopeMenu = false }) {
+                    DropdownMenuItem(text = { Text("GLOBAL") }, onClick = {
+                        selectedScope = null
+                        hits = emptyList()
+                        scopeMenu = false
+                    })
+                    availableScopes.forEach { option ->
+                        DropdownMenuItem(text = { Text("Область " + option.take(20)) }, onClick = {
+                            selectedScope = option
+                            hits = emptyList()
+                            scopeMenu = false
+                        })
                     }
                 }
             }
@@ -273,7 +307,7 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
                 value = query,
                 onValueChange = { query = it.take(SemanticMemoryPolicy.MAX_QUERY) },
                 label = { Text("Запит за змістом") },
-                supportingText = { Text("Не вводь секрети: це ручний SHADOW-запит до локальної Ollama.") },
+                supportingText = { Text("Ручний локальний SHADOW-пошук; невідомі причини залишаються UNKNOWN.") },
                 enabled = enabled && !busy,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -284,7 +318,7 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
                         val term = query.trim()
                         require(term.isNotEmpty() && term.length <= SemanticMemoryPolicy.MAX_QUERY)
                         val vector = provider.embed(identity, listOf(term)).single()
-                        val docs = withContext(Dispatchers.IO) { loadDocuments(256) }
+                        val docs = withContext(Dispatchers.IO) { loadDocuments() }
                         val result = withContext(Dispatchers.IO) {
                             SemanticMemoryStore.search(
                                 context, identity, vector, docs, selectedScope, limit = 6

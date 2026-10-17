@@ -91,6 +91,9 @@ object FractalExperienceCanvasCodec {
                     .toSet()
 
         parsed.records.forEach { record ->
+            record.conditions.validate()
+            require(record.argumentFingerprints.isEmpty() || record.argumentFingerprints.size == record.tools.size)
+            require(record.argumentFingerprints.filterNotNull().all { it.matches(Regex("[a-f0-9]{64}")) })
             require(record.id.length in 1..128)
             require(record.sourceTaskHash.length in 1..64)
             require(record.tools.isNotEmpty() && record.tools.size <= 16)
@@ -218,7 +221,9 @@ object FractalExperienceCanvasStore {
             }
 
             try {
-                FractalExperienceCanvasCodec.decode(json)
+                FractalExperienceCanvasCodec.decode(json).also {
+                    FractalEvidenceLedgerStore.append(context, it.records)
+                }
             } catch (failure: Exception) {
                 throw IllegalStateException(
                     "Fractal experience canvas is corrupt; refusing silent reset.",
@@ -233,6 +238,9 @@ object FractalExperienceCanvasStore {
     ): FractalExperienceCanvasState =
         synchronized(lock) {
             val current = load(context)
+            FractalEvidenceLedgerStore.append(context, examples.mapNotNull {
+                FractalExperienceCanvasPolicy.toRecord(it, FractalExperienceOrigin.LIVE)
+            })
             val next = FractalExperienceCanvasPolicy.ingest(
                 current,
                 examples
@@ -250,6 +258,9 @@ object FractalExperienceCanvasStore {
     ): FractalExperienceCanvasState =
         synchronized(lock) {
             val current = load(context)
+            FractalEvidenceLedgerStore.append(context, examples.mapNotNull {
+                FractalExperienceCanvasPolicy.toRecord(it, FractalExperienceOrigin.LEGACY_BACKFILL)
+            })
             val next = FractalExperienceCanvasPolicy.backfillLegacy(
                 state = current,
                 examples = examples
@@ -276,6 +287,11 @@ object FractalExperienceCanvasStore {
             }
 
             val coordinator = CoordinatorExperienceStore.load(context)
+            FractalEvidenceLedgerStore.append(context,
+                CoordinatorExperiencePolicy.allVerifiedExamples(coordinator).mapNotNull {
+                    FractalExperienceCanvasPolicy.toRecord(it, FractalExperienceOrigin.LEGACY_BACKFILL)
+                }
+            )
             val result = FractalLegacyBackfillPolicy.migrate(
                 canvas = current,
                 coordinator = coordinator
@@ -369,16 +385,16 @@ object FractalExperienceCanvasStore {
         }
     }
 
-    /** Read-only model-neutral principles derived from existing Canvas bytes.
-     * No separate storage, migration, permission grant, or auto-activation.
-     * The full provenance stays in the original Fractal records.
+    /** Advisory projection over archived source receipts. Never normalize the archive
+     * through the bounded Canvas: that would drop precisely the evidence it preserves.
      */
     fun cognitiveGenome(
         context: Context,
         limit: Int = 32
     ): List<CognitivePrinciple> = synchronized(lock) {
-        CognitiveGenomePolicy.derive(load(context))
-            .take(limit.coerceIn(1, CognitiveGenomePolicy.MAX_DERIVED))
+        val canvas = load(context) // Idempotent migration of existing source records.
+        val archived = FractalEvidenceLedgerPolicy.latestRecords(FractalEvidenceLedgerStore.load(context))
+        CognitiveGenomePolicy.derive(canvas.copy(records = archived), limit = limit)
     }
 
     fun trailSummaries(context: Context): List<FractalTrailSummary> =
@@ -547,6 +563,7 @@ object FractalExperienceCanvasStore {
 
     fun clear(context: Context) =
         synchronized(lock) {
+            FractalEvidenceLedgerStore.clear(context)
             val file = atomicFile(context).baseFile
             if (file.exists()) file.delete()
             File(file.path + ".bak")

@@ -234,6 +234,9 @@ object StateVault {
         state.entries.forEach { (name, data) ->
             if (name.startsWith("files/")) {
                 requireNotNull(anyAdapter.fromJson(data.toString(Charsets.UTF_8)))
+                if (name == "files/" + FractalEvidenceLedgerStore.FILE_NAME) {
+                    FractalEvidenceLedgerCodec.decode(data.toString(Charsets.UTF_8))
+                }
                 if (name.endsWith("lumena_history_tree.json")) requireNotNull(historyAdapter.fromJson(data.toString(Charsets.UTF_8)))
             }
             if (name.startsWith("databases/")) {

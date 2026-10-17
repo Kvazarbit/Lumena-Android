@@ -112,7 +112,7 @@ class CognitiveGenomeV0Test {
     fun sameScopedActionWithSuccessAndFailureStaysContested() {
         val state = FractalExperienceCanvasState(
             records = listOf(
-                trace("positive"),
+                trace("positive", dependencies = listOf(null, "/very/private/path", null)),
                 trace(
                     "negative",
                     outcomes = listOf(true, false, true),

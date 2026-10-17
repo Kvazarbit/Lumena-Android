@@ -1354,7 +1354,16 @@ fun WorkflowChatScreen(
                         result = result,
                         experienceId = eventId,
                         modelId = constitutionContributorModelId,
-                        scopeId = task.projectId ?: "global"
+                        scopeId = task.projectId ?: "global",
+                        conditions = com.lumena.android.settings.ExperienceConditions(
+                            problemClass = com.lumena.android.agent.core.TaskIntentRouter.route(task.goal).intent.name,
+                            requiredPostconditions = task.goalContract.criteria.filter { it.required }
+                                .map { it.kind.name }.distinct().sorted(),
+                            environmentFingerprint = com.lumena.android.settings.CoordinatorExperiencePolicy.hash(
+                                android.os.Build.FINGERPRINT + "|" +
+                                    context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
+                            )
+                        )
                     )
                 }
                 val coordinatorFailure = coordinatorResult.exceptionOrNull()

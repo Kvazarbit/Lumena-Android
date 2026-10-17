@@ -54,6 +54,14 @@ object SemanticMemoryStore {
                         arrayOf(model.cacheKey, doc.id)
                     ).use { !it.moveToFirst() }
                 }
+                val bytes = db.rawQuery("SELECT COALESCE(SUM(LENGTH(vector)),0) FROM semantic_vectors", null)
+                    .use { c -> check(c.moveToFirst()); c.getLong(0) }
+                val replacedBytes = documents.sumOf { doc ->
+                    db.rawQuery("SELECT LENGTH(vector) FROM semantic_vectors WHERE model_key=? AND id=?",
+                        arrayOf(model.cacheKey, doc.id)).use { c -> if (c.moveToFirst()) c.getLong(0) else 0L }
+                }
+                require(bytes - replacedBytes + normalized.sumOf { it.size.toLong() * 4 } <=
+                    SemanticMemoryPolicy.MAX_VECTOR_BYTES) { "Semantic cache byte budget reached; evidence retained" }
                 require(total + additional <= SemanticMemoryPolicy.MAX_ROWS) {
                     "Semantic SHADOW cache capacity reached; no evidence deleted"
                 }
@@ -83,6 +91,15 @@ object SemanticMemoryStore {
         }
         StateVault.requestSave(context)
         documents.size
+    }
+
+    fun revisions(context: Context, model: LocalEmbeddingIdentity): Map<String, String> = synchronized(lock) {
+        helper(context).readableDatabase.use { db ->
+            db.rawQuery("SELECT id, revision FROM semantic_vectors WHERE model_key=?",
+                arrayOf(model.cacheKey)).use { c ->
+                buildMap { while (c.moveToNext()) put(c.getString(0), c.getString(1)) }
+            }
+        }
     }
 
     /**

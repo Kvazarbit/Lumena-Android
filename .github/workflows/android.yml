@@ -2,7 +2,7 @@ name: Android CI
 
 on:
   push:
-    branches: [ main, "feature/**", "stabilize/**" ]
+    branches: [ main, "feature/**", "stabilize/**", "codex/**" ]
   pull_request:
 
 permissions:
@@ -344,6 +344,7 @@ jobs:
               "com.lumena.android.settings.CognitiveGenomeV0Test",
               "com.lumena.android.agent.core.BtcExecutionFalseDoneRegressionTest",
               "com.lumena.android.settings.SemanticMemoryPolicyTest",
+              "com.lumena.android.settings.ContextMemoryIntegrityTest",
               "com.lumena.android.ollama.LocalEmbeddingProtocolTest",
               "com.lumena.android.agent.core.SemanticMemoryModuleBoundaryTest",
               "com.lumena.android.llama.SemanticLiteRtIdentityTest",

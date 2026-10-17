@@ -43,7 +43,9 @@ data class FractalExampleRecord(
     val failureClasses: List<String?> = emptyList(),
     val errorCodes: List<String?> = emptyList(),
     val retryableFlags: List<Boolean?> = emptyList(),
-    val dependencies: List<String?> = emptyList()
+    val dependencies: List<String?> = emptyList(),
+    val conditions: ExperienceConditions = ExperienceConditions(),
+    val argumentFingerprints: List<String?> = emptyList()
 )
 
 data class FractalExperienceNode(
@@ -507,7 +509,7 @@ object FractalExperienceCanvasPolicy {
         )
     }
 
-    private fun toRecord(
+    internal fun toRecord(
         example: CoordinatorExecutionExample,
         origin: FractalExperienceOrigin
     ): FractalExampleRecord? {
@@ -526,7 +528,6 @@ object FractalExperienceCanvasPolicy {
             tools = tools.take(16),
             targets = example.targets
                 .map { sanitizeTarget(it) }
-                .filter(String::isNotBlank)
                 .take(16),
             outcomes = example.outcomes.take(16),
             evidenceIds = example.evidenceIds
@@ -553,6 +554,8 @@ object FractalExperienceCanvasPolicy {
             retryableFlags = List(tools.take(16).size) { index ->
                 example.retryableFlags.getOrNull(index)
             },
+            conditions = example.conditions.also { it.validate() },
+            argumentFingerprints = example.argumentFingerprints.take(16),
             dependencies = List(tools.take(16).size) { index ->
                 sanitizeOutcomeMetadata(example.dependencies.getOrNull(index), 160)
             }

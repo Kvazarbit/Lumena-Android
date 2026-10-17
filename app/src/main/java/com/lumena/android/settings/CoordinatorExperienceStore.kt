@@ -31,7 +31,9 @@ data class CoordinatorEpisodeEvent(
     val dependency: String? = null,
     val expectedOutcome: ExpectedOutcome? = null,
     val observedOutcome: ObservedOutcome? = null,
-    val outcomeDelta: OutcomeDelta? = null
+    val outcomeDelta: OutcomeDelta? = null,
+    val conditions: ExperienceConditions = ExperienceConditions(),
+    val argumentFingerprint: String? = null
 )
 
 data class CoordinatorEpisodeState(
@@ -62,7 +64,9 @@ data class CoordinatorExecutionExample(
     val failureClasses: List<String?> = emptyList(),
     val errorCodes: List<String?> = emptyList(),
     val retryableFlags: List<Boolean?> = emptyList(),
-    val dependencies: List<String?> = emptyList()
+    val dependencies: List<String?> = emptyList(),
+    val conditions: ExperienceConditions = ExperienceConditions(),
+    val argumentFingerprints: List<String?> = emptyList()
 )
 
 /**
@@ -311,6 +315,8 @@ object CoordinatorExperiencePolicy {
             errorCodes = segment.map { it.errorCode },
             retryableFlags = segment.map { it.retryable },
             dependencies = segment.map { it.dependency },
+            conditions = first.conditions,
+            argumentFingerprints = segment.map { it.argumentFingerprint },
             contributorModelIds = segment
                 .mapNotNull { it.modelId }
                 .distinct()
@@ -384,8 +390,10 @@ object CoordinatorExperienceStore {
         experienceId: String?,
         modelId: String? = null,
         scopeId: String? = null,
-        now: Long = System.currentTimeMillis()
+        now: Long = System.currentTimeMillis(),
+        conditions: ExperienceConditions = ExperienceConditions()
     ): CoordinatorEpisodeEvent? = synchronized(lock) {
+        conditions.validate()
         // Keep unknown outcomes as sequence barriers, never as training labels.
         val verifiedOk = result.ok && !result.outcomeUnknown &&
             ContextKernel.resultFailure(request.tool, result.ok, result.exitCode, result.tool, result.stdout) == null
@@ -464,7 +472,13 @@ object CoordinatorExperienceStore {
                 ?.take(160),
             expectedOutcome = expectedOutcome,
             observedOutcome = observedOutcome,
-            outcomeDelta = outcomeDelta
+            outcomeDelta = outcomeDelta,
+            conditions = conditions,
+            argumentFingerprint = CoordinatorExperiencePolicy.hash(
+                request.args.toSortedMap().entries.joinToString("") { (key, value) ->
+                    "${key.length}:$key${value.length}:$value"
+                }
+            )
         )
         val next = CoordinatorExperiencePolicy.record(state, event)
         save(context, next)
