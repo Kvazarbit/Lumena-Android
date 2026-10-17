@@ -30,7 +30,13 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions { jvmTarget = "17" }
+    kotlinOptions {
+        jvmTarget = "17"
+        // Google's LiteRT-LM 0.18 AAR was built with newer Kotlin metadata.
+        // The official Google AI Edge Gallery uses this compatibility flag.
+        // No blanket AGP/Kotlin upgrade until isolated CI proves necessary.
+        freeCompilerArgs += listOf("-Xskip-metadata-version-check")
+    }
     buildFeatures { compose = true }
     externalNativeBuild {
         cmake {
