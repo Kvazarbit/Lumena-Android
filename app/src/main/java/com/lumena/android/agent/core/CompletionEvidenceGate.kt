@@ -40,7 +40,8 @@ internal object CompletionEvidenceGate {
     fun missingExecutionProof(state: AgentControlState): String? {
         val operational =
             state.intent != TaskIntent.GENERAL ||
-                ShortTurnCue.isExecutionDirective(currentInstruction(state))
+                ShortTurnCue.isExecutionDirective(currentInstruction(state)) ||
+                TaskIntentRouter.isExplicitFileExecution(currentInstruction(state))
         if (!operational || hasSuccessfulLocalToolResult(state)) return null
         return "NO_VERIFIED_TOOL_RESULT: no successful local TOOL_RESULT was recorded. " +
             "A model response, plan, or toolUsed flag alone is not completion proof. " +

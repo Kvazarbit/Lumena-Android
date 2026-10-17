@@ -557,7 +557,8 @@ object GoalContractPolicy {
             "python.tests",
             "тест"
         )
-        if (executionTerms.any { lower.contains(it) }) {
+        if (TaskIntentRouter.isExplicitFileExecution(goal) ||
+            executionTerms.any { lower.contains(it) }) {
             return "executable"
         }
 

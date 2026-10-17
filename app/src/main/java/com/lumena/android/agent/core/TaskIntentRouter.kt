@@ -114,7 +114,7 @@ object TaskIntentRouter {
             )
         }
 
-        if (isCodeWork(lower)) {
+        if (isCodeWork(lower) || isExplicitFileExecution(lower)) {
             val mixedWebResearch = isPublicWeb(lower)
             val tools = buildList {
                 add("context.snapshot")
@@ -368,6 +368,25 @@ object TaskIntentRouter {
                     )
             }
         }
+    }
+
+    /**
+     * A leading affirmative RUN/EXECUTE imperative with a file/script subject
+     * is operational even without a filename extension: "запусти нові файли BTC".
+     * Questions, explanations, negations and quoted examples cannot activate it.
+     * The router only classifies intent; ToolGate still controls every operation.
+     */
+    internal fun isExplicitFileExecution(goal: String): Boolean {
+        val normalized = goal.trim().replace(Regex("\\s+"), " ")
+        if (normalized.length > 240) return false
+        return Regex(
+            "(?iu)^(?:(?:будь\\s+ласка|please|proszę)\\s*,?\\s*)?" +
+                "(?:запусти|запустіть|запускай|запускайте|run|rerun|execute|uruchom)\\s+" +
+                "[^.!?;]{0,100}(?:файл[\\p{L}]*|files?\\b|" +
+                "скрипт[\\p{L}]*|scripts?\\b|" +
+                "програм[\\p{L}]*|programs?\\b|" +
+                "plik[\\p{L}]*|\\.(?:py|js|sh)\\b)"
+        ).containsMatchIn(normalized)
     }
 
     private fun isCodeWork(lower: String): Boolean {

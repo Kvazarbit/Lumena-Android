@@ -1113,10 +1113,24 @@ class AgentController(
                         RegexOption.IGNORE_CASE
                     ).containsMatchIn(trimmed)
                 }
+        // Annotated Python-style pseudo calls are model prose, never TOOL_RESULT:
+        // "expect_ok: true confidence: 0.9 file.write(path=...)".
+        // Never silently normalize a mutating function call into ToolGate.
+        val embeddedAnnotatedFunctionProposal =
+            (trimmed.contains("expect_ok", ignoreCase = true) ||
+                Regex("(?i)\\bconfidence\\s*:").containsMatchIn(trimmed)) &&
+                ToolRegistry.all().any { spec ->
+                    Regex(
+                        "(?i)(?<![a-z0-9_.])" +
+                            Regex.escape(spec.name) +
+                            "\\s*\\("
+                    ).containsMatchIn(trimmed)
+                }
         val looksLikeBrokenProtocol =
             hasProtocolJsonShape ||
                 embeddedRegisteredRequest ||
                 embeddedAnnotatedToolProposal ||
+                embeddedAnnotatedFunctionProposal ||
                 (trimmed.startsWith("{") && Regex("\"[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*\"\\s*:").containsMatchIn(trimmed)) ||
                 trimmed.contains("<tool_call>", ignoreCase = true)
 
