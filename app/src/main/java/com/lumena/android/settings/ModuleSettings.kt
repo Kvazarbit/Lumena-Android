@@ -13,14 +13,19 @@ object ModuleSettings {
     private const val PREFS = "lumena_modules"
     private const val KEY_DISABLED = "disabled"
     private const val KEY_BRIDGE_VERSION = "bridge_version"
-    val DEFAULT_DISABLED = setOf("listing-attention")
+    val DEFAULT_DISABLED = setOf("listing-attention", "semantic-memory")
+    private const val KEY_SEMANTIC_OPT_IN = "semantic_memory_owner_opt_in"
 
-    fun disabled(context: Context): Set<String> =
-        context.applicationContext
-            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getStringSet(KEY_DISABLED, DEFAULT_DISABLED)
-            .orEmpty()
-            .toSet()
+    fun disabled(context: Context): Set<String> {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val stored = prefs.getStringSet(KEY_DISABLED, DEFAULT_DISABLED).orEmpty().toSet()
+        // Existing installations already persisted their module toggles before
+        // this new module existed. Never auto-enable on APK upgrade or restore.
+        return effectiveDisabled(stored, prefs.getBoolean(KEY_SEMANTIC_OPT_IN, false))
+    }
+
+    internal fun effectiveDisabled(stored: Set<String>, optedIn: Boolean): Set<String> =
+        if (optedIn) stored else stored + "semantic-memory"
 
     /** Owner switches persist; an old bridge version is NOT execution authority. */
     fun apply(context: Context) {
@@ -41,11 +46,10 @@ object ModuleSettings {
 
     fun setEnabled(context: Context, id: String, enabled: Boolean) {
         val next = if (enabled) disabled(context) - id else disabled(context) + id
-        context.applicationContext
-            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putStringSet(KEY_DISABLED, next)
-            .apply()
+        val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val editor = prefs.edit().putStringSet(KEY_DISABLED, next)
+        if (id == "semantic-memory") editor.putBoolean(KEY_SEMANTIC_OPT_IN, enabled)
+        editor.apply()
         ModuleRegistry.setDisabled(next)
     }
 }

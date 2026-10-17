@@ -2998,6 +2998,8 @@ private fun ModelAndConnectionSheet(
                     .bodySmall
         )
 
+        SemanticMemoryPanel(ollamaUrl)
+
         HorizontalDivider()
         Text("Context Genome", style = MaterialTheme.typography.titleMedium)
         Text(
