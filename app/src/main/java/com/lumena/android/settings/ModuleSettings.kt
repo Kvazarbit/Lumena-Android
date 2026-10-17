@@ -21,9 +21,11 @@ object ModuleSettings {
         val stored = prefs.getStringSet(KEY_DISABLED, DEFAULT_DISABLED).orEmpty().toSet()
         // Existing installations already persisted their module toggles before
         // this new module existed. Never auto-enable on APK upgrade or restore.
-        return if (prefs.getBoolean(KEY_SEMANTIC_OPT_IN, false)) stored
-            else stored + "semantic-memory"
+        return effectiveDisabled(stored, prefs.getBoolean(KEY_SEMANTIC_OPT_IN, false))
     }
+
+    internal fun effectiveDisabled(stored: Set<String>, optedIn: Boolean): Set<String> =
+        if (optedIn) stored else stored + "semantic-memory"
 
     /** Owner switches persist; an old bridge version is NOT execution authority. */
     fun apply(context: Context) {

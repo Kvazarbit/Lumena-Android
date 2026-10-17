@@ -1,3 +1,5 @@
+> **2026-10-17 — EmbeddingGemma 2 Semantic Memory SHADOW V0.** A manual, owner-opt-in, local-only Ollama embedding adapter and bounded SQLite cache for Cognitive Genome candidate retrieval were added in the stacked Draft branch. See [implementation and acceptance plan](EMBEDDINGGEMMA2_SEMANTIC_MEMORY_SHADOW_PLAN.uk.md). This does NOT prove the HF model is Ollama-compatible, downloaded, or fine-tuned, and never grants ToolGate authority.
+
 # Lumena Cognitive Exoskeleton Roadmap
 
 > **2026-10-16 — Cognitive Genome V0: four-base OHAV principles and negative paths.**
