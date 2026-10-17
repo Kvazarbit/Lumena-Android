@@ -27,9 +27,14 @@ object FractalEvidenceLedgerStore {
     }
 
     /** Preserve individual failures even if no successful retry/sequence is ever formed. */
-    fun recordEvent(context: Context, event: CoordinatorEpisodeEvent) = synchronized(StateVaultLock.monitor) {
+    fun recordEvent(
+        context: Context, event: CoordinatorEpisodeEvent, previousEvents: List<CoordinatorEpisodeEvent>
+    ) = synchronized(StateVaultLock.monitor) {
         val current = load(context)
-        persist(context, current, FractalEvidenceLedgerPolicy.captureEvent(current, event))
+        // Upgrade migration must precede the next bounded coordinator write,
+        // even if the owner never opens the optional semantic-memory panel.
+        val migrated = FractalEvidenceLedgerPolicy.backfillCoordinator(current, previousEvents)
+        persist(context, current, FractalEvidenceLedgerPolicy.captureEvent(migrated, event))
     }
 
     fun backfillCoordinator(context: Context) = synchronized(StateVaultLock.monitor) {
