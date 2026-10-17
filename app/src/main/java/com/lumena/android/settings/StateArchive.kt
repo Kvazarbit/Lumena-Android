@@ -25,7 +25,8 @@ object StateArchive {
         "lumena_tinyjev_calibration.json", "lumena_laya_shadow_v1.json", "lumena_portable_kernel.json",
         "lumena_nervous_system_v1.json", "lumena_fractal_experience_canvas_v1.json",
         "lumena_listing_attention_v1.json")
-    val databases = setOf("lumena_context_genome.db", "lumena_landscape.db")
+    val databases = setOf("lumena_context_genome.db", "lumena_landscape.db",
+        "lumena_semantic_memory_v0.db")
     val allowed = files.map { "files/$it" }.toSet() + databases.map { "databases/$it" } + "preferences.json"
     private val adapter = Moshi.Builder().add(KotlinJsonAdapterFactory()).build().adapter(StateArchiveManifest::class.java)
     fun hash(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes)

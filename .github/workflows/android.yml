@@ -343,6 +343,8 @@ jobs:
               "com.lumena.android.agent.core.TrustGateTest",
               "com.lumena.android.settings.CognitiveGenomeV0Test",
               "com.lumena.android.agent.core.BtcExecutionFalseDoneRegressionTest",
+              "com.lumena.android.settings.SemanticMemoryPolicyTest",
+              "com.lumena.android.ollama.LocalEmbeddingProtocolTest",
               "com.lumena.android.agent.core.SecretMaskerTest",
               "com.lumena.android.agent.local.ToolGateTrustTest",
               "com.lumena.android.ollama.WorkflowRunnerTrustGateTest",

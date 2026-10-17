@@ -8,6 +8,7 @@ object BuiltInModules {
         McpModule,
         MarketplaceModule,
         ListingAttentionModule,
-        PracujModule
+        PracujModule,
+        SemanticMemoryModule
     )
 }
