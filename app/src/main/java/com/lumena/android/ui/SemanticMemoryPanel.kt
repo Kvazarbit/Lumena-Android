@@ -243,7 +243,9 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
                         // No index entries before successful real embedding canary.
                         provider.embed(identity, listOf("Lumena local embedding readiness check."))
                         val allDocs = withContext(Dispatchers.IO) { loadDocuments() }
-                        val cached = withContext(Dispatchers.IO) { SemanticMemoryStore.revisions(context, identity) }
+                        val cached = withContext(Dispatchers.IO) {
+                            SemanticMemoryStore.prepareIndex(context, identity, allDocs)
+                        }
                         val docs = SemanticMemoryPolicy.pending(allDocs, cached)
                         require(allDocs.isNotEmpty()) { "Немає Fractal принципів для індексації" }
                         indexed = 0

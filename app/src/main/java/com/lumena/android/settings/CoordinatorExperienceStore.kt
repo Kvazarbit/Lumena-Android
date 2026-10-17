@@ -483,9 +483,11 @@ object CoordinatorExperienceStore {
             )
         )
         val next = CoordinatorExperiencePolicy.record(state, event)
-        save(context, next)
         val recorded = next.events.first { it.id == event.id }
+        // Archive first. A crash after the coordinator commit must not leave
+        // a receipt outside the source archive after one-time migration ended.
         FractalEvidenceLedgerStore.recordEvent(context, recorded)
+        save(context, next)
         recorded
     }
 

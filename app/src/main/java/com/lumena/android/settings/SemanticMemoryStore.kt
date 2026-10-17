@@ -93,12 +93,24 @@ object SemanticMemoryStore {
         documents.size
     }
 
-    fun revisions(context: Context, model: LocalEmbeddingIdentity): Map<String, String> = synchronized(lock) {
-        helper(context).readableDatabase.use { db ->
+    /** Reclaim only obsolete secondary vectors, never archived evidence. */
+    fun prepareIndex(
+        context: Context, model: LocalEmbeddingIdentity, live: List<SemanticDocument>
+    ): Map<String, String> = synchronized(lock) {
+        val liveIds = live.map { it.id }.toHashSet()
+        helper(context).writableDatabase.use { db ->
             db.rawQuery("SELECT id, revision FROM semantic_vectors WHERE model_key=?",
                 arrayOf(model.cacheKey)).use { c ->
                 buildMap { while (c.moveToNext()) put(c.getString(0), c.getString(1)) }
-            }
+            }.also { revisions ->
+                db.beginTransaction()
+                try {
+                    (revisions.keys - liveIds).forEach { id ->
+                        db.delete("semantic_vectors", "model_key=? AND id=?", arrayOf(model.cacheKey, id))
+                    }
+                    db.setTransactionSuccessful()
+                } finally { db.endTransaction() }
+            }.filterKeys { it in liveIds }
         }
     }
 
