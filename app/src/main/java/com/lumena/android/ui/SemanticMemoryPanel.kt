@@ -1,5 +1,7 @@
 package com.lumena.android.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,6 +30,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.lumena.android.agent.core.ModuleRegistry
 import com.lumena.android.ollama.LocalEmbeddingClient
+import com.lumena.android.ollama.LocalEmbeddingProvider
+import com.lumena.android.llama.LiteRtLmEmbeddingProvider
+import com.lumena.android.llama.SemanticLiteRtModelStore
 import com.lumena.android.settings.FractalExperienceCanvasStore
 import com.lumena.android.settings.ModuleSettings
 import com.lumena.android.settings.SemanticDocument
@@ -35,6 +40,8 @@ import com.lumena.android.settings.SemanticHit
 import com.lumena.android.settings.SemanticMemoryPolicy
 import com.lumena.android.settings.SemanticMemoryStore
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -49,6 +56,8 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
     val scope = rememberCoroutineScope()
     var enabled by remember { mutableStateOf("semantic-memory" !in ModuleSettings.disabled(context)) }
     var tag by remember { mutableStateOf("embeddinggemma-2") }
+    var backend by remember { mutableStateOf("ollama") }
+    var job by remember { mutableStateOf<Job?>(null) }
     var query by remember { mutableStateOf("") }
     var selectedScope by remember { mutableStateOf<String?>(null) }
     var availableScopes by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -63,23 +72,53 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
             limit = limit
         )
 
+    suspend fun <T> withEmbedding(block: suspend (LocalEmbeddingProvider) -> T): T {
+        val provider: LocalEmbeddingProvider =
+            if (backend == "litertlm") LiteRtLmEmbeddingProvider(context)
+            else LocalEmbeddingClient(ollamaUrl)
+        try {
+            return block(provider)
+        } finally {
+            (provider as? AutoCloseable)?.close()
+        }
+    }
+
+    fun requestedModel(): String =
+        if (backend == "litertlm") LiteRtLmEmbeddingProvider.MODEL_ID else tag.trim()
+
     fun runJob(action: suspend () -> Unit) {
         if (busy || !enabled || !ModuleRegistry.isEnabled("semantic-memory")) {
             status = "Увімкни SHADOW-модуль, перш ніж запускати локальну діагностику."
             return
         }
         busy = true
-        scope.launch {
+        job = scope.launch {
             try {
                 action()
             } catch (cancelled: CancellationException) {
-                status = "Індексацію перервано; попередні індексні записи збережено."
+                status = "CANCELLED: наступні пакети не запущено; попередні записи збережено."
                 throw cancelled
+            } catch (link: LinkageError) {
+                status = "RUNTIME_UNAVAILABLE: нативна бібліотека LiteRT-LM недоступна."
             } catch (failure: Exception) {
-                // Never echo raw Ollama responses or private inputs in errors.
-                status = "Недоступно: " + (failure.message ?: "помилка локальної моделі").take(180)
+                // Do not log native inputs, stack traces, system paths or secrets.
+                status = "NOT_READY: " + failure::class.java.simpleName +
+                    " — локальний embedding не підтверджено."
             } finally {
                 busy = false
+                job = null
+            }
+        }
+    }
+
+    val liteRtPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runJob {
+                val model = SemanticLiteRtModelStore.importFromSaf(context, uri)
+                status = "IMPORT_OK (ще НЕ READY): " +
+                    (model.bytes / 1048576) + " MiB · sha256=" + model.sha256.take(12) +
+                    " · метадані dim=" + model.dimension +
+                    ". Для READY потрібен реальний CPU smoke."
             }
         }
     }
@@ -111,58 +150,110 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
                     }
                 )
             }
-            OutlinedTextField(
-                value = tag,
-                onValueChange = { if (!busy) tag = it.take(100) },
-                label = { Text("Точний локальний Ollama tag") },
-                supportingText = {
-                    Text("«embeddinggemma-2» — приклад назви, а не підтвердження встановлення. " +
-                        "Моделі :cloud, автозавантаження й зовнішні URL заборонені.")
-                },
-                enabled = enabled && !busy,
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(enabled = enabled && !busy, onClick = {
+                    backend = "ollama"
+                    hits = emptyList()
+                    status = "Ollama: readiness потребує /api/embed, а не тільки /api/tags."
+                }) { Text(if (backend == "ollama") "✓ Ollama" else "Ollama") }
+                OutlinedButton(enabled = enabled && !busy, onClick = {
+                    backend = "litertlm"
+                    hits = emptyList()
+                    status = "LiteRT-LM CPU 0.18.0: вибери .litertlm, далі виконай smoke."
+                }) { Text(if (backend == "litertlm") "✓ LiteRT CPU" else "LiteRT CPU") }
+            }
+            if (backend == "ollama") {
+                OutlinedTextField(
+                    value = tag,
+                    onValueChange = { if (!busy) tag = it.take(100) },
+                    label = { Text("Точний локальний Ollama tag") },
+                    supportingText = {
+                        Text("Модель має реально відповідати через /api/embed. Cloud заборонений.")
+                    },
+                    enabled = enabled && !busy,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else {
+                Text(
+                    "LiteRT-LM 0.18.0 · CPU, 2 потоки · Android без Ollama та Bridge. " +
+                        "Завантаж лише офіційний text-only 270M .litertlm і вибери його вручну.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedButton(enabled = enabled && !busy, onClick = {
+                    liteRtPicker.launch(arrayOf("*/*"))
+                }) { Text("Імпортувати файл .litertlm через Android") }
+                val model = SemanticLiteRtModelStore.selected(context)
+                Text(
+                    if (model == null) "NOT_INSTALLED: ще немає вибраного LiteRT-файла."
+                    else "Файл у приватному сховищі APK: " + (model.length() / 1048576) +
+                        " MiB · готовність inference ще не перевірена.",
+                    style = MaterialTheme.typography.labelSmall
+                )
+                Text(
+                    "Ваги не входять до StateVault (ліміт 64 MiB). Копія імпортується " +
+                        "тільки за твоїм вибором, попередні моделі не видаляються.",
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
             OutlinedButton(enabled = enabled && !busy, onClick = {
                 runJob {
-                    val identity = LocalEmbeddingClient(ollamaUrl).inspectModel(tag)
-                    val stats = withContext(Dispatchers.IO) { SemanticMemoryStore.stats(context) }
-                    status = "LOCAL MODEL: " + identity.name +
-                        " · digest " + identity.digest.take(12) +
-                        " · кеш: " + stats.rows + " векторів, " +
-                        stats.modelVersions + " версій моделей."
+                    withEmbedding { provider ->
+                        val identity = provider.inspectModel(requestedModel())
+                        val vector = provider.embed(
+                            identity, listOf("Lumena local embedding readiness check.")
+                        ).single()
+                        val stats = withContext(Dispatchers.IO) { SemanticMemoryStore.stats(context) }
+                        status = "READY: " + identity.name +
+                            " · digest " + identity.digest.take(12) +
+                            " · REAL dimension " + vector.size +
+                            " · кеш " + stats.rows + " векторів. SHADOW only."
+                    }
                 }
             }) {
-                Text("Перевірити /api/tags (лише локально)")
+                Text(if (backend == "litertlm") "CPU inference smoke — REAL" else "Перевірити /api/embed — REAL")
             }
             Button(enabled = enabled && !busy, onClick = {
                 runJob {
-                    val provider = LocalEmbeddingClient(ollamaUrl)
-                    val identity = provider.inspectModel(tag)
-                    val docs = withContext(Dispatchers.IO) {
-                        loadDocuments(SemanticMemoryPolicy.MAX_SESSION)
-                    }
-                    require(docs.isNotEmpty()) { "Немає перевіреної Fractal історії для індексації" }
-                    indexed = 0
-                    availableScopes = docs.mapNotNull { it.scopeHash }.distinct().take(8)
-                    for (batch in docs.chunked(SemanticMemoryPolicy.MAX_BATCH)) {
-                        check(ModuleRegistry.isEnabled("semantic-memory")) { "Модуль було вимкнено" }
-                        val vectors = provider.embed(identity, batch.map { it.text })
-                        withContext(Dispatchers.IO) {
-                            SemanticMemoryStore.upsert(context, identity, batch, vectors)
+                    withEmbedding { provider ->
+                        val identity = provider.inspectModel(requestedModel())
+                        // No index entries before successful real embedding canary.
+                        provider.embed(identity, listOf("Lumena local embedding readiness check."))
+                        val docs = withContext(Dispatchers.IO) {
+                            loadDocuments(SemanticMemoryPolicy.MAX_SESSION)
                         }
-                        indexed += batch.size
-                        status = "Індексовано " + indexed + "/" + docs.size +
-                            " принципів · SHADOW, джерело Canvas незмінене"
+                        require(docs.isNotEmpty()) { "Немає Fractal принципів для індексації" }
+                        indexed = 0
+                        availableScopes = docs.mapNotNull { it.scopeHash }.distinct().take(8)
+                        for (batch in docs.chunked(SemanticMemoryPolicy.MAX_BATCH)) {
+                            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                            check(ModuleRegistry.isEnabled("semantic-memory")) {
+                                "Модуль вимкнено; без подальшої індексації"
+                            }
+                            val vectors = provider.embed(identity, batch.map { it.text })
+                            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                            withContext(Dispatchers.IO) {
+                                SemanticMemoryStore.upsert(context, identity, batch, vectors)
+                            }
+                            indexed += batch.size
+                            status = "Індексовано " + indexed + "/" + docs.size +
+                                " SHADOW принципів (живі джерела не змінено)"
+                        }
+                        status = "INDEXED: " + indexed + " · " + identity.name +
+                            " · digest " + identity.digest.take(12) + ". TOOLGATE незмінний."
                     }
-                    status = "Готово: " + indexed + " локальних embeddings для " +
-                        identity.name + " (digest " + identity.digest.take(12) + "). " +
-                        "Індекс лише для пошуку, не для виконання."
                 }
             }) {
                 Text(if (busy) "Обробка…" else "Індексувати до 48 принципів вручну")
             }
             Text(status, style = MaterialTheme.typography.bodySmall)
+            if (busy) {
+                TextButton(onClick = { job?.cancel() }) { Text("STOP після поточного native inference") }
+                Text(
+                    "STOP скасовує наступні пакети; уже розпочатий JNI виклик може спершу завершитися.",
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
             Text(
                 "Область пошуку: " + (selectedScope?.take(20) ?: "лише GLOBAL") +
                     ". Принципи іншого проєкту автоматично не переносяться.",
@@ -188,24 +279,24 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
             )
             OutlinedButton(enabled = enabled && !busy && query.isNotBlank(), onClick = {
                 runJob {
-                    val provider = LocalEmbeddingClient(ollamaUrl)
-                    val identity = provider.inspectModel(tag)
-                    val term = query.trim()
-                    require(term.isNotEmpty() && term.length <= SemanticMemoryPolicy.MAX_QUERY)
-                    val vector = provider.embed(identity, listOf(term)).single()
-                    val docs = withContext(Dispatchers.IO) { loadDocuments(256) }
-                    val result = withContext(Dispatchers.IO) {
-                        SemanticMemoryStore.search(
-                            context, identity, vector, docs, selectedScope, limit = 6
-                        )
-                    }
-                    hits = result
-                    status = if (result.isEmpty()) {
-                        "Немає відповідних живих принципів у цій області / моделі. " +
-                            "Не підміняємо embeddings випадковими відповідями."
-                    } else {
-                        "Знайдено " + result.size +
-                            " структурованих принципів. Схожість не є доказом."
+                    withEmbedding { provider ->
+                        val identity = provider.inspectModel(requestedModel())
+                        val term = query.trim()
+                        require(term.isNotEmpty() && term.length <= SemanticMemoryPolicy.MAX_QUERY)
+                        val vector = provider.embed(identity, listOf(term)).single()
+                        val docs = withContext(Dispatchers.IO) { loadDocuments(256) }
+                        val result = withContext(Dispatchers.IO) {
+                            SemanticMemoryStore.search(
+                                context, identity, vector, docs, selectedScope, limit = 6
+                            )
+                        }
+                        hits = result
+                        status = if (result.isEmpty()) {
+                            "Живих принципів у вибраній області немає. Не імітуємо embeddings."
+                        } else {
+                            "Знайдено " + result.size +
+                                " структурованих принципів. Схожість не є доказом мети."
+                        }
                     }
                 }
             }) { Text("Семантичний пошук (тільки перегляд)") }

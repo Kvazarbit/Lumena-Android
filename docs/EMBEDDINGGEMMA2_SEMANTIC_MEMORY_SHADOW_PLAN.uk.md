@@ -80,3 +80,34 @@ model_key: exact installed model tag @ exact local model digest
 **V3: Донавчання.** Тільки після незалежного підтвердження ліцензії, trainable checkpoint, сумісності й набору розмічених прикладів: контрастивне навчання на трійках `query, correct verified principle, hard negative`, holdout за проєктом і часом, захист від хибних негативів. Навчання за можливості на ПК/GPU, експорт оптимізованої моделі на Android, збереження старого digest/індексу для rollback. Не донавчати на `DONE` як мітці правильності. Мультимодальний inference допускається лише після перевірки дійсного image/audio контракту цього checkpoint.
 
 **Не вважається завершеним у V0:** завантаження/запуск саме EmbeddingGemma 2, донавчання її ваг, інтелектуальний приріст, незалежний goal verifier, масштабування до 1 млн рядків коду.
+
+
+## Реалізований наступний крок: Android LiteRT-LM V1 (Draft, ПОТРЕБУЄ CI І ТЕСТУ ТЕЛЕФОНА)
+
+- **Офіційний вихідний код API** у `google-ai-edge/LiteRT-LM`, реліз `v0.18.0` (2026-10-06): `EmbeddingEngine`, `EmbeddingEngineConfig`, `EmbeddingOptions`, `InputData.Text`, `EmbeddingResponse.embedding`, `ModelInfo.from(...)`. Реліз включає EmbeddingGemma 2 text, vision, audio. Посилання:
+  - https://github.com/google-ai-edge/LiteRT-LM/blob/v0.18.0/kotlin/java/com/google/ai/edge/litertlm/EmbeddingEngine.kt
+  - https://github.com/google-ai-edge/LiteRT-LM/blob/v0.18.0/kotlin/java/com/google/ai/edge/litertlm/EmbeddingConfig.kt
+  - https://github.com/google-ai-edge/LiteRT-LM/releases/tag/v0.18.0
+- **Версія Maven** `com.google.ai.edge.litertlm:litertlm-android:0.18.0`, підтверджена Google AI Edge Gallery:
+  - https://github.com/google-ai-edge/gallery/blob/main/Android/src/gradle/libs.versions.toml
+  - https://github.com/google-ai-edge/gallery/blob/main/Android/src/app/build.gradle.kts
+- **Реалізація**: `SemanticLiteRtModelStore.kt` копіює вибраний власником Android SAF `.litertlm` в приватні файли застосунку з SHA256 та лімітом 1.2GB; `ModelInfo.Embedding` перевіряє, що це текстова embedding-модель і оголошує розмірність та можливість CPU. Копіювання атомарне; існуюча обрана модель не знищується при помилці. Оригінал з Android Document Picker не редагується.
+- `LiteRtLmEmbeddingProvider.kt` реалізує той самий `LocalEmbeddingProvider`, але запускає **справжній** Android `EmbeddingEngine` із `Backend.CPU(threadCount=2)`, в окремому диспетчері, із гарантованим `close()` у кінці ручної операції.
+- `SemanticMemoryPanel.kt`: вибір між Ollama (без змін базового генератора) та LiteRT CPU; ручний імпорт/запуск реального smoke; індексація до 48 принципів пакетами до 4 без фонової активності; STOP не може обірвати поточний синхронний JNI виклик, але припиняє наступні; ручний пошук і огляд live-кандидатів.
+- **Ідентичність векторного простору** `litertlm-0.18.0-cpu-text-embedding-v1@<full sha256 of imported bundle>`; ніколи не змішувати Ollama, інший digest, текст/vision, runtime, контекстні параметри. Точний текстовий processing/prompt mode треба перевірити на реальному комплекті моделі та freeze до A/B.
+- **Немає ваг у APK.** `GGUF` і Ollama-модель `embedding_gemma2` не є файлами `.litertlm`; потрібен саме `litert-community/embeddinggemma-2-text-270m-litert-lm`. Не використовувати приватні ваги встановленої Google Gallery без окремого експорту.
+- **StateVault** зберігає первинний Fractal Canvas та вторинний векторний SQLite-кеш; великі перезавантажувані ваги знаходяться в приватному сховищі та **не** входять в StateVault через 64MiB ліміт. Тому окремо збережи оригінальний завантажений пакет.
+- **Readiness = справжній вектор**, не успіх `ModelInfo` або `/api/tags`: `smoke()` спочатку ініціалізує native SDK і генерує скінченний ненульовий вектор, перевіряючи розмірність. Якщо ця операція падає або відсутній native SDK, стан `NOT_READY`; у SQLite не записуються вигадані вектори.
+- **SHADOW only**: не змінює ToolGate, Constitution чи GoalContract; не підміняє user-goal verifier Issue #131; не вмикається автоматично і не видає similarity за незалежний доказ мети.
+
+### Точне приймання на телефоні
+
+1. **До нового APK:** перевірити StateVault, сімейство/сертифікат власницького підписування, поточні `records=512`, `negative_dead_ends=21`, `kernel_contracts=4`; не робити wipe. Новий `versionCode=59`.
+2. **CI:** exact-head Gradle Unit Tests + критичні XML suites + build release APK і native smoke. SDK 0.18.0 може збільшити APK; не пропонувати файл, доки artifacts не успішні.
+3. **Завантаження власником:** саме модель `embeddinggemma-2-text-270m-litert-lm` у форматі `.litertlm`, з перевіреним upstream manifest/license. Не завантажувати із застосунку автоматично.
+4. **В APK:** активувати `semantic-memory` вручну, переключити LiteRT CPU, імпортувати `.litertlm` через Android picker. Metadata IMPORT_OK означає лише валідний контейнер.
+5. Натиснути `CPU inference smoke — REAL`; лише `READY`, ненульовий числовий embedding правильної розмірності та реальна latency дозволяють вручну індексувати. Якщо `NOT_READY`, не переходити до індексу.
+6. Виміряти 5–10 повторів, пікову пам'ять і температуру, відновлення після STOP, StateVault backup/restore, незмішаність Ollama/LiteRT кешів, збереження негативного досвіду, battery.
+7. Провести blinded A/B проти лексичного пошуку на розмічених українських/польських/англійських питаннях (Recall@5, nDCG@10), без автоматичних висновків про поліпшення.
+
+**Не виконано у Draft:** real Android inference, перевірка фактичного конкретного файлу HF у нашій APK, retrieval gain, fine-tuning LoRA, GPU/NPU, мультимодальне перенесення. G0 прогін CI може залишатися в процесі після першого commit.
