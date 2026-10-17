@@ -81,7 +81,11 @@ class BtcExecutionFalseDoneRegressionTest {
 
     @Test
     fun staleGeneralClassificationIsStillRejectedByExecutionGate() {
-        val stale = initial("запусти нові файли BTC").copy(intent = TaskIntent.GENERAL)
+        val initial = initial("запусти нові файли BTC")
+        val stale = initial.copy(
+            intent = TaskIntent.GENERAL,
+            task = initial.task.copy(goalContract = GoalContract())
+        )
         val result = controller.interpret(
             """{"done":true,"summary":"Задачу виконано."}""",
             stale
