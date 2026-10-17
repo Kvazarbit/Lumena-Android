@@ -350,6 +350,7 @@ jobs:
               "com.lumena.android.ollama.LocalEmbeddingProtocolTest",
               "com.lumena.android.agent.core.SemanticMemoryModuleBoundaryTest",
               "com.lumena.android.llama.SemanticLiteRtIdentityTest",
+              "com.lumena.android.llama.LiteRtTextImportPolicyTest",
               "com.lumena.android.agent.core.SecretMaskerTest",
               "com.lumena.android.agent.local.ToolGateTrustTest",
               "com.lumena.android.ollama.WorkflowRunnerTrustGateTest",

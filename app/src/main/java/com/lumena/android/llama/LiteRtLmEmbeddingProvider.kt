@@ -44,7 +44,7 @@ class LiteRtLmEmbeddingProvider(
                 check(!closed) { "Native embedding provider is closed" }
                 identity?.let { return@synchronized it }
                 val selected = SemanticLiteRtModelStore.selected(app)
-                    ?: throw IllegalStateException("NOT_INSTALLED: import a text 270M .litertlm file first")
+                    ?: throw LiteRtImportRefusal(LiteRtImportCode.NOT_INSTALLED)
                 val (dim, _) = SemanticLiteRtModelStore.inspect(selected.absolutePath)
                 val sha = SemanticLiteRtModelStore.sha256(selected)
                 val next = LocalEmbeddingIdentity(MODEL_ID, sha, selected.length())
@@ -73,6 +73,9 @@ class LiteRtLmEmbeddingProvider(
             created
         } catch (failure: Throwable) {
             runCatching { if (created.isInitialized()) created.close() }
+            if (failure is Exception) {
+                throw LiteRtImportRefusal(LiteRtImportCode.ENGINE_INIT_FAILED, failure)
+            }
             throw failure
         }
     }
@@ -92,9 +95,13 @@ class LiteRtLmEmbeddingProvider(
         // documents. No prefix/task modes are assumed without model-card proof.
         val opts = EmbeddingOptions(normalize = true)
         texts.map { value ->
-            val native = active.computeEmbedding(listOf(InputData.Text(value)), opts).embedding
-            require(native.size == n) {
-                "Embedding dimension differs from the model's declared output dimension"
+            val native = try {
+                active.computeEmbedding(listOf(InputData.Text(value)), opts).embedding
+            } catch (failure: Exception) {
+                throw LiteRtImportRefusal(LiteRtImportCode.INFERENCE_FAILED, failure)
+            }
+            if (native.size != n) {
+                throw LiteRtImportRefusal(LiteRtImportCode.VECTOR_DIM_MISMATCH)
             }
             SemanticMemoryPolicy.normalized(native.map(Float::toDouble))
         }

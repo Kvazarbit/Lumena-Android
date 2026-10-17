@@ -6,7 +6,6 @@ import android.provider.OpenableColumns
 import com.google.ai.edge.litertlm.BackendType
 import com.google.ai.edge.litertlm.Modality
 import com.google.ai.edge.litertlm.ModelInfo
-import com.lumena.android.settings.SemanticMemoryPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -32,6 +31,7 @@ object SemanticLiteRtModelStore {
         val sha256: String,
         val bytes: Long,
         val dimension: Int,
+        /** True only if CPU was declared; an empty metadata list is UNKNOWN. */
         val cpuSupported: Boolean
     )
 
@@ -65,81 +65,100 @@ object SemanticLiteRtModelStore {
      * Uses the real pinned Google SDK ModelInfo metadata API. Neither a file
      * extension nor an installed tag can prove CPU inference will work.
      */
-    fun inspect(path: String): Pair<Int, Boolean> =
+    fun inspect(path: String): Pair<Int, Boolean> = try {
         ModelInfo.from(path).use { model ->
-            require(model is ModelInfo.Embedding) {
-                "The selected LiteRT-LM file is not an embedding model"
+            if (model !is ModelInfo.Embedding) {
+                throw LiteRtImportRefusal(LiteRtImportCode.NOT_EMBEDDING)
             }
             val inputs = model.inputModalities()
-            require(inputs.text && !inputs.vision && !inputs.audio && !inputs.video) {
-                "Select the text-only EmbeddingGemma 2 270M LiteRT-LM artifact"
-            }
-            val dim = model.dimension()
-                ?: throw IllegalStateException("Embedding dimension is missing from model metadata")
-            require(dim in 2..SemanticMemoryPolicy.MAX_DIM) { "Invalid embedding dimension" }
             val backends = model.supportedBackends(Modality.TEXT)
-            require(backends.isEmpty() || BackendType.CPU in backends) {
-                "The model does not declare a CPU text backend"
-            }
-            dim to (backends.isEmpty() || BackendType.CPU in backends)
+            val checked = LiteRtTextImportPolicy.validate(
+                LiteRtTextImportPolicy.Capabilities(
+                    isEmbedding = true,
+                    text = inputs.text, vision = inputs.vision,
+                    audio = inputs.audio, video = inputs.video,
+                    dimension = model.dimension(),
+                    cpuDeclared = if (backends.isEmpty()) null else BackendType.CPU in backends
+                )
+            )
+            checked.dimension to checked.cpuDeclared
         }
+    } catch (failure: LiteRtImportRefusal) {
+        throw failure
+    } catch (failure: Exception) {
+        // Native errors may include app-private paths; the UI only sees a fixed code.
+        throw LiteRtImportRefusal(LiteRtImportCode.METADATA_UNAVAILABLE, failure)
+    }
 
     suspend fun importFromSaf(context: Context, uri: Uri): Imported =
         withContext(Dispatchers.IO) {
-            require(uri.scheme == "content") { "Select a file through Android's document picker" }
+            if (uri.scheme != "content") throw LiteRtImportRefusal(LiteRtImportCode.BAD_URI)
             val app = context.applicationContext
             val resolver = app.contentResolver
-            val displayName = resolver.query(
-                uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
-            )?.use { rows ->
-                if (rows.moveToFirst()) rows.getString(0) else null
-            } ?: throw IllegalArgumentException("Cannot determine the selected filename")
-            require(displayName.lowercase().endsWith(".litertlm")) {
-                "Only a LiteRT-LM .litertlm model bundle is accepted"
+            val displayName = try {
+                resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { rows ->
+                    if (rows.moveToFirst()) rows.getString(0) else null
+                }
+            } catch (failure: Exception) {
+                throw LiteRtImportRefusal(LiteRtImportCode.PICKER_FAILURE, failure)
+            } ?: throw LiteRtImportRefusal(LiteRtImportCode.NO_FILENAME)
+            if (!displayName.lowercase(java.util.Locale.ROOT).endsWith(".litertlm")) {
+                throw LiteRtImportRefusal(LiteRtImportCode.BAD_EXTENSION)
             }
             val root = File(app.filesDir, MODEL_DIR)
-            check(root.isDirectory || root.mkdirs()) { "Cannot create model directory" }
-            val staging = File.createTempFile("embedding-import-", ".litertlm", root)
-            var committed = false
+            if (!root.isDirectory && !root.mkdirs()) {
+                throw LiteRtImportRefusal(LiteRtImportCode.STORAGE_FAILURE)
+            }
+            val staging = try {
+                File.createTempFile("embedding-import-", ".litertlm", root)
+            } catch (failure: java.io.IOException) {
+                throw LiteRtImportRefusal(LiteRtImportCode.STORAGE_FAILURE, failure)
+            }
             try {
                 val digest = MessageDigest.getInstance("SHA-256")
                 var copied = 0L
-                resolver.openInputStream(uri)?.use { input ->
-                    staging.outputStream().buffered().use { output ->
-                        val buffer = ByteArray(128 * 1024)
-                        while (true) {
-                            val n = input.read(buffer)
-                            if (n < 0) break
-                            copied += n
-                            require(copied <= MAX_FILE_BYTES) { "Model exceeds 1.2 GB import limit" }
-                            digest.update(buffer, 0, n)
-                            output.write(buffer, 0, n)
+                try {
+                    resolver.openInputStream(uri)?.use { input ->
+                        staging.outputStream().buffered().use { output ->
+                            val buffer = ByteArray(128 * 1024)
+                            while (true) {
+                                val n = input.read(buffer)
+                                if (n < 0) break
+                                copied += n
+                                if (copied > MAX_FILE_BYTES) {
+                                    throw LiteRtImportRefusal(LiteRtImportCode.TOO_LARGE)
+                                }
+                                digest.update(buffer, 0, n)
+                                output.write(buffer, 0, n)
+                            }
+                            output.flush()
                         }
-                        output.flush()
-                    }
-                } ?: throw IllegalArgumentException("The selected document cannot be opened")
-                require(copied >= MIN_FILE_BYTES) { "Model bundle is too small" }
+                    } ?: throw LiteRtImportRefusal(LiteRtImportCode.SOURCE_READ_FAILURE)
+                } catch (refusal: LiteRtImportRefusal) {
+                    throw refusal
+                } catch (failure: Exception) {
+                    throw LiteRtImportRefusal(LiteRtImportCode.SOURCE_READ_FAILURE, failure)
+                }
+                if (copied < MIN_FILE_BYTES) throw LiteRtImportRefusal(LiteRtImportCode.TOO_SMALL)
                 val sha = digest.digest().joinToString("") { "%02x".format(it) }
-                // Real native ModelInfo validation BEFORE changing selected model.
-                val (dim, cpu) = inspect(staging.absolutePath)
+                // Native metadata proof only; CPU readiness still requires a real vector.
+                val (dim, cpuDeclared) = inspect(staging.absolutePath)
                 val destination = File(root, "embedding-$sha.litertlm")
                 if (destination.exists()) {
-                    require(destination.length() == copied && sha256(destination) == sha) {
-                        "Existing model digest collision or changed bytes"
+                    if (destination.length() != copied || sha256(destination) != sha) {
+                        throw LiteRtImportRefusal(LiteRtImportCode.CONFLICTING_DESTINATION)
                     }
-                } else {
-                    require(staging.renameTo(destination)) { "Cannot commit imported model atomically" }
+                } else if (!staging.renameTo(destination)) {
+                    throw LiteRtImportRefusal(LiteRtImportCode.COMMIT_FAILED)
                 }
-                require(app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                    .putString(CURRENT_DIGEST, sha).commit()) {
-                    "Cannot save current model selection"
+                if (!app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                        .putString(CURRENT_DIGEST, sha).commit()) {
+                    throw LiteRtImportRefusal(LiteRtImportCode.COMMIT_FAILED)
                 }
-                committed = true
-                Imported(destination.absolutePath, sha, copied, dim, cpu)
+                Imported(destination.absolutePath, sha, copied, dim, cpuDeclared)
             } finally {
-                // Never delete an earlier valid model or touch the original SAF file.
+                // Keep both source and previous owner-selected models unchanged on error.
                 staging.delete()
-                if (!committed) { /* keep the previous selected file intact */ }
             }
         }
 }
