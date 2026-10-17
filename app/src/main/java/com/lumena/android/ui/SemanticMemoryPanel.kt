@@ -37,6 +37,7 @@ import com.lumena.android.ollama.LocalEmbeddingClient
 import com.lumena.android.ollama.LocalEmbeddingProvider
 import com.lumena.android.llama.LiteRtLmEmbeddingProvider
 import com.lumena.android.llama.SemanticLiteRtModelStore
+import com.lumena.android.llama.LiteRtImportRefusal
 import com.lumena.android.settings.FractalExperienceCanvasStore
 import com.lumena.android.settings.ModuleSettings
 import com.lumena.android.settings.SemanticDocument
@@ -123,6 +124,8 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
                 throw cancelled
             } catch (link: LinkageError) {
                 status = "RUNTIME_UNAVAILABLE: нативна бібліотека LiteRT-LM недоступна."
+            } catch (failure: LiteRtImportRefusal) {
+                status = failure.safeStatus()
             } catch (failure: Exception) {
                 // Do not log native inputs, stack traces, system paths or secrets.
                 status = "NOT_READY: " + failure::class.java.simpleName +
@@ -137,11 +140,13 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
     val liteRtPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runJob {
+                status = "IMPORTING: копіювання та перевірка метаданих; CPU ще НЕ READY."
                 val model = SemanticLiteRtModelStore.importFromSaf(context, uri)
                 status = "IMPORT_OK (ще НЕ READY): " +
                     (model.bytes / 1048576) + " MiB · sha256=" + model.sha256.take(12) +
                     " · метадані dim=" + model.dimension +
-                    ". Для READY потрібен реальний CPU smoke."
+                    " · CPU metadata=" + (if (model.cpuSupported) "DECLARED" else "UNKNOWN") +
+                    ". Для READY потрібен справжній CPU smoke."
             }
         }
     }
@@ -200,7 +205,8 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
             } else {
                 Text(
                     "LiteRT-LM 0.18.0 · CPU, 2 потоки · Android без Ollama та Bridge. " +
-                        "Завантаж лише офіційний text-only 270M .litertlm і вибери його вручну.",
+                        "Вибери локальний пакет .litertlm з текстовим енкодером. " +
+                        "Навіть якщо пакет мультимодальний, тут працює лише текстовий CPU.",
                     style = MaterialTheme.typography.bodySmall
                 )
                 OutlinedButton(enabled = enabled && !busy, onClick = {
