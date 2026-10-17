@@ -49,7 +49,9 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Full Kotlin recompilation for each mutation plus the native release build
+    # can exceed 30 minutes on a cold runner. Keep all gates and per-probe limits.
+    timeout-minutes: 60
     env:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       ANDROID_HOME: /usr/local/lib/android/sdk
