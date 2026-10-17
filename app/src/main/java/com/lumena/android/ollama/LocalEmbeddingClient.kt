@@ -11,6 +11,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
+import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
 data class LocalEmbeddingIdentity(
@@ -99,6 +100,9 @@ class LocalEmbeddingClient(baseUrl: String) : LocalEmbeddingProvider {
         } ?: throw IllegalArgumentException("Local embedding requires a plain loopback Ollama URL")
 
     private val client = OkHttpClient.Builder()
+        .proxy(Proxy.NO_PROXY)
+        .followRedirects(false)
+        .followSslRedirects(false)
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(75, TimeUnit.SECONDS)
         .callTimeout(80, TimeUnit.SECONDS)
