@@ -146,4 +146,31 @@ class ContextMemoryIntegrityTest {
         val old = payload - "files/lumena_fractal_evidence_ledger_v1.json"
         assertEquals(old.keys, StateArchive.decode(StateArchive.encode(old, 59, 1000), 60).entries.keys)
     }
+
+    @Test fun loneFailureIsArchivedWithoutRequiringARecoverySequence() {
+        val failure = CoordinatorEpisodeEvent("failure", "session", "task", "python.run",
+            "script=demo.py", false, "e-failure", 1000, 0.8, failureClass = "TIMEOUT")
+        val archived = FractalEvidenceLedgerPolicy.captureEvent(FractalEvidenceLedgerState(), failure)
+        assertEquals(listOf(false), archived.entries.single().record.outcomes)
+        val principles = CognitiveGenomePolicy.derive(FractalExperienceCanvasState(
+            records = FractalEvidenceLedgerPolicy.latestRecords(archived)))
+        assertTrue(principles.any { it.stage == CognitivePrincipleStage.NEGATIVE_DEAD_END })
+        assertEquals(archived, FractalEvidenceLedgerPolicy.captureEvent(archived, failure))
+        val migrated = FractalEvidenceLedgerPolicy.backfillCoordinator(FractalEvidenceLedgerState(), listOf(failure))
+        assertEquals(1, migrated.entries.size)
+        assertEquals(1, migrated.coordinatorBackfillVersion)
+        assertEquals(migrated, FractalEvidenceLedgerPolicy.backfillCoordinator(migrated, listOf(failure)))
+    }
+
+    @Test fun unknownOutcomeSurvivesBackupButCannotBecomePositiveOrNegativeLearning() {
+        val unknown = CoordinatorEpisodeEvent("unknown", "session", "task", "python.run",
+            "script=demo.py", false, null, 1000, 0.8, outcomeKnown = false)
+        val archived = FractalEvidenceLedgerPolicy.captureEvent(FractalEvidenceLedgerState(), unknown)
+        assertTrue(archived.entries.isEmpty())
+        assertEquals("UNKNOWN", archived.unresolved.single().observedOutcome)
+        val restored = FractalEvidenceLedgerCodec.decode(FractalEvidenceLedgerCodec.encode(archived))
+        assertEquals(archived, restored)
+        assertEquals(4, CognitiveGenomePolicy.derive(FractalExperienceCanvasState(
+            records = FractalEvidenceLedgerPolicy.latestRecords(restored))).size)
+    }
 }

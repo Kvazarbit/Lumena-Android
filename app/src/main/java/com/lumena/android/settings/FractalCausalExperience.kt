@@ -66,16 +66,19 @@ object FractalCausalExperiencePolicy {
     const val MAX_LINKS = 512
 
     fun links(
-        records: List<FractalExampleRecord>
-    ): List<FractalCausalLink> =
-        records
+        records: List<FractalExampleRecord>,
+        limit: Int = MAX_LINKS
+    ): List<FractalCausalLink> {
+        require(limit in 1..FractalEvidenceLedgerPolicy.MAX_REVISIONS)
+        return records
             .mapNotNull(::toLink)
             .distinctBy { it.id }
             .sortedWith(
                 compareBy<FractalCausalLink> { it.updatedAt }
                     .thenBy { it.id }
             )
-            .takeLast(MAX_LINKS)
+            .takeLast(limit)
+    }
 
     fun stats(
         records: List<FractalExampleRecord>

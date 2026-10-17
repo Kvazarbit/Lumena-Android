@@ -11,6 +11,7 @@ Core DNA v3 distinguishes sourced facts from hypotheses. Update both APK and Bri
 * [Search setup and limitations](docs/web-search.md)
 * [Детальний план контекстної ОС та конституції досвіду](docs/cognitive-exoskeleton-roadmap.uk.md)
 * [Current context kernel](docs/context-kernel.md)
+* [Context memory integrity and source archive](docs/context-memory-integrity.uk.md)
 * [Current learned landscape](docs/experience-landscape.md)
 
 ## v0.7.3 local-agent architecture

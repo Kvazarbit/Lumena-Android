@@ -111,3 +111,11 @@ model_key: exact installed model tag @ exact local model digest
 7. Провести blinded A/B проти лексичного пошуку на розмічених українських/польських/англійських питаннях (Recall@5, nDCG@10), без автоматичних висновків про поліпшення.
 
 **Не виконано у Draft:** real Android inference, перевірка фактичного конкретного файлу HF у нашій APK, retrieval gain, fine-tuning LoRA, GPU/NPU, мультимодальне перенесення. G0 прогін CI може залишатися в процесі після першого commit.
+
+## Context integrity update
+
+На `codex/context-memory-integrity` виправлено scope, просування індексації,
+збереження першоджерел та ревізії умов. Деталі і межі нового журналу:
+[Цілісність пам’яті ОС контексту](context-memory-integrity.uk.md).
+Цей розділ уточнює старі межі V0 (512-record Canvas / перші 48 документів);
+він не означає проходження phone acceptance або виміряного cognitive uplift.

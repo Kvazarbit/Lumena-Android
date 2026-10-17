@@ -393,6 +393,7 @@ object FractalExperienceCanvasStore {
         limit: Int = 32
     ): List<CognitivePrinciple> = synchronized(lock) {
         val canvas = load(context) // Idempotent migration of existing source records.
+        FractalEvidenceLedgerStore.backfillCoordinator(context)
         val archived = FractalEvidenceLedgerPolicy.latestRecords(FractalEvidenceLedgerStore.load(context))
         CognitiveGenomePolicy.derive(canvas.copy(records = archived), limit = limit)
     }

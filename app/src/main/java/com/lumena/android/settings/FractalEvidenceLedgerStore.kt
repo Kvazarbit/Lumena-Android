@@ -23,6 +23,24 @@ object FractalEvidenceLedgerStore {
     fun append(context: Context, records: List<FractalExampleRecord>) = synchronized(StateVaultLock.monitor) {
         val current = load(context)
         val next = FractalEvidenceLedgerPolicy.append(current, records)
+        persist(context, current, next)
+    }
+
+    /** Preserve individual failures even if no successful retry/sequence is ever formed. */
+    fun recordEvent(context: Context, event: CoordinatorEpisodeEvent) = synchronized(StateVaultLock.monitor) {
+        val current = load(context)
+        persist(context, current, FractalEvidenceLedgerPolicy.captureEvent(current, event))
+    }
+
+    fun backfillCoordinator(context: Context) = synchronized(StateVaultLock.monitor) {
+        val current = load(context)
+        if (current.coordinatorBackfillVersion < 1) {
+            persist(context, current, FractalEvidenceLedgerPolicy.backfillCoordinator(
+                current, CoordinatorExperienceStore.load(context).events))
+        }
+    }
+
+    private fun persist(context: Context, current: FractalEvidenceLedgerState, next: FractalEvidenceLedgerState) {
         if (next != current) {
             val bytes = FractalEvidenceLedgerCodec.encode(next).toByteArray(Charsets.UTF_8)
             val atomic = file(context)

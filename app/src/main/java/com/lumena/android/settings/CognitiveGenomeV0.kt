@@ -189,7 +189,7 @@ object CognitiveGenomePolicy {
         }
         val grouped = records.groupBy(::shapeKey)
         val successfulSteps = records.filter {
-            it.kind == CoordinatorExampleKind.VERIFIED_SEQUENCE && it.outcomes.all { ok -> ok }
+            it.kind in setOf(CoordinatorExampleKind.VERIFIED_SEQUENCE, CoordinatorExampleKind.TOOL_OUTCOME) && it.outcomes.all { ok -> ok }
         }.flatMap { record -> record.tools.indices.map { step -> actionKey(record, step) to record } }
             .groupBy({ it.first }, { it.second })
         val failedActions = records.flatMap { record ->
@@ -200,7 +200,7 @@ object CognitiveGenomePolicy {
 
         grouped.toSortedMap().forEach { (shape, members) ->
             val successes = members.filter {
-                it.kind == CoordinatorExampleKind.VERIFIED_SEQUENCE &&
+                it.kind in setOf(CoordinatorExampleKind.VERIFIED_SEQUENCE, CoordinatorExampleKind.TOOL_OUTCOME) &&
                     it.outcomes.all { outcome -> outcome }
             }
             val failures = members.filter { it.outcomes.any { outcome -> !outcome } }
@@ -225,6 +225,7 @@ object CognitiveGenomePolicy {
                     val failing = failedAtStep.first()
                     val prefix = failing.tools.take(failedIndex + 1)
                     val opposites = successfulSteps[actionKey(failing, failedIndex)].orEmpty()
+                        .distinctBy { it.sourceTaskHash }
                     val contested = opposites.isNotEmpty()
                     negative += CognitivePrinciple(
                         id = "cg0-negative-$hash-$failedIndex",
@@ -247,7 +248,7 @@ object CognitiveGenomePolicy {
                         counterexampleRecordIds = opposites.map { it.id }
                             .distinct().sorted().take(64),
                         observedSuccesses = opposites.size,
-                        observedFailures = failedAtStep.size,
+                        observedFailures = failedAtStep.map { it.sourceTaskHash }.distinct().size,
                         failureClasses = failedAtStep
                             .mapNotNull { it.failureClasses.getOrNull(failedIndex) }
                             .filter { it.matches(Regex("[A-Z0-9_]{1,80}")) }
@@ -277,7 +278,7 @@ object CognitiveGenomePolicy {
                     toolPattern = first.tools.joinToString(">"),
                     evidenceIds = shared,
                     sourceTaskHashes = sources,
-                    observedSuccesses = successes.size,
+                    observedSuccesses = successes.map { it.sourceTaskHash }.distinct().size,
                     conditions = first.conditions,
                     targetKinds = targetKinds(first),
                     applicabilityFingerprint = FractalExperienceCanvasPolicy.hash(shape),
@@ -292,7 +293,8 @@ object CognitiveGenomePolicy {
         // A recovery and its failed prefix must BOTH survive. The parent Fractal
         // record already contributes the negative path above; causal links add
         // a separately labelled, evidence-grounded recovery candidate.
-        val recovered = FractalCausalExperiencePolicy.links(records)
+        val recovered = FractalCausalExperiencePolicy.links(records,
+            limit = records.size.coerceIn(1, FractalEvidenceLedgerPolicy.MAX_REVISIONS))
             .filter { it.resolution == FractalCausalResolution.RECOVERED }
             .map { link ->
                 CognitivePrinciple(

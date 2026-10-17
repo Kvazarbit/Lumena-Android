@@ -45,7 +45,9 @@ data class CoordinatorEpisodeState(
 enum class CoordinatorExampleKind {
     RECOVERY,
     VERIFIED_SEQUENCE,
-    FAILED_RECOVERY
+    FAILED_RECOVERY,
+    /** One receipt, with no claim that a recovery was attempted. */
+    TOOL_OUTCOME
 }
 
 data class CoordinatorExecutionExample(
@@ -482,7 +484,9 @@ object CoordinatorExperienceStore {
         )
         val next = CoordinatorExperiencePolicy.record(state, event)
         save(context, next)
-        event
+        val recorded = next.events.first { it.id == event.id }
+        FractalEvidenceLedgerStore.recordEvent(context, recorded)
+        recorded
     }
 
     fun relevant(
