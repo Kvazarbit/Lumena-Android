@@ -229,8 +229,8 @@ object EffectiveTaskPolicyCompiler {
 
         val effectiveDirectives =
             linkedMapOf<String, ToolDirective>()
-        rootToolDirectives.forEach {
-            effectiveDirectives[it.tool] = it
+        if (isBareContinuation(current) || isVisualShowContinuation(current, root)) {
+            rootToolDirectives.forEach { effectiveDirectives[it.tool] = it }
         }
         currentToolDirectives.forEach {
             effectiveDirectives[it.tool] = it
@@ -381,10 +381,10 @@ object EffectiveTaskPolicyCompiler {
                 }
                 .toSet()
         if (forbiddenTools.isEmpty()) {
-            return clean(text, 8_000)
+            return clean(OwnerActionText.maskData(text, preserveFileNames = true), 8_000)
         }
 
-        var out = text
+        var out = OwnerActionText.maskData(text, preserveFileNames = true)
         forbiddenTools.forEach { tool ->
             out = out.replace(
                 Regex(
@@ -680,6 +680,12 @@ object EffectiveTaskPolicyCompiler {
                     lastNegative >= 0 &&
                         lastNegative >
                             lastPositive
+                val clauseEnd = sentenceBoundary.find(masked, match.range.last + 1)?.range?.first ?: masked.length
+                val clause = prefix + masked.substring(match.range.first, clauseEnd)
+                val linePrefix = masked.substring(0, match.range.first).substringAfterLast('\n')
+                val explicitListItem = linePrefix.trim().matches(Regex("(?:[-*]|[0-9]+[.)])"))
+                // Absence of a prohibition is not an affirmative instruction.
+                if (!forbidden && !OwnerActionText.hasRequest(clause) && !explicitListItem) return@forEach
                 results +=
                     ToolDirective(
                         tool =
@@ -920,25 +926,7 @@ object EffectiveTaskPolicyCompiler {
 
     private fun maskQuoted(
         value: String
-    ): String {
-        val chars = value.toCharArray()
-        val patterns =
-            listOf(
-                Regex("\\\"[^\\\"\\n]*\\\""),
-                Regex("'[^'\\n]*'"),
-                Regex("«[^»\\n]*»"),
-                Regex("\\x60[^\\x60\\n]*\\x60")
-            )
-        patterns.forEach { regex ->
-            regex.findAll(value)
-                .forEach { match ->
-                    for (i in match.range) {
-                        chars[i] = ' '
-                    }
-                }
-        }
-        return String(chars)
-    }
+    ): String = OwnerActionText.maskData(value)
 
     private fun clean(
         value: String,
@@ -947,11 +935,11 @@ object EffectiveTaskPolicyCompiler {
         value
             .replace('\u0000', ' ')
             .replace(
-                Regex("[\\r\\n\\t]+"),
+                Regex("[\\r\\t]+"),
                 " "
             )
             .replace(
-                Regex("\\s{2,}"),
+                Regex("[^\\S\\n]{2,}"),
                 " "
             )
             .trim()

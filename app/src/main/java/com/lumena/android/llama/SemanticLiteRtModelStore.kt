@@ -7,6 +7,8 @@ import com.google.ai.edge.litertlm.BackendType
 import com.google.ai.edge.litertlm.Modality
 import com.google.ai.edge.litertlm.ModelInfo
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.security.MessageDigest
@@ -25,6 +27,13 @@ object SemanticLiteRtModelStore {
     private const val PREFS = "lumena_litert_semantic_model"
     private const val CURRENT_DIGEST = "sha256"
     private const val MODEL_DIR = "semantic-litert-models"
+
+    fun displayName(context: Context): String? = context.applicationContext
+        .getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("display_name", null)
+        ?.take(160) ?: selected(context)?.name
+
+    fun sourceHint(context: Context): String? = context.applicationContext
+        .getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("source_hint", null)?.take(300)
 
     data class Imported(
         val path: String,
@@ -124,6 +133,7 @@ object SemanticLiteRtModelStore {
                             while (true) {
                                 val n = input.read(buffer)
                                 if (n < 0) break
+                                kotlinx.coroutines.currentCoroutineContext().ensureActive()
                                 copied += n
                                 if (copied > MAX_FILE_BYTES) {
                                     throw LiteRtImportRefusal(LiteRtImportCode.TOO_LARGE)
@@ -136,6 +146,8 @@ object SemanticLiteRtModelStore {
                     } ?: throw LiteRtImportRefusal(LiteRtImportCode.SOURCE_READ_FAILURE)
                 } catch (refusal: LiteRtImportRefusal) {
                     throw refusal
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
                 } catch (failure: Exception) {
                     throw LiteRtImportRefusal(LiteRtImportCode.SOURCE_READ_FAILURE, failure)
                 }
@@ -143,6 +155,7 @@ object SemanticLiteRtModelStore {
                 val sha = digest.digest().joinToString("") { "%02x".format(it) }
                 // Native metadata proof only; CPU readiness still requires a real vector.
                 val (dim, cpuDeclared) = inspect(staging.absolutePath)
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 val destination = File(root, "embedding-$sha.litertlm")
                 if (destination.exists()) {
                     if (destination.length() != copied || sha256(destination) != sha) {
@@ -152,7 +165,10 @@ object SemanticLiteRtModelStore {
                     throw LiteRtImportRefusal(LiteRtImportCode.COMMIT_FAILED)
                 }
                 if (!app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                        .putString(CURRENT_DIGEST, sha).commit()) {
+                        .putString(CURRENT_DIGEST, sha)
+                        .putString("display_name", displayName.filterNot { it.isISOControl() }.take(160))
+                        .putString("source_hint", uri.lastPathSegment.orEmpty().filterNot { it.isISOControl() }.take(300))
+                        .commit()) {
                     throw LiteRtImportRefusal(LiteRtImportCode.COMMIT_FAILED)
                 }
                 Imported(destination.absolutePath, sha, copied, dim, cpuDeclared)

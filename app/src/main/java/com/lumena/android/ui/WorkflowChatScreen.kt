@@ -965,6 +965,9 @@ fun WorkflowChatScreen(
             return if (show) lines else emptyList()
         }
         return WorkflowRunner(modelClient(), bridgeOrNull(), modelNameForRun(),
+            semanticMemoryProvider = { task ->
+                com.lumena.android.settings.SemanticMemoryCoordinator(context.applicationContext, ollamaUrl).recall(task)
+            },
             relevantMemoryProvider = { task ->
                 val advice = try {
                     governed(task, AdvisoryLayer.LANDSCAPE,

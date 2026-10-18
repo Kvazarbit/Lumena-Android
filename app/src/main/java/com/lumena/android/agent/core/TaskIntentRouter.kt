@@ -401,16 +401,9 @@ object TaskIntentRouter {
             "bug", "баг", "debug", "fix(", "repo", "repository",
             "github", "git "
         )
-        val actionTerms = listOf(
-            "створ", "create", "write", "напис", "реаліз", "implement",
-            "виправ", "fix", "редаг", "edit", "patch", "перевір", "test",
-            "запуст", "run", "debug", "build", "збір", "commit",
-            "онов", "update", "зроби", "зробіть", "зробити", "modify", "покращ", "improve"
-        )
-
         val hasStrongCodeSubject =
             strongCodeTerms.any { containsTerm(lower, it) }
-        if (hasStrongCodeSubject && actionTerms.any { containsTerm(lower, it) }) {
+        if (hasStrongCodeSubject && OwnerActionText.hasRequest(lower)) {
             return true
         }
 
@@ -427,6 +420,7 @@ object TaskIntentRouter {
     }
 
     private fun isExplicitSoftwareTestOperation(lower: String): Boolean {
+        if (!OwnerActionText.hasRequest(lower)) return false
         if (listOf(
                 "python.tests",
                 "pytest",

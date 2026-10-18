@@ -117,7 +117,8 @@ class WorkflowRunner(
     ) -> Unit = { _, _, _, _, _ -> },
     private val checkpoint: suspend (AgentControlState) -> Unit = {},
     private val projectContextProvider: suspend (TaskState) -> com.lumena.android.agent.core.ProjectContextCapsule? = { it.projectContext },
-    private val onUnknownOutcome: (TaskState, ToolRequest, ToolResult) -> Unit = { _, _, _ -> }
+    private val onUnknownOutcome: (TaskState, ToolRequest, ToolResult) -> Unit = { _, _, _ -> },
+    private val semanticMemoryProvider: suspend (TaskState) -> List<String> = { emptyList() }
 ) {
     suspend fun run(
         history: List<OllamaMessage>,
@@ -135,6 +136,7 @@ class WorkflowRunner(
         var state = withHistoryTaint(control ?: controller.initial(task), history)
         val collectedImages = initialImages.toMutableList()
         var protocolTurns = 0
+        var semanticMemory: List<String>? = null
         publish(state, onState)
 
         // A question about an earlier operation has an app-owned local
@@ -435,7 +437,17 @@ class WorkflowRunner(
 
             val capsule = projectContextProvider(state.task)
             if (capsule != null) state = state.copy(task = state.task.copy(projectContext = capsule))
-            val relevantMemory = withContext(Dispatchers.IO) { relevantMemoryProvider(state.task) }
+            val ordinaryMemory = withContext(Dispatchers.IO) { relevantMemoryProvider(state.task) }
+            val semantic = semanticMemory ?: try {
+                semanticMemoryProvider(state.task).take(4).also { semanticMemory = it }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                emptyList<String>().also { semanticMemory = it }
+            }
+            val relevantMemory = (semantic.filter { it.startsWith("SEMANTIC MEMORY") } +
+                ordinaryMemory.take(2) + semantic.filterNot { it.startsWith("SEMANTIC MEMORY") } +
+                ordinaryMemory.drop(2)).distinct().take(10)
             if (capsule != null || relevantMemory.isNotEmpty() || webStrategyAdvice.isNotEmpty() || evidenceContext.isNotEmpty()) {
                 val kernel = state.task.kernel
                 state = state.copy(task = state.task.copy(kernel = kernel.copy(taint = TrustGate.withMemory(kernel.taint))))
@@ -1023,6 +1035,8 @@ class WorkflowRunner(
             ?.take(800)
         val recap = buildString {
             appendLine("CRITICAL TASK RECAP")
+            appendLine("APP_RUNTIME_SOURCE version=${com.lumena.android.BuildConfig.VERSION_NAME} commit=${com.lumena.android.BuildConfig.SOURCE_COMMIT}")
+            appendLine("A repository inspected by a tool is a separate source snapshot. If its HEAD differs, disclose the mismatch; it cannot certify the installed APK implementation.")
             appendLine("goal=$compactGoal")
             appendLine("status=${state.task.status}")
             appendLine("step=${state.task.step}/${state.task.maxSteps}")

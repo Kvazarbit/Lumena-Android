@@ -21,6 +21,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -44,6 +45,10 @@ import com.lumena.android.settings.SemanticDocument
 import com.lumena.android.settings.SemanticHit
 import com.lumena.android.settings.SemanticMemoryPolicy
 import com.lumena.android.settings.SemanticMemoryStore
+import com.lumena.android.settings.SemanticMemorySettings
+import com.lumena.android.settings.SemanticMemoryCoordinator
+import com.lumena.android.settings.SemanticIndexWorker
+import androidx.work.WorkManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
@@ -60,8 +65,15 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var enabled by remember { mutableStateOf("semantic-memory" !in ModuleSettings.disabled(context)) }
-    var tag by rememberSaveable { mutableStateOf("embeddinggemma-2") }
-    var backend by rememberSaveable { mutableStateOf("ollama") }
+    var tag by remember { mutableStateOf(SemanticMemorySettings.selection(context).tag) }
+    var backend by remember { mutableStateOf(SemanticMemorySettings.selection(context).backend) }
+    var chatMemory by remember { mutableStateOf(SemanticMemorySettings.selection(context).chatEnabled) }
+    val coordinator = remember { SemanticMemoryCoordinator(context.applicationContext, ollamaUrl) }
+    val workManager = remember { WorkManager.getInstance(context.applicationContext) }
+    val indexJobs by remember { workManager.getWorkInfosForUniqueWorkFlow(SemanticIndexWorker.NAME) }
+        .collectAsState(initial = emptyList())
+    val indexWork = indexJobs.firstOrNull { !it.state.isFinished } ?: indexJobs.firstOrNull()
+    val indexing = indexJobs.any { !it.state.isFinished }
     var job by remember { mutableStateOf<Job?>(null) }
     var query by remember { mutableStateOf("") }
     var selectedScope by rememberSaveable { mutableStateOf<String?>(null) }
@@ -97,14 +109,7 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
     }
 
     suspend fun <T> withEmbedding(block: suspend (LocalEmbeddingProvider) -> T): T {
-        val provider: LocalEmbeddingProvider =
-            if (backend == "litertlm") LiteRtLmEmbeddingProvider(context)
-            else LocalEmbeddingClient(ollamaUrl)
-        try {
-            return block(provider)
-        } finally {
-            (provider as? AutoCloseable)?.close()
-        }
+        return coordinator.withProvider(SemanticMemorySettings.selection(context), block)
     }
 
     fun requestedModel(): String =
@@ -160,7 +165,8 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
             Text("EmbeddingGemma 2 · семантична пам'ять", style = MaterialTheme.typography.titleMedium)
             Text(
                 "SHADOW: векторний пошук за структурованими принципами Cognitive Genome. " +
-                    "Це НЕ перевірка мети, не нові права і не навчання ваг. Текст лише на 127.0.0.1.",
+                    "Чатова модель та локальний embedding працюють разом. Пошук є підказкою, " +
+                    "а виконання й успіх перевіряються окремо. Ваги завантажуються за потреби.",
                 style = MaterialTheme.typography.bodySmall
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -172,19 +178,29 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
                         ModuleSettings.setEnabled(context, "semantic-memory", value)
                         enabled = value
                         if (!value) {
+                            SemanticIndexWorker.stop(context)
                             hits = emptyList()
                             status = "Модуль вимкнено. Історію й кеш не видалено."
                         }
                     }
                 )
             }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Використовувати локальну пам'ять у чаті", modifier = Modifier.weight(1f))
+                Switch(checked = chatMemory, enabled = enabled && !busy && !indexing, onCheckedChange = {
+                    SemanticMemorySettings.setChatEnabled(context, it)
+                    chatMemory = it
+                })
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(enabled = enabled && !busy, onClick = {
+                OutlinedButton(enabled = enabled && !busy && !indexing, onClick = {
+                    SemanticMemorySettings.setBackend(context, "ollama")
                     backend = "ollama"
                     hits = emptyList()
                     status = "Ollama: readiness потребує /api/embed, а не тільки /api/tags."
                 }) { Text(if (backend == "ollama") "✓ Ollama" else "Ollama") }
-                OutlinedButton(enabled = enabled && !busy, onClick = {
+                OutlinedButton(enabled = enabled && !busy && !indexing, onClick = {
+                    SemanticMemorySettings.setBackend(context, "litertlm")
                     backend = "litertlm"
                     hits = emptyList()
                     status = "LiteRT-LM CPU 0.18.0: вибери .litertlm, далі виконай smoke."
@@ -193,12 +209,12 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
             if (backend == "ollama") {
                 OutlinedTextField(
                     value = tag,
-                    onValueChange = { if (!busy) tag = it.take(100) },
+                    onValueChange = { if (!busy && !indexing) { tag = it.take(100); SemanticMemorySettings.setTag(context, tag) } },
                     label = { Text("Точний локальний Ollama tag") },
                     supportingText = {
                         Text("Модель має реально відповідати через /api/embed. Cloud заборонений.")
                     },
-                    enabled = enabled && !busy,
+                    enabled = enabled && !busy && !indexing,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -209,16 +225,19 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
                         "Навіть якщо пакет мультимодальний, тут працює лише текстовий CPU.",
                     style = MaterialTheme.typography.bodySmall
                 )
-                OutlinedButton(enabled = enabled && !busy, onClick = {
+                OutlinedButton(enabled = enabled && !busy && !indexing, onClick = {
                     liteRtPicker.launch(arrayOf("*/*"))
                 }) { Text("Імпортувати файл .litertlm через Android") }
                 val model = SemanticLiteRtModelStore.selected(context)
                 Text(
                     if (model == null) "NOT_INSTALLED: ще немає вибраного LiteRT-файла."
-                    else "Файл у приватному сховищі APK: " + (model.length() / 1048576) +
-                        " MiB · готовність inference ще не перевірена.",
+                    else "Вибрано: " + SemanticLiteRtModelStore.displayName(context) + " · " +
+                        (model.length() / 1048576) + " MiB. Приватна копія збережена; RAM завантажується за потреби.",
                     style = MaterialTheme.typography.labelSmall
                 )
+                SemanticLiteRtModelStore.sourceHint(context)?.takeIf { it.isNotBlank() }?.let {
+                    Text("Джерело імпорту: $it", style = MaterialTheme.typography.labelSmall)
+                }
                 Text(
                     "Ваги не входять до StateVault (ліміт 64 MiB). Копія імпортується " +
                         "тільки за твоїм вибором, попередні моделі не видаляються.",
@@ -242,43 +261,20 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
             }) {
                 Text(if (backend == "litertlm") "CPU inference smoke — REAL" else "Перевірити /api/embed — REAL")
             }
-            Button(enabled = enabled && !busy, onClick = {
-                runJob {
-                    withEmbedding { provider ->
-                        val identity = provider.inspectModel(requestedModel())
-                        // No index entries before successful real embedding canary.
-                        provider.embed(identity, listOf("Lumena local embedding readiness check."))
-                        val allDocs = withContext(Dispatchers.IO) { loadDocuments() }
-                        val cached = withContext(Dispatchers.IO) {
-                            SemanticMemoryStore.prepareIndex(context, identity, allDocs)
-                        }
-                        val docs = SemanticMemoryPolicy.pending(allDocs, cached)
-                        require(allDocs.isNotEmpty()) { "Немає Fractal принципів для індексації" }
-                        indexed = 0
-                        availableScopes = allDocs.mapNotNull { it.scopeHash }.distinct().sorted()
-                        for (batch in docs.chunked(SemanticMemoryPolicy.MAX_BATCH)) {
-                            kotlinx.coroutines.currentCoroutineContext().ensureActive()
-                            check(ModuleRegistry.isEnabled("semantic-memory")) {
-                                "Модуль вимкнено; без подальшої індексації"
-                            }
-                            val vectors = provider.embed(identity, batch.map { it.text })
-                            kotlinx.coroutines.currentCoroutineContext().ensureActive()
-                            withContext(Dispatchers.IO) {
-                                SemanticMemoryStore.upsert(context, identity, batch, vectors)
-                            }
-                            indexed += batch.size
-                            status = "Індексовано " + indexed + "/" + docs.size +
-                                " SHADOW принципів (живі джерела не змінено)"
-                        }
-                        val remaining = allDocs.count { cached[it.id] != it.revision } - indexed
-                        status = "INDEXED: " + indexed + " · ще не індексовано: " + remaining +
-                            " · " + identity.name +
-                            " · digest " + identity.digest.take(12) + ". TOOLGATE незмінний."
-                    }
-                }
+            Button(enabled = enabled && !busy && !indexing, onClick = {
+                SemanticIndexWorker.enqueue(context, ollamaUrl)
+                status = "Індексацію заплановано. Можна повернутися в чат; завершені пакети збережуться."
             }) {
-                Text(if (busy) "Обробка…" else "Індексувати наступні 48 принципів")
+                Text(if (indexing) "Індексація триває…" else "Індексувати наступні 48 принципів")
             }
+            indexWork?.let { work ->
+                Text("Індексація: ${work.state} · " +
+                    work.progress.getInt("done", work.outputData.getInt("done", 0)) + "/" +
+                    work.progress.getInt("total", 48) +
+                    (work.outputData.getString("reason")?.let { " · $it" } ?: ""),
+                    style = MaterialTheme.typography.bodySmall)
+            }
+            if (indexing) TextButton(onClick = { SemanticIndexWorker.stop(context) }) { Text("Зупинити індексацію") }
             Text(status, style = MaterialTheme.typography.bodySmall)
             if (busy) {
                 TextButton(onClick = { job?.cancel() }) { Text("STOP після поточного native inference") }

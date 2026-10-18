@@ -1,0 +1,67 @@
+name: Project memory regression
+
+on:
+  push:
+    branches: [ "codex/daily-project-memory" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: project-memory-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_HOME: /usr/local/lib/android/sdk
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Sync pinned native configuration
+        run: bash scripts/sync_llama_cpp.sh
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+      - name: Verify all former diagnostic assertions and memory lifecycle
+        run: >-
+          gradle --max-workers=2 -PphoneDiagnostics=true :app:testDebugUnitTest
+          --tests 'com.lumena.android.diagnostics.*'
+          --tests 'com.lumena.android.agent.core.OwnerActionTextTest'
+          --tests 'com.lumena.android.ollama.WorkflowRunnerSemanticRecallTest'
+      - name: Verify nonempty passing JUnit reports
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as E
+          expected = {'PhoneReport2296DiagnosticTest': 11, 'EmbeddingLifecycleDiagnosticTest': 5,
+                      'SemanticMemoryCoordinatorTest': 5, 'OwnerActionTextTest': 5,
+                      'WorkflowRunnerSemanticRecallTest': 2}
+          for name, minimum in expected.items():
+              matches = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.' + name + '.xml'))
+              assert len(matches) == 1, name
+              root = E.parse(matches[0]).getroot()
+              assert int(root.get('tests', 0)) >= minimum, name
+              assert all(int(root.get(k, 0)) == 0 for k in ('failures', 'errors', 'skipped')), name
+              print('VERIFIED', name, root.get('tests'))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: project-memory-regression
+          path: app/build/test-results/testDebugUnitTest/TEST-*.xml
+          if-no-files-found: error

@@ -18,7 +18,10 @@ android {
         applicationId = "com.lumena.android"
         minSdk = 28
         targetSdk = 35
-        versionCode = 63
+        versionCode = 64
+        val sourceCommit = providers.environmentVariable("GITHUB_SHA").orNull
+            ?.takeIf { it.matches(Regex("[0-9a-f]{40}")) } ?: "UNKNOWN"
+        buildConfigField("String", "SOURCE_COMMIT", "\"$sourceCommit\"")
         versionName = "0.12.30" + providers.environmentVariable("GITHUB_RUN_NUMBER")
             .orNull?.let { "-ci$it" }.orEmpty()
         ndk { abiFilters += listOf("arm64-v8a") }
@@ -42,7 +45,7 @@ android {
         // No blanket AGP/Kotlin upgrade until isolated CI proves necessary.
         freeCompilerArgs += listOf("-Xskip-metadata-version-check")
     }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     if (phoneDiagnostics) {
         sourceSets.getByName("test").java.srcDir("src/phoneDiagnostics/java")
         testOptions.unitTests.isIncludeAndroidResources = true
@@ -77,6 +80,7 @@ dependencies {
     if (phoneDiagnostics) {
         testImplementation("org.robolectric:robolectric:4.15.1")
         testImplementation("androidx.compose.ui:ui-test-junit4")
+        testImplementation("androidx.work:work-testing:2.9.1")
         debugImplementation("androidx.compose.ui:ui-test-manifest")
     }
     debugImplementation("androidx.compose.ui:ui-tooling")

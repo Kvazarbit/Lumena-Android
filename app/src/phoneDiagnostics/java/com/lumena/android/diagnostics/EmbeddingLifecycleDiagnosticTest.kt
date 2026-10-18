@@ -21,6 +21,10 @@ import com.lumena.android.settings.CognitivePrincipleStage
 import com.lumena.android.settings.ModuleSettings
 import com.lumena.android.settings.SemanticDocument
 import com.lumena.android.settings.SemanticMemoryStore
+import com.lumena.android.settings.SemanticMemorySettings
+import androidx.work.Configuration
+import androidx.work.testing.SynchronousExecutor
+import androidx.work.testing.WorkManagerTestInitHelper
 import com.lumena.android.ui.SemanticMemoryPanel
 import java.io.File
 import java.io.RandomAccessFile
@@ -46,7 +50,10 @@ class EmbeddingLifecycleDiagnosticTest {
     private lateinit var storedCopy: File
 
     @Before fun prepareImportedSelection() {
+        WorkManagerTestInitHelper.initializeTestWorkManager(context,
+            Configuration.Builder().setExecutor(SynchronousExecutor()).build())
         ModuleSettings.setEnabled(context, "semantic-memory", true)
+        SemanticMemorySettings.setBackend(context, "ollama")
         // Seed the exact durable state *after* a successful import. These bytes
         // are a fixture, NOT valid weights; never call metadata or inference.
         val root = File(context.filesDir, "semantic-litert-models").apply { mkdirs() }

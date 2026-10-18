@@ -34,6 +34,7 @@ data class AgentControlState(
     val completedRequiredTools: Set<String> = emptySet(),
     val intentGuidance: String? = null,
     val preflightCompleted: Boolean = false,
+    val readOnlyReplans: Int = 0,
     val recoveryHint: String? = null
 )
 
@@ -879,8 +880,14 @@ class AgentController(
     private fun repeatedObservationReplan(
         state: AgentControlState,
         call: AgentDecision.ToolCall
-    ): ControllerInstruction.AskModelAgain {
+    ): ControllerInstruction {
         val canonical = ToolRegistry.canonicalize(call.tool)
+        if (state.readOnlyReplans >= 2) {
+            val report = "PARTIAL: повторні запити не дали нових даних. Уже отримані результати збережено; " +
+                "потрібен інший спосіб перевірки або уточнення мети."
+            return ControllerInstruction.Finish(report, state.copy(task = state.task.copy(
+                status = TaskStatus.PARTIAL, lastResult = report), recoveryHint = report))
+        }
         val nextHint = when (canonical) {
             "workspace.list", "file.list" ->
                 "The verified directory listing is already recorded and unchanged. " +
@@ -913,6 +920,7 @@ class AgentController(
         return ControllerInstruction.AskModelAgain(
             feedback = recovery,
             state = state.copy(
+                readOnlyReplans = state.readOnlyReplans + 1,
                 protocolRetries = 0,
                 modelFailures = 0,
                 recoveryHint = listOf(
@@ -1739,6 +1747,7 @@ class AgentController(
         val nextState = state.copy(
             task = nextTask,
             toolUsed = true,
+            readOnlyReplans = 0,
             completedRequiredTools =
                 completedRequiredTools,
             protocolRetries = 0,
