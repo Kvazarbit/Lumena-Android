@@ -1,6 +1,6 @@
 package com.lumena.android.ollama
 
-import com.lumena.android.agent.core.ConstitutionCharter
+import com.lumena.android.agent.core.ModelOperatingContract
 
 object LocalWorkflowAgent {
     val systemPrompt = """
@@ -52,7 +52,7 @@ object LocalWorkflowAgent {
 
         REPLY:
         {"reply":"Answer in the user's language"}
-    """.trimIndent() + "\n\n" + ConstitutionCharter.prompt()
+    """.trimIndent() + "\n\n" + ModelOperatingContract.prompt()
 
     fun toolResultMessage(
         tool: String,

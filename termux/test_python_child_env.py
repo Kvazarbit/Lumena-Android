@@ -111,8 +111,10 @@ class PythonChildEnvTest(unittest.TestCase):
             self.b.execute_tool("python.tests", {"cwd": "."})
 
         self.assertEqual(2, len(captured))
+        self.assertEqual(2, len({env["PYTHONPYCACHEPREFIX"] for env in captured.values()}))
         for argv, env in captured.items():
             self.assertIsNotNone(env, f"{argv} inherits the full bridge environment")
+            self.assertEqual("1", env["PYTHONDONTWRITEBYTECODE"])
             for name in SECRETS:
                 self.assertFalse(name in env, f"{argv} child inherited {name}")
 

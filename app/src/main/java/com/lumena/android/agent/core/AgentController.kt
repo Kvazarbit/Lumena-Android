@@ -1843,7 +1843,7 @@ class AgentController(
     ): String {
         return ContextBuilder(
             maxMemoryItems = 6,
-            maxChars = if (state.task.projectRoot != null) 14_000 else 4_500
+            maxChars = if (state.task.projectRoot != null || state.intent == TaskIntent.CODE_WORK) 14_000 else 4_500
         ).build(
             task = state.task,
             project = null,

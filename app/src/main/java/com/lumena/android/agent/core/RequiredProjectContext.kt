@@ -1,6 +1,8 @@
 package com.lumena.android.agent.core
 
-/** Backend compaction must retain the entire app-authored mandatory block. */
+/** Backend compaction retains the app-authored constitution and project block.
+ * The historic name/markers remain stable for existing backend integrations.
+ */
 object RequiredProjectContext {
     const val BEGIN = "[LUMENA_REQUIRED_CONTEXT_V1_BEGIN]"
     const val END = "[LUMENA_REQUIRED_CONTEXT_V1_END]"

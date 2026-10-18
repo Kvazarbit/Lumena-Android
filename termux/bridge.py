@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.30
+Lumena Termux Bridge v0.31
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -3042,6 +3042,11 @@ def python_child_env() -> dict[str, str]:
     env.setdefault("PATH", os.defpath)
     env["HOME"] = str(home)
     env["TMPDIR"] = str(tmp)
+    # Timestamp+size .pyc validation can reuse old code after a same-second,
+    # same-size patch. Each invocation reads a fresh cache namespace, and writes
+    # no bytecode. -B alone would still READ stale __pycache__ files.
+    env["PYTHONPYCACHEPREFIX"] = str(home / "bytecode" / secrets.token_hex(16))
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
 
 
@@ -3887,8 +3892,8 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + alias for alias, root in READONLY_ALIASES.items() if root.exists()) or '(none)'}\n"
                 f"read_roots_config={READ_ROOTS_FILE}\n"
-                f"version=0.30\n"
-                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1,python_clean_env_v1,python_run_sha256_v1,project_workspace_v1\n"
+                f"version=0.31\n"
+                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1,python_clean_env_v1,python_run_sha256_v1,project_workspace_v1,python_fresh_bytecode_v1\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
                 f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
@@ -4358,7 +4363,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     _mark_interrupted_search_from_previous_run()
-    print("Lumena Termux Bridge v0.28")
+    print("Lumena Termux Bridge v0.31")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")

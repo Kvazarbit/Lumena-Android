@@ -51,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     # Full Kotlin recompilation for each mutation plus the native release build
     # can exceed 30 minutes on a cold runner. Keep all gates and per-probe limits.
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       ANDROID_HOME: /usr/local/lib/android/sdk
@@ -78,6 +78,7 @@ jobs:
           grep -q '!defined(__ANDROID__)' termux/install_laya_system1.sh
           grep -q '#include <setjmp.h>' <(curl -fsSL https://raw.githubusercontent.com/shpati/laya.cpp/941e64863193c1290bffece6c22f8ac828dffecd/laya.c)
           python -m unittest discover -s termux -p 'test_*.py' -v
+          python scripts/terminal_workflow_probe.py
           python - <<'PY'
           import importlib.util
           import json
@@ -363,6 +364,8 @@ jobs:
               "com.lumena.android.settings.ProjectConversationPolicyTest",
               "com.lumena.android.agent.core.ProjectContextBudgetTest",
               "com.lumena.android.ollama.WorkflowRunnerProjectWorkspaceTest",
+              "com.lumena.android.agent.core.ModelOperatingContractTest",
+              "com.lumena.android.ollama.WorkflowRunnerTerminalContractTest",
           ]
           total = 0
           for name in checks:
@@ -391,6 +394,13 @@ jobs:
           path: |
             app/build/reports/tests/
             app/build/test-results/testDebugUnitTest/
+          if-no-files-found: ignore
+      - name: Upload terminal workflow falsification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminal-workflow-probe
+          path: app/build/terminal-workflow-probe/
           if-no-files-found: ignore
       - name: Summarize cognitive contour audit
         if: always()

@@ -6,6 +6,7 @@ import com.lumena.android.agent.local.ToolResult
 import com.lumena.android.model.ScreenSnapshot
 import com.lumena.android.agent.core.ConstitutionCapsule
 import com.lumena.android.agent.core.ConstitutionCharter
+import com.lumena.android.agent.core.ModelOperatingContract
 import com.lumena.android.agent.core.CoreDna
 import com.lumena.android.settings.PortableKernelPolicy
 import com.squareup.moshi.Moshi
@@ -83,7 +84,7 @@ object CompanionProtocol {
         http.json, http.get, web.search, web.read, image.search, inspect.batch,
         workspace.list, file.list, file.search, file.read,
         project.create, dir.create, file.write, file.patch,
-        git.status, git.diff, git.log, git.add, git.commit,
+        project.inspect, project.search, git.init, git.status, git.diff, git.log, git.add, git.commit,
         python.run, python.syntax_check, python.tests,
         ollama.status, ollama.generate, ollama.start, ollama.pull.
 
@@ -105,7 +106,7 @@ object CompanionProtocol {
         The Lumena app repository may appear as @Lumena-Android and is read-only to inspection tools.
         Lumena may auto-run registry-marked read-only tools when Safe Auto is enabled.
         Mutating or executable tools still require explicit user approval.
-    """.trimIndent() + "\n\n" + ConstitutionCharter.prompt()
+    """.trimIndent() + "\n\n" + ModelOperatingContract.prompt()
 
     fun parse(snapshot: ScreenSnapshot?): CompanionCommand? {
         if (snapshot == null) return null
