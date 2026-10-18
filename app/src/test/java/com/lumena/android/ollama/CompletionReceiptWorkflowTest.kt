@@ -24,7 +24,16 @@ class CompletionReceiptWorkflowTest {
         val model = object : ChatModelClient {
             override suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String> {
                 modelCalls++
-                val fitted = OllamaContextPolicy.compact(messages, OllamaRequestBudget(OllamaOptions(), 2000, 1000))
+                // Both the constitution/task policy and execution receipts are
+                // now mandatory. 2K chars cannot contain this task's two blocks.
+                val requiredChars = messages.sumOf { RequiredProjectContext.minimum(it.content) }
+                assertTrue(requiredChars > 2000)
+                assertThrows(IllegalArgumentException::class.java) {
+                    OllamaContextPolicy.compact(messages, OllamaRequestBudget(OllamaOptions(), 2000, 1000))
+                }
+                val fitted = OllamaContextPolicy.compact(messages, OllamaRequestBudget(OllamaOptions(), 3000, 1000))
+                assertTrue(fitted.first().content.contains(ConstitutionCapsule.prompt()))
+                assertTrue(fitted.first().content.contains(ModelOperatingContract.binding()))
                 val recent = fitted.last().content
                 for (tool in listOf("system.time", "workspace.list", "web.read")) {
                     assertTrue("Missing receipt for $tool: $recent", recent.contains("$tool executed=true ok=true"))

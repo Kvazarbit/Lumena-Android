@@ -28,6 +28,7 @@ object TerminalWorkflowProtocol {
         Read before file.patch; old must match once. python.run takes an existing .py path; the app obtains a preview and owner approval. Never invent approval hashes.
         Verify changed targets. For a Python project, run full python.tests with cwd='.', argv='-q'; syntax alone is not a test pass. A failed/missing test receipt means partial. Inspect git.diff before an authorized git.add/commit; commit is not test evidence.
         After UNKNOWN, inspect state before recovery; never blindly rerun the action. Preserve open work and contradictions for the next model. Missing tools/dependencies mean partial with a concrete next step.
+        Project engineering: one durable truth; explicit intents; atomic guarded writes; expire on reads. Read existing FRACTAL_INDEX and module contracts before deep edits. For architecture changes, define boundaries and CI guards first; retain regression guards. Docs express intent, runtime proves state; report conflicts.
         Tool schemas: project.inspect{cwd}; project.search{cwd,query}; file.read{path}; file.write{path,content}; file.patch{path,old,new}; dir.create{path}; git.init/status/diff/log{cwd}; git.add{cwd,paths}; git.commit{cwd,message}; python.syntax_check{script}; python.run{script}; python.tests{cwd,argv}.
         JSON example: {"tool":"file.read","args":{"path":"README.md"}}. done requires recorded goal checks; otherwise use {"partial":true,"summary":"remaining work"}.
     """.trimIndent()

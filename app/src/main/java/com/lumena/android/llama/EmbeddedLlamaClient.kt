@@ -69,13 +69,16 @@ class EmbeddedLlamaClient(
     ): List<OllamaMessage> {
         val charBudget = (contextSize * 4).coerceAtLeast(4_096)
         val system = messages.firstOrNull { it.role == "system" }
+        val latestRequired = messages.lastOrNull { it.role != "system" }?.let {
+            com.lumena.android.agent.core.RequiredProjectContext.minimum(it.content)
+        } ?: 0
 
         val kept = ArrayDeque<OllamaMessage>()
         var remaining = charBudget
 
         val systemMessage = system?.let {
             val required = com.lumena.android.agent.core.RequiredProjectContext.minimum(it.content)
-            val limit = minOf(charBudget - 256, maxOf(charBudget / 2, required + if (required > 0) 256 else 0))
+            val limit = minOf(charBudget - maxOf(256, latestRequired), maxOf(charBudget / 2, required + if (required > 0) 256 else 0))
             val content = com.lumena.android.agent.core.RequiredProjectContext.clip(it.content, limit) { text, size -> text.take(size) }
             remaining -= content.length
             OllamaMessage("system", content)

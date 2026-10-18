@@ -23,6 +23,9 @@ internal fun clipNewestContextText(
     text: String,
     limit: Int
 ): String {
+    if (RequiredProjectContext.minimum(text) > 0) {
+        return RequiredProjectContext.clip(text, limit) { value, size -> value.take(size) }
+    }
     if (limit <= 0) return ""
     if (text.length <= limit) return text
 

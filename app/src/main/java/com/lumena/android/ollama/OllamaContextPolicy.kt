@@ -74,7 +74,8 @@ object OllamaContextPolicy {
         // newest non-system turn must retain space. Then enforce the total budget
         // strictly while walking history from newest to oldest.
         val protectedSize = system?.let { RequiredProjectContext.minimum(it.content) } ?: 0
-        val systemLimit = min(budget.maxChars - 256, maxOf(min(budget.maxPerMessage, budget.maxChars / 2), protectedSize + if (protectedSize > 0) 256 else 0))
+        val latestRequired = nonSystem.lastOrNull()?.let { RequiredProjectContext.minimum(it.content) } ?: 0
+        val systemLimit = min(budget.maxChars - maxOf(256, latestRequired), maxOf(min(budget.maxPerMessage, budget.maxChars / 2), protectedSize + if (protectedSize > 0) 256 else 0))
         val clippedSystem = system?.copy(
             content = RequiredProjectContext.clip(system.content, systemLimit, ::clipSystem)
         )
@@ -84,7 +85,8 @@ object OllamaContextPolicy {
         val recent = ArrayList<OllamaMessage>()
         for (message in nonSystem.asReversed()) {
             if (remaining <= 0) break
-            val requested = min(budget.maxPerMessage, message.content.length)
+            val requested = maxOf(min(budget.maxPerMessage, message.content.length),
+                if (recent.isEmpty()) latestRequired else 0)
             val take = if (recent.isEmpty()) {
                 min(requested, remaining)
             } else {
@@ -93,7 +95,7 @@ object OllamaContextPolicy {
             }
             val clipped = when {
                 message.content.length <= take -> message.content
-                recent.isEmpty() -> clipNewestContextText(message.content, take)
+                recent.isEmpty() -> RequiredProjectContext.clip(message.content, take, ::clipNewestContextText)
                 else -> message.content.takeLast(take)
             }
             if (clipped.isEmpty()) continue

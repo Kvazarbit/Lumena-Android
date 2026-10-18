@@ -366,6 +366,7 @@ jobs:
               "com.lumena.android.ollama.WorkflowRunnerProjectWorkspaceTest",
               "com.lumena.android.agent.core.ModelOperatingContractTest",
               "com.lumena.android.ollama.WorkflowRunnerTerminalContractTest",
+              "com.lumena.android.ollama.CompletionReceiptWorkflowTest",
           ]
           total = 0
           for name in checks:

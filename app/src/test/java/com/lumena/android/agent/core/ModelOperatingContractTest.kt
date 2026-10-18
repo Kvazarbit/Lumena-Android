@@ -49,4 +49,25 @@ class ModelOperatingContractTest {
         assertTrue(write.requiresConfirmation)
         assertTrue(ModelOperatingContract.binding().contains("agreement is no proof"))
     }
+
+    @Test fun bothBackendsKeepFreshReceiptsAlongsideTheConstitutionOrFailExplicitly() {
+        val context = dynamic()
+        val receipt = RequiredProjectContext.wrap("CURRENT_TASK_EXECUTION_RECEIPT\n" + "observed result ".repeat(60))
+        val messages = listOf(OllamaMessage("system", "static ".repeat(1000) + context), OllamaMessage("user", receipt))
+        val compact = OllamaContextPolicy.compact(messages, OllamaRequestBudget(OllamaOptions(), 3000, 500))
+        assertTrue(compact.first().content.contains(RequiredProjectContext.block(context)!!))
+        assertTrue(compact.last().content.contains(receipt))
+        val fit = ChatContextPolicy.fit(arrayOf("system", "user"), messages.map { it.content }.toTypedArray(), 1500,
+            formatter = { _, contents -> contents.joinToString("\n") }, tokenCounter = { (it.length + 1) / 2 })
+        assertTrue(fit.fits)
+        assertTrue(fit.contents.first().contains(RequiredProjectContext.block(context)!!))
+        assertTrue(fit.contents.last().contains(receipt))
+        assertThrows(IllegalArgumentException::class.java) {
+            OllamaContextPolicy.compact(messages, OllamaRequestBudget(OllamaOptions(), 1500, 500))
+        }
+        val tooSmall = ChatContextPolicy.fit(arrayOf("system", "user"), messages.map { it.content }.toTypedArray(), 500,
+            formatter = { _, contents -> contents.joinToString("\n") }, tokenCounter = { (it.length + 1) / 2 })
+        assertFalse(tooSmall.fits)
+        assertTrue(tooSmall.contents.last().contains(receipt))
+    }
 }
