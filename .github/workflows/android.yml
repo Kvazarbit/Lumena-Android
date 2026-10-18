@@ -410,8 +410,6 @@ jobs:
           name: cognitive-contour-audit
           path: app/build/cognitive-contour-audit/
           if-no-files-found: ignore
-      - name: Probe recovery guard mutations
-        run: python scripts/mutation_recovery_probe.py
       - name: Falsify project workspace context guarantees
         run: python scripts/project_workspace_probe.py --kotlin
       - name: Upload project workspace falsification evidence
@@ -421,6 +419,8 @@ jobs:
           name: project-workspace-probe
           path: app/build/project-workspace-probe/
           if-no-files-found: ignore
+      - name: Probe recovery guard mutations
+        run: python scripts/mutation_recovery_probe.py
       - name: Probe MCP and module/listing mutations
         run: python scripts/mutation_module_probe.py
       - name: Build unsigned release APK
