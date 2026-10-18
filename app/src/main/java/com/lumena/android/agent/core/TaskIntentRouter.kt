@@ -67,9 +67,9 @@ object TaskIntentRouter {
     fun route(
         policy: EffectiveTaskPolicy
     ): TaskIntentProfile {
+        val instruction = EffectiveTaskPolicyCompiler.routingText(policy)
         val normalized =
-            EffectiveTaskPolicyCompiler
-                .routingText(policy)
+            instruction
                 .replace(Regex("[\\r\\n\\t]+"), " ")
                 .replace(Regex("\\s{2,}"), " ")
                 .trim()
@@ -114,7 +114,7 @@ object TaskIntentRouter {
             )
         }
 
-        if (isCodeWork(lower) || isExplicitFileExecution(lower)) {
+        if (isCodeWork(instruction.lowercase()) || isExplicitFileExecution(lower)) {
             val mixedWebResearch = isPublicWeb(lower)
             val tools = buildList {
                 add("context.snapshot")
