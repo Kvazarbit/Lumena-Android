@@ -10,12 +10,18 @@ data class ProjectDecisionRecord(
     val evidenceIds: List<String> = emptyList(), val at: Long
 )
 
+data class ProjectHandoffRecord(
+    val epoch: String, val modelId: String, val status: TaskStatus,
+    val summary: String, val unknownEffect: Boolean, val at: Long
+)
+
 data class ProjectWorkRecord(
     val id: String, val goal: String, val status: TaskStatus,
     val modelId: String, val summary: String = "", val evidence: List<ActionEvidence> = emptyList(),
     val unknownEffect: Boolean = false, val closedByOwner: Boolean = false,
     val at: Long, val activeEpoch: String = "", val unknownOriginEpoch: String = "",
-    val unresolvedEffects: List<PolicyUnresolvedEffect> = emptyList()
+    val unresolvedEffects: List<PolicyUnresolvedEffect> = emptyList(),
+    val handoffs: List<ProjectHandoffRecord> = emptyList()
 ) {
     val open: Boolean get() = !closedByOwner && (status != TaskStatus.DONE || unknownEffect)
 }
@@ -46,6 +52,7 @@ object ProjectWorkspacePolicy {
     const val MAX_TASKS = 128
     const val MAX_OPEN_TASKS = 32
     const val MAX_DECISIONS = 64
+    const val MAX_HANDOFFS = 16
     const val MAX_CONTEXT = 6_000
 
     fun root(raw: String): String {
@@ -71,6 +78,9 @@ object ProjectWorkspacePolicy {
             p.tasks.forEach { t ->
                 require(t.id.length in 1..100 && t.goal.length in 1..8_000 && t.modelId.length <= 160)
                 require(t.summary.length <= 1_200 && t.evidence.size <= ContextKernel.MAX_EVIDENCE && t.at > 0)
+                require(t.handoffs.size <= MAX_HANDOFFS && t.handoffs.all {
+                    it.epoch.length in 1..100 && it.modelId.length <= 160 && it.summary.length <= 1200 && it.at > 0
+                })
                 require(t.unresolvedEffects.size <= 8 && t.unresolvedEffects.all {
                     it.sourceTaskRef.matches(Regex("[a-f0-9]{64}")) && it.requestSignature.matches(Regex("[a-f0-9]{24}")) &&
                         it.targetRef.matches(Regex("[a-f0-9]{64}")) && ToolRegistry.get(it.tool) != null
@@ -120,6 +130,10 @@ object ProjectWorkspacePolicy {
         val origin = if (priorOrigin != null && priorOrigin != task.id) priorOrigin
             else if (task.kernel.inFlight != null) task.id else ""
         val unknown = origin.isNotEmpty()
+        val handoffs = if (previous != null && previous.activeEpoch.isNotBlank() && previous.activeEpoch != task.id) {
+            (previous.handoffs + ProjectHandoffRecord(previous.activeEpoch, previous.modelId, previous.status,
+                previous.summary, previous.unknownEffect, previous.at)).takeLast(MAX_HANDOFFS)
+        } else previous?.handoffs.orEmpty()
         val taskRef = digest(task.id)
         val unresolved = previous?.unresolvedEffects.orEmpty().filterNot { it.sourceTaskRef == taskRef } +
             listOfNotNull(task.kernel.inFlight?.takeIf { ToolRegistry.get(it.tool)?.risk != ToolRisk.READ_ONLY }?.let {
@@ -127,7 +141,8 @@ object ProjectWorkspacePolicy {
             })
         require(unresolved.size <= 8) { "Надто багато невідомих дій у задачі; спочатку з'ясуй їхні наслідки" }
         val entry = ProjectWorkRecord(workId, previous?.goal ?: task.goal, task.status, modelId.take(160),
-            task.lastResult.orEmpty().take(1_200), receipts, unknown, previous?.closedByOwner ?: false, now, task.id, origin, unresolved)
+            (task.lastResult?.takeIf { it.isNotBlank() } ?: previous?.summary.orEmpty()).take(1_200),
+            receipts, unknown, previous?.closedByOwner ?: false, now, task.id, origin, unresolved, handoffs)
         val observedTargets = task.kernel.evidence.filter { it.ok && it.tool == "file.read" }.map { digest(it.target) }.toSet()
         val tasks = (project.tasks.filterNot { it.id == workId } + entry).map { work ->
             work.copy(unresolvedEffects = work.unresolvedEffects.filterNot {
@@ -170,20 +185,36 @@ object ProjectWorkspacePolicy {
         return ProjectContextCapsule(p.id, p.root, text)
     }
 
-    fun advice(project: WorkspaceProject, query: String): List<String> {
+    fun advice(project: WorkspaceProject, query: String, currentEpoch: String? = null, obligationId: String? = null): List<String> {
         val terms = query.lowercase().split(Regex("[^\\p{L}\\p{N}_]+" )).filter { it.length >= 3 }.toSet()
         val decisions = project.decisions.sortedByDescending { d ->
             terms.count { (d.problem + " " + d.decision).lowercase().contains(it) }
-        }.take(2).map { d ->
+        }.take(1).map { d ->
             "OWNER PROJECT DECISION ${quote(d.id)}: why=${quote(d.rationale.take(65))} choice=${quote(d.decision.take(65))} " +
                 "problem=${quote(d.problem.take(45))}; full record in project panel; not current proof."
         }
-        val prior = project.tasks.lastOrNull()?.let {
-            "HISTORICAL PROJECT HANDOFF: model=${quote(it.modelId)} status=${it.status} unknown=${it.unknownEffect} " +
-                "goal=${quote(it.goal.take(300))} report_data=${quote(it.summary.take(400))}. Current receipts required."
+        val work = obligationId?.let { id -> project.tasks.firstOrNull { it.id == id } }
+            ?: project.tasks.lastOrNull { it.activeEpoch != currentEpoch }
+        val prior = work?.let {
+            val report = if (it.activeEpoch == currentEpoch) it.handoffs.lastOrNull() else
+                ProjectHandoffRecord(it.activeEpoch.ifBlank { it.id }, it.modelId, it.status, it.summary, it.unknownEffect, it.at)
+            report?.let { r ->
+                "HISTORICAL PROJECT HANDOFF: report_data=${quote(r.summary.take(110))} actor=${quote(r.modelId.take(40))} " +
+                    "epoch=${quote(r.epoch.take(12))} status=${r.status} unknown=${r.unknownEffect}. Current receipts required."
+            }
         }
-        return decisions + listOfNotNull(prior)
+        val receipts = work?.evidence?.filterNot { currentEpoch != null && it.id.startsWith("$currentEpoch:") }
+            ?.takeLast(2)?.takeIf { it.isNotEmpty() }?.let { items ->
+                "HISTORICAL PROJECT RECEIPTS; recheck current state: " + items.joinToString("; ") {
+                    "${it.tool.take(30)} ok=${it.ok} target=${quote(it.target.take(45))} source=${quote(it.id.take(16))}"
+                }
+            }
+        return listOfNotNull(prior, receipts) + decisions
     }
+
+    fun combineAdvice(project: List<String>, social: List<String>, landscape: List<String>, coordinator: List<String>): List<String> =
+        (project.take(3) + social.take(1) + landscape.take(1) + coordinator.take(1) +
+            social.drop(1) + landscape.drop(1) + coordinator.drop(1)).distinct().take(6)
 
     fun quote(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"")
         .replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t").replace('\u0000', ' ') + "\""

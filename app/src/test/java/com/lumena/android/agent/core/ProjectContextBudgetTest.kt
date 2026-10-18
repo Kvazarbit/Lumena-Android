@@ -51,4 +51,16 @@ class ProjectContextBudgetTest {
         assertFalse(fit.fits)
         assertTrue(fit.contents[0].contains(huge))
     }
+
+    @Test fun selectedProjectAdviceSurvivesActualBackendCompaction() {
+        val p = WorkspaceProject("p", "Demo", "demo", "Maintain the application", updatedAt = 1)
+        val task = TaskState("t", "p", "Continue", projectRoot = "demo", projectContext = ProjectWorkspacePolicy.capsule(p))
+        val dynamic = ContextBuilder().build(task, null,
+            listOf("HANDOFF_MAIN_ALREADY_EXISTS", "CROSS_MODEL_EXPERIENCE_PRESERVE_API"))
+        val compact = OllamaContextPolicy.compact(listOf(
+            OllamaMessage("system", "static ".repeat(2000) + dynamic + "irrelevant tail ".repeat(1000)),
+            OllamaMessage("user", "Continue")), OllamaContextPolicy.budget(null, false))
+        assertTrue(compact.first().content.contains("HANDOFF_MAIN_ALREADY_EXISTS"))
+        assertTrue(compact.first().content.contains("CROSS_MODEL_EXPERIENCE_PRESERVE_API"))
+    }
 }

@@ -75,6 +75,10 @@ fun ProjectWorkspacePanel(
                 Text("Відкриті задачі: ${p.tasks.count { it.open }}", style = MaterialTheme.typography.titleMedium)
                 p.tasks.filter { it.open }.asReversed().forEach { work ->
                     Text(work.goal)
+                    if (work.summary.isNotBlank()) Text(work.summary.take(240), style = MaterialTheme.typography.bodySmall)
+                    work.handoffs.lastOrNull()?.let { handoff ->
+                        Text("Попередній запуск · ${handoff.modelId} · ${handoff.status}\n${handoff.summary.take(240)}", style = MaterialTheme.typography.bodySmall)
+                    }
                     Text("${work.status} · ${work.modelId}" + if (work.unknownEffect) " · UNKNOWN: спочатку перевір наслідки" else "", style = MaterialTheme.typography.bodySmall)
                     Row {
                         TextButton(onClick = { onContinue(p.id, work) }) { Text("Продовжити") }

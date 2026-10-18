@@ -61,6 +61,18 @@ KOTLIN_MUTANTS = (
      'canonical == it.tool || canonical in', 'false || canonical in',
      'com.lumena.android.settings.ProjectWorkspacePolicyTest',
      'unknownExecutionCannotBeReplayedByChangingArgumentsForTheSameScript'),
+    ('lost-handoff', CORE / 'ProjectWorkspace.kt',
+     'previous.activeEpoch != task.id', 'previous.activeEpoch == task.id',
+     'com.lumena.android.settings.ProjectWorkspacePolicyTest',
+     'continuationPreservesTheSelectedModelsReportAndReceiptsBeforeNewCheckpoints'),
+    ('dropped-working-memory', CORE / 'ContextBuilder.kt',
+     'task.projectRoot != null && protectedAdvice.isNotEmpty()', 'false && protectedAdvice.isNotEmpty()',
+     'com.lumena.android.agent.core.ProjectContextBudgetTest',
+     'selectedProjectAdviceSurvivesActualBackendCompaction'),
+    ('project-capsule-untainted', Path('app/src/main/java/com/lumena/android/ollama/WorkflowRunner.kt'),
+     'capsule != null || relevantMemory.isNotEmpty()', 'false || relevantMemory.isNotEmpty()',
+     'com.lumena.android.ollama.WorkflowRunnerProjectWorkspaceTest',
+     'projectCapsuleKeepsTaintEvenWithoutRetrievedExamples'),
 )
 
 
@@ -138,7 +150,7 @@ def main():
     for name, path, old, new, _, _ in KOTLIN_MUTANTS:
         mutate((ROOT/path).read_bytes(), old, new, name)
     if args.dry_run:
-        print('READY: 4 Python + 7 Kotlin semantic mutants; baseline and unrelated control')
+        print('READY: 4 Python + 10 Kotlin semantic mutants; baseline and unrelated control')
         return
     records = python_probe()
     if args.kotlin:

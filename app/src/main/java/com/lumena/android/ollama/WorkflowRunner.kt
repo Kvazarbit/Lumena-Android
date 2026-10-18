@@ -436,7 +436,7 @@ class WorkflowRunner(
             val capsule = projectContextProvider(state.task)
             if (capsule != null) state = state.copy(task = state.task.copy(projectContext = capsule))
             val relevantMemory = withContext(Dispatchers.IO) { relevantMemoryProvider(state.task) }
-            if (relevantMemory.isNotEmpty() || webStrategyAdvice.isNotEmpty() || evidenceContext.isNotEmpty()) {
+            if (capsule != null || relevantMemory.isNotEmpty() || webStrategyAdvice.isNotEmpty() || evidenceContext.isNotEmpty()) {
                 val kernel = state.task.kernel
                 state = state.copy(task = state.task.copy(kernel = kernel.copy(taint = TrustGate.withMemory(kernel.taint))))
             }
@@ -453,7 +453,7 @@ class WorkflowRunner(
             val modelMessages = withDynamicContext(
                 current,
                 state,
-                webStrategyAdvice.take(4) + relevantMemory,
+                if (state.task.projectRoot != null) relevantMemory + webStrategyAdvice.take(1) else webStrategyAdvice.take(4) + relevantMemory,
                 constitutionalGuidance,
                 evidenceContext.take(6)
             )

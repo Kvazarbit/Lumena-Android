@@ -1014,9 +1014,11 @@ fun WorkflowChatScreen(
                     )
                 }
                 val projectAdvice = if (task.projectRoot != null) {
-                    ProjectWorkspaceStore.project(context, task.projectId)?.let { ProjectWorkspacePolicy.advice(it, task.goal) }.orEmpty()
+                    ProjectWorkspaceStore.project(context, task.projectId)?.let {
+                        ProjectWorkspacePolicy.advice(it, task.goal, task.id, task.projectObligationId)
+                    }.orEmpty()
                 } else emptyList()
-                (
+                if (task.projectRoot != null) ProjectWorkspacePolicy.combineAdvice(projectAdvice, fractalExperience, advice, coordinatorExamples) else (
                     projectAdvice + advice.take(2) +
                         coordinatorExamples.take(2) +
                         fractalExperience.take(2) +

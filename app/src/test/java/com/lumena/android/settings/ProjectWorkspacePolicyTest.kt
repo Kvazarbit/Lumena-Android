@@ -208,4 +208,31 @@ class ProjectWorkspacePolicyTest {
         val closed = interrupted.copy(tasks = interrupted.tasks.map { it.copy(closedByOwner = true) })
         assertTrue(EffectiveTaskPolicyCompiler.validateTool(ProjectWorkspacePolicy.constrain(fresh, closed), varied).allowed)
     }
+
+    @Test fun continuationPreservesTheSelectedModelsReportAndReceiptsBeforeNewCheckpoints() {
+        var p = project()
+        val prior = task("a", p).copy(status = TaskStatus.PARTIAL, lastResult = "MAIN_IMPLEMENTED_TESTS_PENDING",
+            kernel = ContextKernel.record(ContextKernelState(), AgentDecision.ToolCall("file.write", mapOf("path" to "demo/main.py")), true, "written"))
+        p = ProjectWorkspacePolicy.record(p, prior, "model-a", 1001)
+        p = ProjectWorkspacePolicy.record(p, task("unrelated", p).copy(status = TaskStatus.PARTIAL, lastResult = "UNRELATED_B"), "model-b", 1002)
+        val next = task("c", p).copy(projectObligationId = "a")
+        p = ProjectWorkspacePolicy.record(p, next, "model-c", 1003)
+        p = ProjectWorkspacePolicy.record(p, next.copy(lastResult = "new repository inspection", kernel =
+            ContextKernel.record(ContextKernelState(), AgentDecision.ToolCall("project.inspect", mapOf("cwd" to "demo")), true, "repo")), "model-c", 1004)
+        val work = p.tasks.first { it.id == "a" }
+        assertEquals(1, work.handoffs.size)
+        assertEquals("model-a", work.handoffs.single().modelId)
+        val advice = ProjectWorkspacePolicy.advice(p, next.goal, "c", "a").joinToString("\n")
+        assertTrue(advice.contains("MAIN_IMPLEMENTED_TESTS_PENDING"))
+        assertTrue(advice.contains("model-a"))
+        assertTrue(advice.contains("demo/main.py"))
+        assertFalse(advice.contains("UNRELATED_B"))
+    }
+
+    @Test fun projectWorkingMemoryKeepsSocialExperienceAlongsideOwnerAndTaskContext() {
+        val selected = ProjectWorkspacePolicy.combineAdvice(listOf("handoff", "receipts", "owner choice"),
+            listOf("cross-model experience", "social extra"), listOf("landscape", "landscape extra"), listOf("coordinator", "coordinator extra"))
+        assertEquals(6, selected.size)
+        assertTrue(selected.containsAll(listOf("handoff", "receipts", "owner choice", "cross-model experience")))
+    }
 }
