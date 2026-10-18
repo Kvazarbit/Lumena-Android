@@ -384,9 +384,14 @@ class AgentController(
     }
 
     private fun interpretTool(
-        decision: AgentDecision.ToolCall,
+        proposed: AgentDecision.ToolCall,
         state: AgentControlState
     ): ControllerInstruction {
+        val decision = try {
+            ProjectToolScope.bind(proposed, state.task.projectRoot)
+        } catch (failure: IllegalArgumentException) {
+            return protocolRetry(state, failure.message ?: "PROJECT_SCOPE: call refused")
+        }
         if (state.task.step >= minOf(state.task.maxSteps, budget.maxTotalSteps)) {
             // The last model turn is deliberately available at the tool limit. A
             // small local model may nevertheless propose one more cleanup/check
@@ -1678,14 +1683,14 @@ class AgentController(
                 pendingVerification =
                     pendingPythonPaths
             )
-        val nextGoalContract =
+        val nextGoalContract = ProjectVerificationPolicy.afterTool(
             GoalContractPolicy.afterTool(
                 contract = state.task.goalContract,
                 call = call,
                 ok = ok,
                 kernel = nextKernel,
                 stdout = stdout
-            )
+            ), state.task, call, ok, nextKernel, stdout)
 
         val nextPolicy =
             EffectiveTaskPolicyCompiler
@@ -1838,7 +1843,7 @@ class AgentController(
     ): String {
         return ContextBuilder(
             maxMemoryItems = 6,
-            maxChars = 4_500
+            maxChars = if (state.task.projectRoot != null) 14_000 else 4_500
         ).build(
             task = state.task,
             project = null,

@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.29
+Lumena Termux Bridge v0.30
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -9,6 +9,7 @@ request-scoped cancellation for long-running subprocess tools.
 """
 from __future__ import annotations
 
+import ast
 import codecs
 import ipaddress
 import hashlib
@@ -28,6 +29,7 @@ import shutil
 import signal
 import subprocess
 import threading
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -2844,6 +2846,7 @@ def process_status(args: dict[str, Any]) -> dict[str, Any]:
 
 
 READ_ONLY_BATCH_TOOLS = {
+    "project.inspect", "project.search",
     "health",
     "system.time",
     "system.info",
@@ -3128,7 +3131,7 @@ def run_process(
     finally:
         _unregister_process(request_id, process)
 
-    cancelled = process.returncode in {-signal.SIGTERM, -signal.SIGKILL}
+    cancelled = process.returncode in {-signal.SIGTERM, -getattr(signal, 'SIGKILL', 9)}
     return {
         "ok": process.returncode == 0,
         "exitCode": process.returncode,
@@ -3689,7 +3692,176 @@ def context_snapshot(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+PROJECT_SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", ".gradle", "build", "dist", ".lumena-backups"}
+PROJECT_TEXT_SUFFIXES = {".py", ".kt", ".kts", ".java", ".js", ".ts", ".tsx", ".jsx", ".html", ".css", ".md", ".txt", ".json", ".toml", ".yaml", ".yml", ".sh"}
+PROJECT_SECRET_NAMES = {".env", ".env.local", ".env.production", "credentials.json", "id_rsa", "id_ed25519"}
+PROJECT_SECRET_SUFFIXES = {".pem", ".key", ".keystore", ".jks", ".p12", ".pfx", ".db", ".sqlite", ".log"}
+PROJECT_MAX_FILES = 1500
+PROJECT_MAX_BYTES = 8 * 1024 * 1024
+PROJECT_MAX_FILE_BYTES = 512 * 1024
+
+
+def _project_source_allowed(path: Path) -> bool:
+    name = path.name.casefold()
+    return (name not in PROJECT_SECRET_NAMES and not name.startswith('.env.')
+            and path.suffix.casefold() not in PROJECT_SECRET_SUFFIXES
+            and path.suffix.casefold() in PROJECT_TEXT_SUFFIXES)
+
+
+def _project_root(args: dict[str, Any]) -> tuple[Path, str]:
+    raw = str(args.get("cwd", "")).strip()
+    if not raw:
+        raise ValueError("project tool requires cwd")
+    if Path(raw).is_absolute() or '\\' in raw or '..' in raw.split('/'):
+        raise ValueError("Project cwd must be a workspace-relative path or explicit alias")
+    # Reject every link/reparse component before resolving the allowed read root.
+    if raw.startswith('@'):
+        alias = _readonly_alias(raw)
+        if alias is None:
+            raise ValueError("Unknown project alias")
+        base, rest = alias
+        candidate = base / rest
+    else:
+        base = WORKSPACE
+        supplied = Path(raw)
+        candidate = supplied if supplied.is_absolute() else base / supplied
+    root = safe_read_path(raw)
+    if root.exists() and not root.is_dir():
+        raise ValueError("Project cwd is not a directory")
+    probe = candidate
+    while probe != base and probe != probe.parent:
+        if probe.exists() or probe.is_symlink():
+            info = probe.lstat()
+            if probe.is_symlink() or getattr(info, 'st_file_attributes', 0) & 0x400:
+                raise ValueError("Linked project path refused")
+        probe = probe.parent
+    return root, raw
+
+
+def _project_inventory(root: Path) -> tuple[list[Path], bool]:
+    files: list[Path] = []
+    visited = 0
+    for current, directories, names in os.walk(root, followlinks=False):
+        directories[:] = sorted(d for d in directories if d not in PROJECT_SKIP_DIRS
+            and not d.startswith('.') and not (Path(current) / d).is_symlink()
+            and not (getattr((Path(current) / d).lstat(), 'st_file_attributes', 0) & 0x400))
+        for name in sorted(names):
+            visited += 1
+            if visited > 6000:
+                return files, True
+            path = Path(current) / name
+            try:
+                info = path.lstat()
+                if path.is_symlink() or getattr(info, 'st_file_attributes', 0) & 0x400 or not path.is_file():
+                    continue
+                if not _inside(path.resolve(), root) or not _project_source_allowed(path):
+                    continue
+            except OSError:
+                continue
+            if len(files) >= PROJECT_MAX_FILES:
+                return files, True
+            files.append(path)
+    return files, False
+
+
+def _project_git(root: Path) -> dict[str, Any]:
+    if not root.is_dir():
+        return {'head': None, 'branch': None, 'dirty': None}
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS='0', GIT_PAGER='cat')
+    def git(*arguments):
+        proc = subprocess.run(['git', '-c', 'core.fsmonitor=false', '--no-optional-locks', *arguments],
+            cwd=root, env=env, capture_output=True, timeout=5)
+        if proc.returncode:
+            return None
+        return proc.stdout.decode('utf-8', errors='replace').strip()
+    head = git('rev-parse', '--verify', 'HEAD')
+    if head is not None and not re.fullmatch(r'[a-f0-9]{40,64}', head):
+        head = None
+    branch = git('symbolic-ref', '--quiet', '--short', 'HEAD')
+    status = git('status', '--porcelain', '--untracked-files=normal')
+    return {'head': head, 'branch': branch[:200] if branch else None,
+            'dirty': bool(status) if status is not None else None}
+
+
+def project_context(args: dict[str, Any], *, search: bool = False) -> dict[str, Any]:
+    """Read-only bounded inventory/search. Hashes are provenance, never goal proof.
+
+    Rebuilt on every request: no mtime cache, imports, model call or source writes.
+    Coverage is explicit; this is not a complete call graph or an atomic snapshot.
+    """
+    root, label = _project_root(args)
+    query = str(args.get('query', '')).strip()
+    if search and (not query or len(query) > 320):
+        raise ValueError('project.search query must contain 1..320 characters')
+    tokens = set(re.findall(r'[\w]+', query.casefold()))
+    files, truncated = _project_inventory(root)
+    digest = hashlib.sha256()
+    used = 0
+    scanned = 0
+    issues: list[dict[str, str]] = []
+    matches: list[dict[str, Any]] = []
+    started = time.monotonic()
+    for path in files:
+        relative = path.relative_to(root).as_posix()
+        digest.update((relative + '\0').encode('utf-8'))
+        if time.monotonic() - started > 3 or used >= PROJECT_MAX_BYTES:
+            truncated = True
+            issues.append({'path': relative, 'reason': 'SCAN_BUDGET'})
+            break
+        try:
+            with path.open('rb') as stream:
+                raw = stream.read(min(PROJECT_MAX_FILE_BYTES, PROJECT_MAX_BYTES - used) + 1)
+            if len(raw) > min(PROJECT_MAX_FILE_BYTES, PROJECT_MAX_BYTES - used):
+                truncated = True
+                issues.append({'path': relative, 'reason': 'FILE_SIZE_LIMIT'})
+                continue
+            used += len(raw)
+            source_hash = hashlib.sha256(raw).hexdigest()
+            digest.update(source_hash.encode('ascii'))
+            scanned += 1
+            text = raw.decode('utf-8')
+        except (OSError, UnicodeError):
+            truncated = True
+            issues.append({'path': relative, 'reason': 'UNREADABLE_TEXT'})
+            continue
+        if not search:
+            continue
+        lines = text.splitlines()
+        symbols: dict[int, str] = {}
+        if path.suffix.casefold() == '.py':
+            try:
+                tree = ast.parse(text, filename=relative)
+                symbols = {node.lineno: node.name for node in ast.walk(tree)
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+            except (SyntaxError, RecursionError):
+                issues.append({'path': relative, 'reason': 'SYNTAX_UNPARSED'})
+        for number, line in enumerate(lines, 1):
+            haystack = (relative + ' ' + symbols.get(number, '') + ' ' + line).casefold()
+            overlap = sum(token in haystack for token in tokens)
+            if overlap == 0:
+                continue
+            score = overlap * 5 + (5 if number in symbols else 0)
+            matches.append({'path': display_read_path(path).replace('\\', '/'), 'line': number,
+                'symbol': symbols.get(number), 'text': line.strip()[:300],
+                'source_sha256': source_hash, 'score': score})
+            if len(matches) > 100:
+                matches = sorted(matches, key=lambda item: (-item['score'], item['path'], item['line']))[:30]
+    payload = {'schema': 'lumena.project.v1', 'cwd': label, 'exists': root.is_dir(),
+        'git': _project_git(root), 'source_digest': digest.hexdigest(),
+        'files_count': len(files), 'scanned_files': scanned, 'scanned_bytes': used,
+        'truncated': truncated, 'coverage': 'bounded_text_inventory',
+        'boundary': 'Source data only; no execution, semantic certification or complete-repository claim.',
+        'files': [path.relative_to(root).as_posix() for path in files[:80]], 'issues': issues[:12]}
+    if search:
+        payload['results'] = sorted(matches, key=lambda item: (-item['score'], item['path'], item['line']))[:10]
+        payload['query'] = query
+        payload['absence_is_proof'] = False
+    return {'ok': True, 'exitCode': 0, 'stdout': json.dumps(payload, ensure_ascii=False), 'stderr': '', 'error': None}
+
+
 def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None) -> dict[str, Any]:
+    if tool in {'project.inspect', 'project.search'}:
+        return project_context(args, search=tool == 'project.search')
     if tool == "health":
         search_diag = _read_search_diagnostics()
         return {
@@ -3700,8 +3872,8 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + alias for alias, root in READONLY_ALIASES.items() if root.exists()) or '(none)'}\n"
                 f"read_roots_config={READ_ROOTS_FILE}\n"
-                f"version=0.29\n"
-                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1,python_clean_env_v1,python_run_sha256_v1\n"
+                f"version=0.30\n"
+                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1,python_clean_env_v1,python_run_sha256_v1,project_workspace_v1\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
                 f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
@@ -3933,16 +4105,28 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
             env=env,
         )
 
-    if tool in {"git.add", "git.commit"}:
+    if tool in {"git.init", "git.add", "git.commit"}:
         cwd = safe_path(str(args.get("cwd", "")), must_exist=True)
         if not cwd.is_dir():
             raise ValueError("cwd is not a directory")
 
-        if tool == "git.add":
+        if tool == "git.init":
+            argv = ["git", "init"]
+        elif tool == "git.add":
             raw_paths = str(args.get("paths", ".")).strip() or "."
             parts = shlex.split(raw_paths)
             argv = ["git", "add", "--", *parts]
         else:
+            if str(args.get('project_scope', '')).lower() == 'true':
+                env = dict(os.environ, GIT_OPTIONAL_LOCKS='0')
+                top = subprocess.run(['git', 'rev-parse', '--show-toplevel'], cwd=cwd, env=env,
+                    capture_output=True, timeout=5, check=True).stdout.decode().strip()
+                repository = Path(top).resolve()
+                prefix = cwd.relative_to(repository).as_posix()
+                staged = subprocess.run(['git', 'diff', '--cached', '--name-only', '-z'], cwd=cwd,
+                    env=env, capture_output=True, timeout=5, check=True).stdout.decode().split('\0')
+                if prefix != '.' and any(path and not path.startswith(prefix + '/') for path in staged):
+                    raise ValueError('PROJECT_SCOPE: staged changes outside selected directory')
             message = str(args.get("message", "")).strip()
             if not message or len(message) > 200:
                 raise ValueError("git.commit requires a message up to 200 chars")
@@ -3991,6 +4175,28 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
             raise ValueError("python.tests cwd is not a directory")
         argv_text = str(args.get("argv", "-q")).strip()
         extra = shlex.split(argv_text) if argv_text else ["-q"]
+        if str(args.get('project_receipt', '')).lower() == 'true':
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix='project-tests-', dir=STATE_DIR) as report_dir:
+                report = Path(report_dir) / 'junit.xml'
+                result = run_process(["python", "-m", "pytest", *extra, "--junitxml=" + str(report)],
+                    cwd, _execution_timeout(args.get("timeout"), 300), request_id=request_id, env=python_child_env())
+                count = 0
+                verified = False
+                if result.get('ok') and report.is_file() and report.stat().st_size <= 2 * 1024 * 1024:
+                    raw = report.read_bytes()
+                    if b'<!DOCTYPE' not in raw.upper() and b'<!ENTITY' not in raw.upper():
+                        try:
+                            cases = list(ET.fromstring(raw).iter('testcase'))
+                            count = sum(not any(case.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for case in cases)
+                            verified = count > 0 and all(case.find('failure') is None and case.find('error') is None for case in cases)
+                        except ET.ParseError:
+                            pass
+                result['stdout'] = json.dumps({'schema': 'lumena.project.tests.v1', 'cwd': str(args['cwd']),
+                    'tests_count': count, 'verified': verified, 'output': result.get('stdout', '')[:10000]}, ensure_ascii=False)
+                if result.get('ok') and not verified:
+                    result.update(ok=False, error='PROJECT_TESTS_UNVERIFIED: no successful JUnit test cases')
+                return result
         return run_process(
             ["python", "-m", "pytest", *extra],
             cwd,
@@ -4028,7 +4234,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.29"
+    server_version = "LumenaBridge/0.30"
     protocol_version = "HTTP/1.1"
 
     def setup(self) -> None:

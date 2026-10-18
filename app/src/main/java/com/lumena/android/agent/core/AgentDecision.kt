@@ -56,7 +56,12 @@ data class TaskState(
     val executionOrigin: HistoricalRecordOrigin =
         HistoricalRecordOrigin.LOCAL_CURRENT,
     /** Read-only snapshot of an earlier LOCAL task; never tool authority. */
-    val previousExecutionReceipt: PreviousExecutionReceipt? = null
+    val previousExecutionReceipt: PreviousExecutionReceipt? = null,
+    /** Explicitly selected owner workspace; never inferred from model text. */
+    val projectRoot: String? = null,
+    val projectObligationId: String? = null,
+    val projectVerification: ProjectVerification? = null,
+    val projectContext: ProjectContextCapsule? = null
 ) {
     /**
      * maxSteps limits tool executions, not the final model conclusion.

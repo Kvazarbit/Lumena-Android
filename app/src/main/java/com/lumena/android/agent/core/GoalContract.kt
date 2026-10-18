@@ -17,7 +17,8 @@ enum class CriterionKind {
     KOTLIN_COMPILE_VERIFIED,
     FILE_CONTENT_EVIDENCE,
     CODE_ACTION_EVIDENCE,
-    PYTHON_TARGET_VERIFIED
+    PYTHON_TARGET_VERIFIED,
+    PROJECT_VERIFICATION
 }
 
 enum class VerificationStrength {
@@ -39,7 +40,8 @@ data class AcceptanceCriterion(
     val subject: String = "",
     val required: Boolean = true,
     val status: CriterionStatus = CriterionStatus.PENDING,
-    val evidence: List<CriterionEvidence> = emptyList()
+    val evidence: List<CriterionEvidence> = emptyList(),
+    val target: String? = null
 )
 
 enum class GoalContractCoverage {
@@ -178,6 +180,23 @@ object GoalContractPolicy {
             }
         }
 
+        val requestedPaths = ProjectGoalTargets.explicit(goal)
+        if (intent == TaskIntent.FILE_INSPECTION && requiresFileContent(goal)) {
+            requestedPaths.forEach { path -> criteria += AcceptanceCriterion(
+                "requested-file:" + stableSubject(path), CriterionKind.FILE_CONTENT_EVIDENCE,
+                subject = "file.read", target = path)
+            }
+        }
+        if (intent == TaskIntent.CODE_WORK && requestedPaths.isNotEmpty()) {
+            val requirement = codeActionRequirement(goal)
+            if (requirement == "mutating") ProjectGoalTargets.mutationTarget(goal)?.let { path -> criteria += AcceptanceCriterion(
+                "requested-change:" + stableSubject(path), CriterionKind.CODE_ACTION_EVIDENCE,
+                subject = "mutating", target = path) }
+            if (TaskIntentRouter.isExplicitFileExecution(goal) && requestedPaths.first().endsWith(".py")) {
+                criteria += AcceptanceCriterion("requested-python-run", CriterionKind.REQUIRED_TOOL_SUCCESS,
+                    subject = "python.run", target = requestedPaths.first())
+            }
+        }
         return GoalContract(
             coverage =
                 if (criteria.isEmpty()) GoalContractCoverage.NONE
@@ -231,6 +250,7 @@ object GoalContractPolicy {
                     if (
                         ok &&
                         criterion.subject == canonical &&
+                        ProjectGoalTargets.matches(criterion.target, target) &&
                         toolEvidence != null
                     ) {
                         pass(criterion, toolEvidence)
@@ -328,6 +348,7 @@ object GoalContractPolicy {
                     if (
                         ok &&
                         canonical == "file.read" &&
+                        ProjectGoalTargets.matches(criterion.target, target) &&
                         toolEvidence != null
                     ) {
                         pass(
@@ -359,6 +380,7 @@ object GoalContractPolicy {
                     if (
                         ok &&
                         expectedRiskSatisfied &&
+                        ProjectGoalTargets.matches(criterion.target, target) &&
                         toolEvidence != null
                     ) {
                         pass(criterion, toolEvidence)
@@ -366,6 +388,8 @@ object GoalContractPolicy {
                         criterion
                     }
                 }
+
+                CriterionKind.PROJECT_VERIFICATION -> criterion // owned by ProjectVerificationPolicy
 
                 CriterionKind.PYTHON_TARGET_VERIFIED ->
                     verifyPythonCriterion(

@@ -57,7 +57,7 @@ object TrustGate {
     const val MAX_URL_CHARS = 2_048
     const val MAX_QUERY_CHARS = 200
 
-    private val taintPrefixes = listOf("web.", "http.", "mcp.", "marketplace.", "python.")
+    private val taintPrefixes = listOf("web.", "http.", "mcp.", "marketplace.", "python.", "file.", "git.", "project.")
     private val urlPattern = Regex("""https?://[^\s"'<>`\\{}|^\[\]()]+""", RegexOption.IGNORE_CASE)
     private val urlParts = Regex("""^(https?)://([^/?#]+)([^?#]*)(?:\?([^#]*))?(?:#.*)?$""", RegexOption.IGNORE_CASE)
     private val toolResultHeader = Regex("""^TOOL_RESULT for ([A-Za-z0-9_.-]+):""")
@@ -80,7 +80,9 @@ object TrustGate {
 
     /** Python output is untrusted but its URLs are not search/read results. */
     private fun teachesUrls(tool: String): Boolean =
-        isTaintSource(tool) && !ToolRegistry.canonicalize(tool).startsWith("python.")
+        ToolRegistry.canonicalize(tool).let { name ->
+            name == "image.search" || listOf("web.", "http.", "mcp.", "marketplace.").any(name::startsWith)
+        }
 
     /**
      * Records one executed tool. Failed calls taint too: the bridge puts up
@@ -146,6 +148,11 @@ object TrustGate {
             )
         )
     }
+
+    /** Retrieved source/model text keeps its trust boundary across chats and projects. */
+    fun withMemory(taint: TaskTaint): TaskTaint = taint.copy(
+        sources = boundedSources(taint.sources + "локальна історична пам'ять: дані джерел і попередніх моделей")
+    )
 
     fun review(
         taint: TaskTaint,

@@ -58,6 +58,8 @@ object ToolRegistry {
         ToolSpec("web.read", ToolRisk.READ_ONLY, setOf("url"), "Read public HTTPS page text without scripts/navigation, following up to 3 validated redirects. Optional max_chars=500..12000."),
         ToolSpec("image.search", ToolRisk.READ_ONLY, setOf("query"), "Search images through multiple public providers with query fallback and return safe display-ready previews plus source pages."),
         ToolSpec("context.snapshot", ToolRisk.READ_ONLY, description = "Return a cached compact snapshot of system, workspace and known repository state."),
+        ToolSpec("project.inspect", ToolRisk.READ_ONLY, setOf("cwd"), "Inspect one project: Git revision, bounded text inventory and explicit coverage. Requires bridge 0.30."),
+        ToolSpec("project.search", ToolRisk.READ_ONLY, setOf("cwd", "query"), "Search project code, Python symbols, documents and tests. Returns source hashes and lines; bounded coverage is not absence proof. Requires bridge 0.30."),
         ToolSpec("inspect.batch", ToolRisk.READ_ONLY, setOf("requests"), "Run up to 8 independent read-only inspections in one call. requests must be a JSON array encoded as a string, with items shaped as {tool,args}."),
         ToolSpec("process.status", ToolRisk.READ_ONLY, description = "Inspect bridge-started process health. Optional arg: requestId."),
         ToolSpec("file.list", ToolRisk.READ_ONLY, description = "List a directory in an allowed read root. Optional path; use aliases exposed by workspace.list/context.snapshot, such as @shared or @btc."),
@@ -74,6 +76,7 @@ object ToolRegistry {
         ToolSpec("file.write", ToolRisk.MUTATING, setOf("path", "content"), "Write a text file inside the workspace.", WorkspaceMutationEffect.DECLARED_TARGET),
         ToolSpec("file.patch", ToolRisk.MUTATING, setOf("path", "old", "new"), "Replace exactly one known text fragment.", WorkspaceMutationEffect.DECLARED_TARGET),
         ToolSpec("git.add", ToolRisk.MUTATING, setOf("cwd", "paths"), "Stage workspace files."),
+        ToolSpec("git.init", ToolRisk.MUTATING, setOf("cwd"), "Initialize Git inside the selected existing workspace directory."),
         ToolSpec("git.commit", ToolRisk.MUTATING, setOf("cwd", "message"), "Commit staged changes."),
 
         ToolSpec("python.run", ToolRisk.EXECUTABLE, setOf("script"), "Run an existing .py file inside the workspace. The script arg is a file path only, never Python source code.", WorkspaceMutationEffect.UNDECLARED),
@@ -119,6 +122,8 @@ object ToolRegistry {
         "web.read" to setOf(ToolCapability.READ_STATE, ToolCapability.NETWORK),
         "image.search" to setOf(ToolCapability.READ_STATE, ToolCapability.NETWORK),
         "context.snapshot" to setOf(ToolCapability.READ_STATE),
+        "project.inspect" to setOf(ToolCapability.READ_STATE),
+        "project.search" to setOf(ToolCapability.READ_STATE),
         // Children are validated one by one by the task policy.
         "inspect.batch" to setOf(ToolCapability.READ_STATE),
         "process.status" to setOf(ToolCapability.READ_STATE),
@@ -135,6 +140,7 @@ object ToolRegistry {
         "file.write" to setOf(ToolCapability.WRITE_WORKSPACE),
         "file.patch" to setOf(ToolCapability.WRITE_WORKSPACE),
         "git.add" to setOf(ToolCapability.WRITE_WORKSPACE),
+        "git.init" to setOf(ToolCapability.WRITE_WORKSPACE),
         "git.commit" to setOf(ToolCapability.WRITE_WORKSPACE),
         // Arbitrary user code: may rewrite any workspace file and reach the network.
         "python.run" to setOf(
@@ -145,7 +151,8 @@ object ToolRegistry {
         // Test suites execute project code and fixtures may write files.
         "python.tests" to setOf(
             ToolCapability.EXECUTE_CODE,
-            ToolCapability.WRITE_WORKSPACE
+            ToolCapability.WRITE_WORKSPACE,
+            ToolCapability.NETWORK
         ),
         // Bridge compiles source bytes without running them or writing .pyc.
         "python.syntax_check" to setOf(

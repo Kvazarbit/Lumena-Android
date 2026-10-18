@@ -37,6 +37,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 data class PendingWorkflowTool(
@@ -113,7 +115,9 @@ class WorkflowRunner(
         CauseProbeExecutionIntent?,
         Long
     ) -> Unit = { _, _, _, _, _ -> },
-    private val checkpoint: suspend (AgentControlState) -> Unit = {}
+    private val checkpoint: suspend (AgentControlState) -> Unit = {},
+    private val projectContextProvider: suspend (TaskState) -> com.lumena.android.agent.core.ProjectContextCapsule? = { it.projectContext },
+    private val onUnknownOutcome: (TaskState, ToolRequest, ToolResult) -> Unit = { _, _, _ -> }
 ) {
     suspend fun run(
         history: List<OllamaMessage>,
@@ -164,8 +168,10 @@ class WorkflowRunner(
                 "INTENT · ${intentProfile.intent} · confidence=${intentProfile.confidence}"
             )
 
-            val preflightCandidate =
-                intentProfile.preflight
+            val preflightCandidate = state.task.projectRoot?.takeIf { intentProfile.intent != com.lumena.android.agent.core.TaskIntent.GENERAL }?.let { root ->
+                com.lumena.android.agent.core.IntentPreflight("project.inspect", mapOf("cwd" to root),
+                    "Inspect the selected project before using historical context. Requires bridge 0.30.", mandatory = true)
+            } ?: intentProfile.preflight
             val preflightDecision =
                 preflightCandidate?.let {
                     EffectiveTaskPolicyCompiler
@@ -427,7 +433,13 @@ class WorkflowRunner(
                 )
             }
 
-            val relevantMemory = relevantMemoryProvider(state.task)
+            val capsule = projectContextProvider(state.task)
+            if (capsule != null) state = state.copy(task = state.task.copy(projectContext = capsule))
+            val relevantMemory = withContext(Dispatchers.IO) { relevantMemoryProvider(state.task) }
+            if (relevantMemory.isNotEmpty() || webStrategyAdvice.isNotEmpty() || evidenceContext.isNotEmpty()) {
+                val kernel = state.task.kernel
+                state = state.copy(task = state.task.copy(kernel = kernel.copy(taint = TrustGate.withMemory(kernel.taint))))
+            }
             if (relevantMemory.isNotEmpty()) {
                 onProgress(
                     relevantMemory
@@ -1225,6 +1237,11 @@ class WorkflowRunner(
         prediction: OutcomePrediction? = null
     ) {
         if (result.outcomeUnknown) {
+            try {
+                onUnknownOutcome(task, request, result)
+            } catch (failure: Exception) {
+                onProgress("UNKNOWN INCIDENT NOT SAVED · " + failure::class.java.simpleName)
+            }
             onProgress("UNKNOWN OUTCOME · результат не врахований як успіх або невдача")
             return
         }

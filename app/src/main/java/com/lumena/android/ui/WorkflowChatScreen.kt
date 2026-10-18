@@ -136,6 +136,11 @@ import com.lumena.android.settings.EvidenceGraphStore
 import com.lumena.android.settings.ExperienceLandscapeStore
 import com.lumena.android.settings.CoordinatorExperienceStore
 import com.lumena.android.settings.FractalExperienceCanvasStore
+import com.lumena.android.settings.ProjectWorkspaceStore
+import com.lumena.android.agent.core.ProjectWorkspacePolicy
+import com.lumena.android.agent.core.ProjectWorkspaceState
+import com.lumena.android.agent.core.WorkspaceProject
+import com.lumena.android.agent.core.ProjectDecisionRecord
 import com.lumena.android.settings.FractalLanguageIntentPolicy
 import com.lumena.android.settings.FractalUserValueCommandParser
 import com.lumena.android.settings.ReflexExperienceRanker
@@ -200,6 +205,12 @@ fun WorkflowChatScreen(
     val tinyJevModel = remember(context) { TinyJevAssetLoader.load(context) }
     val initial = remember { LumenaPreferences.load(context) }
     val restored = remember { LocalSessionStore.load(context) }
+    val workspaceLoaded = remember { runCatching { ProjectWorkspaceStore.load(context) } }
+    var workspaceState by remember { mutableStateOf(workspaceLoaded.getOrDefault(ProjectWorkspaceState())) }
+    var workspaceProjectId by remember { mutableStateOf(restored.workspaceProjectId) }
+    var workspaceError by remember { mutableStateOf(workspaceLoaded.exceptionOrNull()?.let { "Не вдалося прочитати проєкти: " + it::class.java.simpleName }) }
+    var showProjects by remember { mutableStateOf(false) }
+    var continuationWorkId by remember { mutableStateOf<String?>(null) }
     val systemMessage = remember { OllamaMessage("system", LocalWorkflowAgent.systemPrompt) }
 
     val taskApprovals = remember { mutableStateMapOf<String, Set<String>>() }
@@ -400,7 +411,14 @@ fun WorkflowChatScreen(
                         restoredTask
                             .effectivePolicy
                             .scopeRef
-                )
+                ).let restoredPolicy@ { policy ->
+                    if (restoredTask.projectRoot == null) policy else {
+                        val project = workspaceLoaded.getOrNull()?.projects?.firstOrNull {
+                            it.id == restoredTask.projectId && it.root == restoredTask.projectRoot
+                        } ?: return@restoredPolicy null
+                        ProjectWorkspacePolicy.constrain(policy, project)
+                    }
+                } ?: return@let null
         val control =
             rawControl.copy(
                 task =
@@ -496,7 +514,8 @@ fun WorkflowChatScreen(
         workThreads = workThreads,
         historicalFacts = historicalFacts,
         historicalFactsQuarantined =
-            historicalFactsQuarantined
+            historicalFactsQuarantined,
+        workspaceProjectId = workspaceProjectId
     )
 
     fun currentBranchId(): String =
@@ -507,6 +526,44 @@ fun WorkflowChatScreen(
 
     fun persistSession() {
         LocalSessionStore.save(context, sessionSnapshot())
+    }
+
+    fun activateWorkspace(id: String?) {
+        if (busy || coordinator.active || pending != null) return
+        persistSession()
+        uiScope.launch {
+            busy = true
+            try {
+                val stored = withContext(Dispatchers.IO) {
+                    HistoryTreeStore.activateProject(context, id,
+                        workspaceState.projects.firstOrNull { it.id == id }?.name ?: "Звичайний чат")
+                }
+                coordinator.clearFinished()
+                taskApprovals.clear()
+                pythonApprovals = PythonApprovalLedger()
+                continuationWorkId = null
+                workspaceProjectId = stored.workspaceProjectId
+                currentTask = stored.task
+                pending = null
+                input = stored.inputDraft
+                history = listOf(systemMessage) + stored.history.map { OllamaMessage(it.role, it.content) }
+                codeGoal = stored.codeGoal
+                workThreads = WorkThreadMemory.restore(stored.chat.map { it.role to it.text }, stored.workThreads)
+                researchThread = stored.researchThread
+                historicalFacts = HistoricalSessionMemory.normalize(stored.historicalFacts)
+                historicalFactsQuarantined = stored.historicalFactsQuarantined
+                bubbles.clear()
+                bubbles.addAll(stored.chat.map { message -> ChatBubble(id = message.id, role = message.role, text = message.text,
+                    images = message.images.map { WorkflowImage(it.title, it.thumbnailUrl, it.sourcePage, it.source) }) })
+                if (bubbles.isEmpty()) bubbles += ChatBubble("assistant", "Проєкт відкрито. Опиши наступну задачу.")
+                contextUsage = null
+                showProjects = false
+                workspaceError = null
+                scrollRequest++
+            } catch (failure: Exception) {
+                workspaceError = "Проєкт не відкрито: " + failure.message.orEmpty().take(180)
+            } finally { busy = false }
+        }
     }
 
     fun isCurrentTask(taskId: String): Boolean = LocalSessionStore.load(context).task?.id == taskId
@@ -917,7 +974,7 @@ fun WorkflowChatScreen(
                         "Learned advice unavailable; use current task state and fixed controller rules."
                     )
                 }
-                val verifiedMemory = try {
+                val verifiedMemory = if (task.projectRoot != null) emptyList() else try {
                     governed(task, AdvisoryLayer.MEMORY,
                         ExperienceMemoryStore.relevant(context, task.goal))
                 } catch (_: Exception) {
@@ -956,8 +1013,11 @@ fun WorkflowChatScreen(
                         "Fractal experience canvas unavailable; continue from current verified evidence only."
                     )
                 }
+                val projectAdvice = if (task.projectRoot != null) {
+                    ProjectWorkspaceStore.project(context, task.projectId)?.let { ProjectWorkspacePolicy.advice(it, task.goal) }.orEmpty()
+                } else emptyList()
                 (
-                    advice.take(2) +
+                    projectAdvice + advice.take(2) +
                         coordinatorExamples.take(2) +
                         fractalExperience.take(2) +
                         verifiedMemory.take(4)
@@ -1236,7 +1296,22 @@ fun WorkflowChatScreen(
                 }
             },
             checkpoint = { control ->
-                withContext(Dispatchers.IO) { ContextCheckpointStore.save(context, control) }
+                withContext(Dispatchers.IO) {
+                    ProjectWorkspaceStore.record(context, control.task, constitutionContributorModelId)
+                    ContextCheckpointStore.save(context, control)
+                }
+            },
+            projectContextProvider = { task ->
+                withContext(Dispatchers.IO) {
+                    if (task.projectRoot == null) null else {
+                        val project = requireNotNull(ProjectWorkspaceStore.project(context, task.projectId)) { "Project is missing" }
+                        ProjectWorkspacePolicy.capsule(project, task.projectObligationId ?: task.id)
+                    }
+                }
+            },
+            onUnknownOutcome = { task, request, result ->
+                CoordinatorExperienceStore.record(context, task.projectId ?: task.id, task.id, request, result,
+                    experienceId = null, modelId = constitutionContributorModelId, scopeId = task.projectId ?: "global")
             },
             onActionOutcome = { task, request, result, elapsedMs, prediction ->
                 // Shadow ledger for U and E; never changes which tool runs.
@@ -1254,6 +1329,9 @@ fun WorkflowChatScreen(
                 )
             },
             onToolExperience = { task, request, result, elapsedMs ->
+                if (request.tool == "project.inspect" && result.ok) {
+                    ProjectWorkspaceStore.observeRepository(context, task, result.stdout)
+                }
                 runCatching {
                     CognitiveInfluenceStore.resolveNextTool(
                         context = context,
@@ -1698,6 +1776,15 @@ fun WorkflowChatScreen(
             return
         }
 
+        val selectedWorkspace = try {
+            if (workspaceProjectId == null) null else requireNotNull(ProjectWorkspaceStore.project(context, workspaceProjectId)) {
+                "Вибраний проєкт відсутній; відкрий список проєктів"
+            }
+        } catch (failure: Exception) {
+            workspaceError = failure.message
+            showProjects = true
+            return
+        }
         input = ""
         val previous = currentTask
         if (
@@ -1766,7 +1853,7 @@ fun WorkflowChatScreen(
             previous != null &&
                 FollowUpGoal.isReference(text) &&
                 previous.goal == resolvedGoal
-        val projectId = ProjectContextResolver.resolve(
+        val projectId = selectedWorkspace?.id ?: ProjectContextResolver.resolve(
             text = text,
             previousProjectId = previous?.projectId,
             carryForward =
@@ -1802,10 +1889,16 @@ fun WorkflowChatScreen(
                 scopeRef =
                     projectId
                         ?: currentBranchId()
-            )
+            ).let { policy -> selectedWorkspace?.let { ProjectWorkspacePolicy.constrain(policy, it) } ?: policy }
         val task = TaskState(
             id = UUID.randomUUID().toString(),
             projectId = projectId,
+            projectRoot = selectedWorkspace?.root,
+            projectVerification = selectedWorkspace?.verification,
+            projectContext = selectedWorkspace?.let { ProjectWorkspacePolicy.capsule(it) },
+            projectObligationId = continuationWorkId ?: previous?.takeIf {
+                selectedWorkspace != null && it.projectId == projectId && FollowUpGoal.isReference(text)
+            }?.let { it.projectObligationId ?: it.id },
             goal = resolvedGoal,
             currentInstruction = text,
             effectivePolicy =
@@ -1822,6 +1915,7 @@ fun WorkflowChatScreen(
                     }
                     ?.let(PreviousTaskOutcomeContext::executionReceipt)
         )
+        continuationWorkId = null
         val languageIntent = FractalLanguageIntentPolicy.canonicalIntent(
             codeContinued = codeResolution.continued,
             researchFollowUpKind = resolution.followUpKind,
@@ -2090,6 +2184,18 @@ fun WorkflowChatScreen(
             onModel = { showSettings = true }
         )
 
+        TextButton(enabled = !busy && !coordinator.active && pending == null, onClick = {
+            uiScope.launch {
+                runCatching { withContext(Dispatchers.IO) { ProjectWorkspaceStore.load(context) } }
+                    .onSuccess { workspaceState = it; workspaceError = null }
+                    .onFailure { workspaceError = "Не вдалося прочитати проєкти: " + it::class.java.simpleName }
+                showProjects = true
+            }
+        }) {
+            Text(workspaceState.projects.firstOrNull { it.id == workspaceProjectId }?.let { "Проєкт: ${it.name} · задачі й контекст" }
+                ?: "Проєкти · локальна ОС контексту")
+        }
+
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -2140,6 +2246,57 @@ fun WorkflowChatScreen(
             onSend = { send() },
             onStop = { stopCurrentTask() }
         )
+    }
+
+    if (showProjects) {
+        ProjectWorkspacePanel(workspaceState.projects, workspaceProjectId, workspaceError,
+            onDismiss = { showProjects = false }, onSelect = { activateWorkspace(it) },
+            onCreate = { editingId, name, root, goal, constraints, verification ->
+                uiScope.launch {
+                    try {
+                        val id = editingId ?: UUID.randomUUID().toString()
+                        workspaceState = withContext(Dispatchers.IO) { ProjectWorkspaceStore.update(context) { state ->
+                            val existing = state.projects.firstOrNull { it.id == id }
+                            val project = existing?.copy(name = name, goal = goal, constraints = constraints, verification = verification,
+                                updatedAt = System.currentTimeMillis()) ?: WorkspaceProject(id, name, ProjectWorkspacePolicy.root(root), goal,
+                                    constraints, verification, updatedAt = System.currentTimeMillis())
+                            ProjectWorkspacePolicy.put(state, project)
+                        } }
+                        activateWorkspace(id)
+                    } catch (failure: Exception) { workspaceError = failure.message.orEmpty().take(220) }
+                }
+            },
+            onDecision = { problem, decision, rationale, alternatives ->
+                val decisionTask = currentTask
+                uiScope.launch {
+                    try {
+                        workspaceState = withContext(Dispatchers.IO) { ProjectWorkspaceStore.update(context) { state ->
+                            val project = state.projects.first { it.id == workspaceProjectId }
+                            ProjectWorkspacePolicy.put(state, ProjectWorkspacePolicy.decision(project, ProjectDecisionRecord(
+                                UUID.randomUUID().toString(), problem, decision, rationale, alternatives,
+                                decisionTask?.id, decisionTask?.kernel?.evidence?.map { decisionTask.id + ":" + it.id }.orEmpty(), System.currentTimeMillis())))
+                        } }
+                        workspaceError = null
+                    } catch (failure: Exception) { workspaceError = failure.message.orEmpty().take(220) }
+                }
+            },
+            onContinue = { work ->
+                continuationWorkId = work.id
+                input = "Продовж роботу над задачею: ${work.goal}\nСпочатку перевір поточний стан і попередні невідомі наслідки."
+                showProjects = false
+            },
+            onCloseWork = { id, closed ->
+                uiScope.launch {
+                    try {
+                        workspaceState = withContext(Dispatchers.IO) { ProjectWorkspaceStore.update(context) { state ->
+                            val project = state.projects.first { it.id == workspaceProjectId }
+                            ProjectWorkspacePolicy.put(state, project.copy(tasks = project.tasks.map {
+                                if (it.id == id) it.copy(closedByOwner = closed) else it
+                            }, updatedAt = System.currentTimeMillis()))
+                        } }
+                    } catch (failure: Exception) { workspaceError = failure.message.orEmpty().take(220) }
+                }
+            })
     }
 
     if (editingMessageId != null) {

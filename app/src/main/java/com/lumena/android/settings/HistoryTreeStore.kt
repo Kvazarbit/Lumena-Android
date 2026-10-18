@@ -172,7 +172,7 @@ object HistoryTreeStore {
                 parentBranchId = null,
                 createdAt = now,
                 updatedAt = now,
-                session = LocalSessionSnapshot()
+                session = LocalSessionSnapshot(workspaceProjectId = current.workspaceProjectId)
             )
             val retained = retainBranches(state.branches + branch, branch.id)
             saveInternal(app, HistoryTreeState(branch.id, retained))
@@ -226,6 +226,25 @@ object HistoryTreeStore {
         )
     }
 
+    /** Switch project conversation; no workspace write or automatic tool replay. */
+    fun activateProject(context: Context, projectId: String?, name: String): LocalSessionSnapshot = synchronized(lock) {
+        val state = loadOrCreate(context)
+        val now = System.currentTimeMillis()
+        val current = archive(LocalSessionStore.load(context))
+        val branches = state.branches.map {
+            if (it.id == state.activeBranchId) it.copy(session = current, updatedAt = now) else it
+        }
+        val prior = branches.filter { it.session.workspaceProjectId == projectId }.maxByOrNull { it.updatedAt }
+        val target = prior ?: HistoryBranch(java.util.UUID.randomUUID().toString(), name, "Conversation", "Main",
+            createdAt = now, updatedAt = now, session = LocalSessionSnapshot(workspaceProjectId = projectId))
+        // A resumed conversation retains facts but gets fresh execution/approval decisions.
+        val snapshot = ProjectConversationPolicy.restore(target.session)
+        val all = branches.filterNot { it.id == target.id } + target.copy(session = snapshot, updatedAt = now)
+        saveInternal(context, HistoryTreeState(target.id, retainBranches(all, target.id)))
+        LocalSessionStore.save(context, snapshot)
+        snapshot
+    }
+
     fun renameTopic(context: Context, oldTopic: String, newTopic: String) = synchronized(lock) {
         val app = context.applicationContext
         val state = loadOrCreate(app)
@@ -270,18 +289,7 @@ object HistoryTreeStore {
     }
 
     private fun retainBranches(branches: List<HistoryBranch>, activeId: String): List<HistoryBranch> {
-        if (branches.size <= MAX_BRANCHES) return branches
-        val byId = branches.associateBy { it.id }
-        val keep = linkedSetOf<String>()
-        var cursor: String? = activeId
-        while (cursor != null && keep.size < MAX_BRANCHES) {
-            keep += cursor
-            cursor = byId[cursor]?.parentBranchId
-        }
-        branches.sortedByDescending { it.updatedAt }.forEach {
-            if (keep.size < MAX_BRANCHES) keep += it.id
-        }
-        return branches.filter { it.id in keep }
+        return ProjectConversationPolicy.retain(branches, activeId, MAX_BRANCHES)
     }
 
     private fun archive(snapshot: LocalSessionSnapshot): LocalSessionSnapshot = snapshot.copy(

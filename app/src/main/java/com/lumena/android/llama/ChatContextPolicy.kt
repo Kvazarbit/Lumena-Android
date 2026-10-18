@@ -1,5 +1,7 @@
 package com.lumena.android.llama
 
+import com.lumena.android.agent.core.RequiredProjectContext
+
 data class ChatContextFit(
     val roles: Array<String>,
     val contents: Array<String>,
@@ -94,7 +96,8 @@ object ChatContextPolicy {
             val original = mutableContents[index]
             if (original.length <= minimumChars) return false
 
-            var low = minimumChars.coerceAtMost(original.length)
+            val minimum = maxOf(minimumChars, RequiredProjectContext.minimum(original))
+            var low = minimum.coerceAtMost(original.length)
             var high = original.length
             var best: String? = null
             var bestRendered: Pair<String, Int>? = null
@@ -118,7 +121,7 @@ object ChatContextPolicy {
                 return true
             }
 
-            mutableContents[index] = clipMiddle(original, minimumChars)
+            mutableContents[index] = clipMiddle(original, minimum)
             rendered = render()
             return rendered.second in 1..maxPromptTokens
         }
@@ -166,6 +169,7 @@ object ChatContextPolicy {
     }
 
     private fun clipMiddle(text: String, limit: Int): String {
+        if (RequiredProjectContext.minimum(text) > 0) return RequiredProjectContext.clip(text, limit) { value, size -> value.take(size) }
         if (text.length <= limit) return text
         val marker = "\n...[middle context omitted]...\n"
         if (limit <= marker.length + 8) return text.take(limit)

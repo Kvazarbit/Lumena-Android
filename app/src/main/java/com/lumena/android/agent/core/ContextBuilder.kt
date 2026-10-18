@@ -35,10 +35,11 @@ class ContextBuilder(
         constitutionalGuidance: List<String> = emptyList(),
         verifiedEvidence: List<String> = emptyList()
     ): String {
-        val mandatory = buildMandatoryContext(
+        val mandatoryText = buildMandatoryContext(
             task = task,
             verificationRequirement = verificationRequirement
         )
+        val mandatory = if (task.projectRoot != null) RequiredProjectContext.wrap(mandatoryText) else mandatoryText
         require(mandatory.length <= maxChars) {
             "Mandatory constitutional context exceeds configured budget: " +
                 "${mandatory.length} > $maxChars"
@@ -263,6 +264,13 @@ class ContextBuilder(
         )
         appendLine("status=${task.status}")
         appendLine("step=${task.step}/${task.maxSteps}")
+        task.projectContext?.let { capsule ->
+            require(capsule.projectId == task.projectId && capsule.root == task.projectRoot &&
+                capsule.text.length <= ProjectWorkspacePolicy.MAX_CONTEXT) { "Project capsule identity mismatch" }
+            appendLine()
+            appendLine(capsule.text)
+            appendLine("PROJECT TOOLS: inspect/search before edits; paths are relative to the selected project. Keep other projects untouched.")
+        }
         if (
             task.currentInstruction.isNotBlank() ||
             task.effectivePolicy.rootGoal.isNotBlank()

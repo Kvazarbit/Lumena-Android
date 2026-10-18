@@ -237,6 +237,9 @@ object StateVault {
                 if (name == "files/" + FractalEvidenceLedgerStore.FILE_NAME) {
                     FractalEvidenceLedgerCodec.decode(data.toString(Charsets.UTF_8))
                 }
+                if (name == "files/" + ProjectWorkspaceStore.FILE_NAME) {
+                    ProjectWorkspaceCodec.decode(data.toString(Charsets.UTF_8))
+                }
                 if (name.endsWith("lumena_history_tree.json")) requireNotNull(historyAdapter.fromJson(data.toString(Charsets.UTF_8)))
             }
             if (name.startsWith("databases/")) {

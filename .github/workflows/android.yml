@@ -280,6 +280,7 @@ jobs:
           python -m unittest discover -s scripts -p 'test_sign_lumena.py' -v
           python -m py_compile scripts/sign_lumena.py
           python scripts/mutation_module_probe.py --dry-run
+          python scripts/project_workspace_probe.py --dry-run
       - name: Sync pinned llama.cpp source
         run: bash scripts/sync_llama_cpp.sh
       - name: Install Android SDK packages
@@ -357,6 +358,10 @@ jobs:
               "com.lumena.android.agent.core.PythonRunApprovalTest",
               "com.lumena.android.ollama.WorkflowRunnerPythonApprovalTest",
               "com.lumena.android.companion.CompanionPythonApprovalTest",
+              "com.lumena.android.settings.ProjectWorkspacePolicyTest",
+              "com.lumena.android.settings.ProjectConversationPolicyTest",
+              "com.lumena.android.agent.core.ProjectContextBudgetTest",
+              "com.lumena.android.ollama.WorkflowRunnerProjectWorkspaceTest",
           ]
           total = 0
           for name in checks:
@@ -406,6 +411,15 @@ jobs:
           if-no-files-found: ignore
       - name: Probe recovery guard mutations
         run: python scripts/mutation_recovery_probe.py
+      - name: Falsify project workspace context guarantees
+        run: python scripts/project_workspace_probe.py --kotlin
+      - name: Upload project workspace falsification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: project-workspace-probe
+          path: app/build/project-workspace-probe/
+          if-no-files-found: ignore
       - name: Probe MCP and module/listing mutations
         run: python scripts/mutation_module_probe.py
       - name: Build unsigned release APK

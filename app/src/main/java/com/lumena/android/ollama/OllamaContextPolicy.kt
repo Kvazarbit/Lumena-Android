@@ -3,6 +3,7 @@ package com.lumena.android.ollama
 import com.lumena.android.llama.LlamaRuntimeProfile
 import com.lumena.android.llama.clipNewestContextText
 import kotlin.math.min
+import com.lumena.android.agent.core.RequiredProjectContext
 
 data class OllamaRequestBudget(
     val options: OllamaOptions,
@@ -72,9 +73,10 @@ object OllamaContextPolicy {
         // Never let the system prompt consume the whole request budget: the
         // newest non-system turn must retain space. Then enforce the total budget
         // strictly while walking history from newest to oldest.
-        val systemLimit = min(budget.maxPerMessage, budget.maxChars / 2)
+        val protectedSize = system?.let { RequiredProjectContext.minimum(it.content) } ?: 0
+        val systemLimit = min(budget.maxChars - 256, maxOf(min(budget.maxPerMessage, budget.maxChars / 2), protectedSize + if (protectedSize > 0) 256 else 0))
         val clippedSystem = system?.copy(
-            content = clipSystem(system.content, systemLimit)
+            content = RequiredProjectContext.clip(system.content, systemLimit, ::clipSystem)
         )
 
         var remaining = (budget.maxChars - (clippedSystem?.content?.length ?: 0))

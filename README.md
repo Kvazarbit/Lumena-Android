@@ -2,6 +2,15 @@
 
 Android companion / local-agent client built with Kotlin + Jetpack Compose.
 
+## Project workspace V1 · bridge 0.30
+
+Explicit projects keep their own chat, owner constraints, open work, decisions
+and model handoffs. Repository tools report bounded coverage and source hashes;
+Python changes require a fresh, nonempty full-project test receipt.
+
+* [Деревовидний план і критерії готовності](docs/project-workspace-v1-plan.uk.md)
+* [Як почати працювати на Android та межі цього етапу](docs/project-workspace-v1-guide.uk.md)
+
 ## Build 22: evidence-based web research
 
 Bridge 0.18 adds `web.search` and `web.read`: source discovery, bounded readable

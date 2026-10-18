@@ -74,11 +74,9 @@ class EmbeddedLlamaClient(
         var remaining = charBudget
 
         val systemMessage = system?.let {
-            val content = if (it.content.length <= charBudget / 2) {
-                it.content
-            } else {
-                it.content.take(charBudget / 2)
-            }
+            val required = com.lumena.android.agent.core.RequiredProjectContext.minimum(it.content)
+            val limit = minOf(charBudget - 256, maxOf(charBudget / 2, required + if (required > 0) 256 else 0))
+            val content = com.lumena.android.agent.core.RequiredProjectContext.clip(it.content, limit) { text, size -> text.take(size) }
             remaining -= content.length
             OllamaMessage("system", content)
         }

@@ -55,7 +55,8 @@ data class LocalSessionSnapshot(
     val codeGoal: String? = null,
     val workThreads: WorkThreadState = WorkThreadState(),
     val historicalFacts: List<HistoricalTaskRecord> = emptyList(),
-    val historicalFactsQuarantined: Int = 0
+    val historicalFactsQuarantined: Int = 0,
+    val workspaceProjectId: String? = null
 )
 
 /**
