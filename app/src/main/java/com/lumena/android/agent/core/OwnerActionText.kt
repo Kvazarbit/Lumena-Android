@@ -11,9 +11,15 @@ object OwnerActionText {
         "użyj|uzyj|uruchom|wykonaj|przeczytaj|sprawdź|sprawdz|znajdź|napraw|utwórz|utworz)"
     private val request = Regex("(?iu)(?:^|[!?;:\\n]|\\.(?=\\s|$)|\\b(?:і|та|й|and|then|потім|спочатку|тепер|після\\s+цього)\\s+)" +
         "\\s*(?:[-*]|\\d+[.)])?\\s*(?:(?:будь\\s+ласка|please|proszę|тепер|спочатку|потім)\\s*[, :]?\\s*)?" +
-        "(?:(?:можеш|можете|хочу|can\\s+you|could\\s+you|would\\s+you)\\s+)?$verbs\\b")
+        "(?:(?:можеш|можете|хочу|can\\s+you|could\\s+you|would\\s+you)\\s+)?(?<action>$verbs)\\b")
 
     fun hasRequest(text: String): Boolean = request.containsMatchIn(withoutToolNames(text))
+
+    private val inspectionActions = setOf("прочитай", "переглянь", "знайди", "покажи", "найди",
+        "read", "inspect", "review", "find", "show", "przeczytaj", "znajdź")
+    fun hasCodeRequest(text: String): Boolean = request.findAll(withoutToolNames(text)).any {
+        it.groups["action"]!!.value.lowercase() !in inspectionActions
+    }
 
     fun withoutToolNames(text: String): String {
         var out = text

@@ -1073,8 +1073,12 @@ class AgentControllerTest {
                 """{"tool":"workspace.list","args":{}}""",
                 state
             )
-            assertTrue(blocked is ControllerInstruction.AskModelAgain)
-            blocked as ControllerInstruction.AskModelAgain
+            if (it < 2) assertTrue(blocked is ControllerInstruction.AskModelAgain)
+            else {
+                assertTrue(blocked is ControllerInstruction.Finish)
+                assertEquals(TaskStatus.PARTIAL, blocked.state.task.status)
+                assertEquals(2, blocked.state.task.kernel.observed)
+            }
             assertEquals(0, blocked.state.protocolRetries)
             assertTrue(blocked.state.task.status != TaskStatus.FAILED)
             state = blocked.state

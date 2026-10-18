@@ -4,6 +4,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class OwnerActionTextTest {
+    @Test fun readingAndSearchingCodeSubjectsRemainInspection() {
+        assertEquals(TaskIntent.PUBLIC_WEB, TaskIntentRouter.route("Знайди в інтернеті новини Python сьогодні").intent)
+        assertEquals(TaskIntent.FILE_INSPECTION, TaskIntentRouter.route("Тільки прочитай aquarium.html. Нічого не змінюй.").intent)
+        assertFalse(OwnerActionText.hasCodeRequest("Inspect the Python repository"))
+        assertTrue(OwnerActionText.hasCodeRequest("Update the Python repository"))
+    }
     @Test fun descriptiveMentionsDoNotAcquireRequiredTools() {
         for (text in listOf(
             "Аудит: file.write та python.run існують у реєстрі.",

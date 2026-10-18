@@ -403,7 +403,7 @@ object TaskIntentRouter {
         )
         val hasStrongCodeSubject =
             strongCodeTerms.any { containsTerm(lower, it) }
-        if (hasStrongCodeSubject && OwnerActionText.hasRequest(lower)) {
+        if (hasStrongCodeSubject && OwnerActionText.hasCodeRequest(lower)) {
             return true
         }
 
