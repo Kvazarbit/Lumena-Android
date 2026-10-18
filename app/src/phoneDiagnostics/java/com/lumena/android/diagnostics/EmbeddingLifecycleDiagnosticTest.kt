@@ -16,7 +16,11 @@ import androidx.compose.ui.test.performScrollTo
 import com.lumena.android.agent.core.ModuleRegistry
 import com.lumena.android.llama.LiteRtLmEmbeddingProvider
 import com.lumena.android.llama.SemanticLiteRtModelStore
+import com.lumena.android.ollama.LocalEmbeddingIdentity
+import com.lumena.android.settings.CognitivePrincipleStage
 import com.lumena.android.settings.ModuleSettings
+import com.lumena.android.settings.SemanticDocument
+import com.lumena.android.settings.SemanticMemoryStore
 import com.lumena.android.ui.SemanticMemoryPanel
 import java.io.File
 import java.io.RandomAccessFile
@@ -105,5 +109,18 @@ class EmbeddingLifecycleDiagnosticTest {
         assertNull(SemanticLiteRtModelStore.selected(context))
         assertEquals(digest, context.getSharedPreferences("lumena_litert_semantic_model", Context.MODE_PRIVATE)
             .getString("sha256", null))
+    }
+
+    @Test fun cachedVectorsSurviveProviderCloseAndNewContext() {
+        val model = LocalEmbeddingIdentity(LiteRtLmEmbeddingProvider.MODEL_ID, digest, storedCopy.length())
+        val document = SemanticDocument("fixture-principle", CognitivePrincipleStage.NEGATIVE_DEAD_END,
+            null, "Synthetic structured principle", "fixture-revision", 1)
+        // Synthetic vectors test SQLite durability only, never native quality.
+        assertEquals(1, SemanticMemoryStore.upsert(context, model, listOf(document), listOf(floatArrayOf(1f, 0f))))
+        LiteRtLmEmbeddingProvider(context).close()
+        val recreated = context.createConfigurationContext(context.resources.configuration)
+        assertEquals(1, SemanticMemoryStore.stats(recreated).rows)
+        assertEquals(listOf(document.id), SemanticMemoryStore.search(recreated, model,
+            floatArrayOf(1f, 0f), listOf(document)).map { it.id })
     }
 }

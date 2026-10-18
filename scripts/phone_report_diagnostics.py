@@ -24,6 +24,7 @@ CANDIDATES = {
     (CORE, "pastActionsMustNotBecomeCurrentCodeWork"): "PAST_ACTION_BECAME_CODE_WORK",
     (CORE, "auditContractMustNotDemandMutation"): "AUDIT_CONTRACT_DEMANDS_MUTATION",
     (UI, "closingSettingsMustRetainSelectedLiteRtBackend"): "BACKEND_RESET_ON_SETTINGS_CLOSE",
+    (CORE, "duplicateSearchLoopMustYieldPartialBeforeProtocolTurnCap"): "SEARCH_LOOP_REACHED_PROTOCOL_CAP",
 }
 CONTROLS = {
     (CORE, "quotedMentionsDoNotCreateRequiredTools"),
@@ -35,6 +36,7 @@ CONTROLS = {
     (UI, "retainedPanelRestoresBackendThroughSavedState"),
     (UI, "selectedFileAndOptInSurviveNewContextAndProviderClose"),
     (UI, "missingFileIsReportedWithoutDeletingSelectionMetadata"),
+    (UI, "cachedVectorsSurviveProviderCloseAndNewContext"),
 }
 
 

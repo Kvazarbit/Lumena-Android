@@ -1,6 +1,14 @@
 package com.lumena.android.diagnostics
 
 import com.lumena.android.agent.core.*
+import com.lumena.android.agent.local.ToolExecutor
+import com.lumena.android.agent.local.ToolRequest
+import com.lumena.android.agent.local.ToolResult
+import com.lumena.android.ollama.ChatModelClient
+import com.lumena.android.ollama.OllamaMessage
+import com.lumena.android.ollama.WorkflowOutcome
+import com.lumena.android.ollama.WorkflowRunner
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -106,5 +114,44 @@ class PhoneReport2296DiagnosticTest {
         }
         assertEquals(5, kernel.observed)
         assertEquals(0, kernel.worldRevision)
+    }
+
+    @Test fun duplicateSearchLoopMustYieldPartialBeforeProtocolTurnCap() = runBlocking {
+        val goal = "Аудит коду: file.patch і file.write існують, mutate не існує. " +
+            "Модель описувала виконання; фактичних TOOL_RESULT немає."
+        var turns = 0
+        val model = object : ChatModelClient {
+            override suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String> {
+                // Four distinct queries, followed by the fourth repeatedly.
+                // This fixture is one possible causal path, not the owner's
+                // undisclosed original request arguments.
+                val query = minOf(++turns, 4)
+                return Result.success("""{"tool":"project.search","args":{"cwd":"@fixture-project","query":"missing-$query","limit":"5"},"reason":"Inspect audit evidence"}""")
+            }
+        }
+        val calls = mutableListOf<ToolRequest>()
+        val bridge = object : ToolExecutor {
+            override suspend fun execute(toolRequest: ToolRequest): ToolResult {
+                calls += toolRequest
+                return ToolResult(true, toolRequest.tool, exitCode = 0,
+                    stdout = """{"cwd":"@fixture-project","source_digest":"unchanged-fixture","matches":[]}""")
+            }
+        }
+        val outcome = WorkflowRunner(model, bridge, "fixture-model").run(
+            listOf(OllamaMessage("user", goal)), TaskState("diagnostic-loop", null, goal))
+        val task = when (outcome) {
+            is WorkflowOutcome.Failed -> outcome.control.task
+            is WorkflowOutcome.Finished -> outcome.control.task
+            is WorkflowOutcome.NeedsConfirmation -> outcome.pending.control.task
+        }
+        println("DIAG_TRACE loop model_turns=$turns receipts=${task.kernel.observed} " +
+            "step=${task.step}/${task.maxSteps} status=${task.status} " +
+            "world_revision=${task.kernel.worldRevision} errors=${task.errors}")
+        assertTrue("Fixture reached an unexpected mutation", calls.all {
+            ToolRegistry.get(it.tool)?.risk == ToolRisk.READ_ONLY
+        })
+        assertEquals("Fixture fabricated or lost a receipt", calls.size, task.kernel.observed)
+        assertEquals(0, task.kernel.worldRevision)
+        assertFalse("SEARCH_LOOP_REACHED_PROTOCOL_CAP", task.errors.any { it.contains("Protocol turn cap") })
     }
 }
