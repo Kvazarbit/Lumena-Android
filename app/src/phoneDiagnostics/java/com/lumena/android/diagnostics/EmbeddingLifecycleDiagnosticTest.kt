@@ -114,7 +114,7 @@ class EmbeddingLifecycleDiagnosticTest {
     @Test fun cachedVectorsSurviveProviderCloseAndNewContext() {
         val model = LocalEmbeddingIdentity(LiteRtLmEmbeddingProvider.MODEL_ID, digest, storedCopy.length())
         val document = SemanticDocument("fixture-principle", CognitivePrincipleStage.NEGATIVE_DEAD_END,
-            null, "Synthetic structured principle", "fixture-revision", 1)
+            null, "Synthetic structured principle", "b".repeat(64), 1)
         // Synthetic vectors test SQLite durability only, never native quality.
         assertEquals(1, SemanticMemoryStore.upsert(context, model, listOf(document), listOf(floatArrayOf(1f, 0f))))
         LiteRtLmEmbeddingProvider(context).close()
