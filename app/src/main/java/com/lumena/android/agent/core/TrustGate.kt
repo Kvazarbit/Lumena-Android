@@ -58,6 +58,7 @@ object TrustGate {
     const val MAX_QUERY_CHARS = 200
 
     private val taintPrefixes = listOf("web.", "http.", "mcp.", "marketplace.", "python.", "file.", "git.", "project.")
+    private val fetchedUrlTools = setOf("web.read", "http.get", "http.json")
     private val urlPattern = Regex("""https?://[^\s"'<>`\\{}|^\[\]()]+""", RegexOption.IGNORE_CASE)
     private val urlParts = Regex("""^(https?)://([^/?#]+)([^?#]*)(?:\?([^#]*))?(?:#.*)?$""", RegexOption.IGNORE_CASE)
     private val toolResultHeader = Regex("""^TOOL_RESULT for ([A-Za-z0-9_.-]+):""")
@@ -108,7 +109,7 @@ object TrustGate {
         }
         val learned = buildList {
             sourceCalls.forEach { (child, childArgs) ->
-                childArgs["url"]?.let(::add)
+                if (child in fetchedUrlTools) childArgs["url"]?.let(::add)
                 if (canonical != "inspect.batch" && teachesUrls(child)) addAll(extractUrls(output))
             }
             if (canonical == "inspect.batch") addAll(batchResultUrls(output))

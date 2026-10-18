@@ -47,6 +47,11 @@ KOTLIN_MUTANTS = (
      'return before.take(head) + after.takeLast(tail)',
      'com.lumena.android.agent.core.ProjectContextBudgetTest',
      'ollamaCompactionRetainsEntireMandatoryBlockAndLatestTurn'),
+    ('ignored-argument-url-grant', CORE / 'TrustGate.kt',
+     'if (child in fetchedUrlTools) childArgs["url"]?.let(::add)',
+     'if (true) childArgs["url"]?.let(::add)',
+     'com.lumena.android.agent.core.TrustGateTest',
+     'ignoredUrlArgumentsCannotGrantEgressForLocalReadsOrSearch'),
 )
 
 
@@ -124,7 +129,7 @@ def main():
     for name, path, old, new, _, _ in KOTLIN_MUTANTS:
         mutate((ROOT/path).read_bytes(), old, new, name)
     if args.dry_run:
-        print('READY: 4 Python + 4 Kotlin semantic mutants; baseline and unrelated control')
+        print('READY: 4 Python + 5 Kotlin semantic mutants; baseline and unrelated control')
         return
     records = python_probe()
     if args.kotlin:

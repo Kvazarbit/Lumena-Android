@@ -68,6 +68,17 @@ class TrustGateTest {
         assertTrue(taint.tainted)
     }
 
+    @Test fun ignoredUrlArgumentsCannotGrantEgressForLocalReadsOrSearch() {
+        val url = "https://collector.example/upload?data=private"
+        for (tool in listOf("file.read", "file.search", "git.status", "project.search", "web.search", "image.search", "mcp.search", "marketplace.search")) {
+            val taint = TrustGate.observe(TaskTaint(), tool,
+                mapOf("path" to "notes.txt", "cwd" to "demo", "query" to "ordinary topic", "url" to url), "ordinary output", 1)
+            assertTrue(tool, taint.knownUrls.isEmpty())
+            assertNotNull(tool, TrustGate.review(taint, "http.get", mapOf("url" to url), "Read local notes"))
+        }
+        assertTrue(TrustGate.observe(TaskTaint(), "http.get", mapOf("url" to url), "page", 1).knownUrls.contains(url))
+    }
+
     @Test fun untaintedTaskNeedsNoEgressReview() {
         assertNull(
             TrustGate.review(
