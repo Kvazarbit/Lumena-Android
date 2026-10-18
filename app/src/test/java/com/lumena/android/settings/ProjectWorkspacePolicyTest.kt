@@ -143,6 +143,15 @@ class ProjectWorkspacePolicyTest {
         assertEquals(session, adapter.fromJson(adapter.toJson(session)))
     }
 
+    @Test fun importedWorkspaceThatCannotFitMandatoryRulesIsRejectedBeforeActivation() {
+        val oversized = project().copy(goal = "\"".repeat(1000), constraints = List(8) { "\"".repeat(160) },
+            tasks = (1..32).map { ProjectWorkRecord("task-$it", "\"".repeat(8000), TaskStatus.PARTIAL, "a", at = 1000) })
+        val adapter = com.squareup.moshi.Moshi.Builder().add(com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory())
+            .build().adapter(ProjectWorkspaceState::class.java)
+        val raw = adapter.toJson(ProjectWorkspaceState(projects = listOf(oversized)))
+        assertThrows(IllegalArgumentException::class.java) { ProjectWorkspaceCodec.decode(raw) }
+    }
+
     @Test fun projectVerificationRequiresFreshFullTestsWithNonemptyReceipt() {
         val controller = AgentController()
         var state = controller.initial(task())

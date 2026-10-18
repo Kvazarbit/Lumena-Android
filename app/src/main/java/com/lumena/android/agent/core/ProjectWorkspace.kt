@@ -86,6 +86,7 @@ object ProjectWorkspacePolicy {
             require(p.repository.head == null || p.repository.head.matches(Regex("[a-f0-9]{40,64}")))
             require(p.repository.sourceDigest.isEmpty() || p.repository.sourceDigest.matches(Regex("[a-f0-9]{64}")))
             require((p.repository.branch?.length ?: 0) <= 200 && p.repository.files >= 0 && p.repository.at >= 0)
+            capsule(p) // Imported state must also fit the mandatory context budget.
         }
     }
 

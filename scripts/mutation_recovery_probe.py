@@ -39,8 +39,8 @@ MUTANTS = (
      ".firstOrNull { it in policy.deniedCapabilities }",
      ".firstOrNull { false }"),
     ("python-run-write-capability", CORE / "ToolRegistry.kt",
-     "ToolCapability.EXECUTE_CODE,\n            ToolCapability.WRITE_WORKSPACE,\n            ToolCapability.NETWORK",
-     "ToolCapability.EXECUTE_CODE,\n            ToolCapability.NETWORK"),
+     '"python.run" to setOf(\n            ToolCapability.EXECUTE_CODE,\n            ToolCapability.WRITE_WORKSPACE,\n            ToolCapability.NETWORK',
+     '"python.run" to setOf(\n            ToolCapability.EXECUTE_CODE,\n            ToolCapability.NETWORK'),
     ("least-action-calibration-gate", CORE / "LeastAction.kt",
      "val ready = skill != null && skill >= MIN_SKILL && ece <= MAX_ECE",
      "val ready = true"),
@@ -62,6 +62,10 @@ def run_one(name: str, relative: Path, old: str, new: str, dry_run: bool) -> boo
     path = ROOT / relative
     original = path.read_bytes()
     needle = old.encode("utf-8")
+    replacement = new.encode("utf-8")
+    if original.count(needle) == 0 and b'\r\n' in original:
+        needle = needle.replace(b'\n', b'\r\n')
+        replacement = replacement.replace(b'\n', b'\r\n')
     if original.count(needle) != 1:
         raise RuntimeError(f"{name}: expected exactly one source anchor, got {original.count(needle)}")
     if dry_run:
@@ -75,7 +79,7 @@ def run_one(name: str, relative: Path, old: str, new: str, dry_run: bool) -> boo
         xml_file.unlink()
 
     try:
-        path.write_bytes(original.replace(needle, new.encode("utf-8"), 1))
+        path.write_bytes(original.replace(needle, replacement, 1))
         try:
             result = subprocess.run(command, cwd=ROOT, capture_output=True,
                                     text=True, timeout=480, check=False)

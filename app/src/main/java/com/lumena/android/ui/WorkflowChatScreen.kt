@@ -1329,7 +1329,7 @@ fun WorkflowChatScreen(
                 )
             },
             onToolExperience = { task, request, result, elapsedMs ->
-                if (request.tool == "project.inspect" && result.ok) {
+                if (request.tool == "project.inspect" && result.ok && request.args["cwd"] == task.projectRoot) {
                     ProjectWorkspaceStore.observeRepository(context, task, result.stdout)
                 }
                 runCatching {

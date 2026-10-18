@@ -97,6 +97,10 @@ def kill_one(name, path_rel, old_str, new_str, selector, dry_run=False):
     path = ROOT / path_rel
     saved = path.read_bytes()
     old = old_str.encode("utf-8")
+    replacement = new_str.encode("utf-8")
+    if saved.count(old) == 0 and b'\r\n' in saved:
+        old = old.replace(b'\n', b'\r\n')
+        replacement = replacement.replace(b'\n', b'\r\n')
     matches = saved.count(old)
     if matches != 1:
         raise RuntimeError(f"{name}: expected one exact source anchor, got {matches}")
@@ -115,7 +119,7 @@ def kill_one(name, path_rel, old_str, new_str, selector, dry_run=False):
             xml.unlink()
 
     try:
-        path.write_bytes(saved.replace(old, new_str.encode("utf-8"), 1))
+        path.write_bytes(saved.replace(old, replacement, 1))
         try:
             run = subprocess.run(command, cwd=ROOT, capture_output=True,
                                  text=True, check=False, timeout=420)
