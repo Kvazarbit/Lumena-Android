@@ -420,7 +420,7 @@ object TaskIntentRouter {
     }
 
     private fun isExplicitSoftwareTestOperation(lower: String): Boolean {
-        if (!OwnerActionText.hasRequest(lower)) return false
+        if (!OwnerActionText.hasCodeRequest(lower)) return false
         if (listOf(
                 "python.tests",
                 "pytest",

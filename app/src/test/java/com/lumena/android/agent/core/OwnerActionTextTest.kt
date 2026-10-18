@@ -8,6 +8,7 @@ class OwnerActionTextTest {
         assertEquals(TaskIntent.PUBLIC_WEB, TaskIntentRouter.route("Знайди в інтернеті новини Python сьогодні").intent)
         assertEquals(TaskIntent.FILE_INSPECTION, TaskIntentRouter.route("Тільки прочитай aquarium.html. Нічого не змінюй.").intent)
         assertFalse(OwnerActionText.hasCodeRequest("Inspect the Python repository"))
+        assertEquals(TaskIntent.PUBLIC_WEB, TaskIntentRouter.route("Find Python unit test documentation on the internet").intent)
         assertTrue(OwnerActionText.hasCodeRequest("Update the Python repository"))
     }
     @Test fun descriptiveMentionsDoNotAcquireRequiredTools() {
