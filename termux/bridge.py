@@ -433,6 +433,8 @@ def file_search(args: dict[str, Any]) -> dict[str, Any]:
             break
         if not _is_allowed_read_path(path) or _is_hidden_backup(path) or not path.is_file():
             continue
+        if args.get('project_root') and (path.is_symlink() or not _inside(path.resolve(), root)):
+            continue
 
         scanned += 1
         if scanned > 3000:
@@ -3778,7 +3780,7 @@ def _project_git(root: Path) -> dict[str, Any]:
     if head is not None and not re.fullmatch(r'[a-f0-9]{40,64}', head):
         head = None
     branch = git('symbolic-ref', '--quiet', '--short', 'HEAD')
-    status = git('status', '--porcelain', '--untracked-files=normal')
+    status = git('status', '--porcelain', '--untracked-files=normal', '--', '.')
     return {'head': head, 'branch': branch[:200] if branch else None,
             'dirty': bool(status) if status is not None else None}
 
@@ -3859,7 +3861,20 @@ def project_context(args: dict[str, Any], *, search: bool = False) -> dict[str, 
     return {'ok': True, 'exitCode': 0, 'stdout': json.dumps(payload, ensure_ascii=False), 'stderr': '', 'error': None}
 
 
+def _validate_project_scope(tool: str, args: dict[str, Any]) -> None:
+    root_arg = args.get('project_root')
+    if not root_arg:
+        return
+    root, label = _project_root({'cwd': root_arg})
+    if label.startswith('@') and tool not in READ_ONLY_BATCH_TOOLS:
+        raise ValueError('PROJECT_SCOPE: read-only project')
+    for key in ('path', 'script', 'cwd'):
+        if key in args and not _inside(safe_read_path(str(args[key])), root):
+            raise ValueError('PROJECT_SCOPE: resolved path escapes project')
+
+
 def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None) -> dict[str, Any]:
+    _validate_project_scope(tool, args)
     if tool in {'project.inspect', 'project.search'}:
         return project_context(args, search=tool == 'project.search')
     if tool == "health":
@@ -4097,6 +4112,12 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 "--decorate",
             ]
 
+        if str(args.get('project_scope', '')).lower() == 'true':
+            # status/log otherwise disclose sibling project names and history.
+            if tool == 'git.diff':
+                argv += ['.']
+            else:
+                argv += ['--', '.']
         return run_process(
             argv,
             cwd,
@@ -4115,6 +4136,12 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         elif tool == "git.add":
             raw_paths = str(args.get("paths", ".")).strip() or "."
             parts = shlex.split(raw_paths)
+            if str(args.get('project_scope', '')).lower() == 'true':
+                for part in parts:
+                    if ':' in part or '\\' in part or part.startswith('/') or '..' in part.split('/'):
+                        raise ValueError('PROJECT_SCOPE: unsafe Git pathspec')
+                    if not _inside((cwd/part).resolve(), cwd):
+                        raise ValueError('PROJECT_SCOPE: Git path escapes project')
             argv = ["git", "add", "--", *parts]
         else:
             if str(args.get('project_scope', '')).lower() == 'true':

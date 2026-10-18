@@ -34,6 +34,10 @@ class ProjectWorkspacePolicyTest {
         assertThrows(IllegalArgumentException::class.java) {
             ProjectToolScope.bind(AgentDecision.ToolCall("git.add", mapOf("paths" to "\"../other\"")), "demo")
         }
+        assertThrows(IllegalArgumentException::class.java) {
+            ProjectToolScope.bind(AgentDecision.ToolCall("git.add", mapOf("paths" to ":(top)other.py")), "demo")
+        }
+        assertEquals("demo", ProjectToolScope.bind(AgentDecision.ToolCall("file.read", mapOf("path" to "main.py")), "demo").args["project_root"])
     }
 
     @Test fun knownResultClosesOnlyItsOwnInflightMarkerAndUnknownSurvivesNextEpoch() {

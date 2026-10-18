@@ -60,11 +60,13 @@ object ProjectToolScope {
         if (tool == "git.add") {
             require(call.args["paths"].orEmpty().none { it in "\"'`" }) { "PROJECT_SCOPE: quoted Git paths are unsupported; stage a simple path or ." }
             val paths = args["paths"].orEmpty().split(Regex("\\s+"))
-            require(paths.none { it.startsWith('/') || '\\' in it || it.split('/').contains("..") }) {
+            require(paths.none { it.startsWith('/') || ':' in it || '\\' in it || it.split('/').contains("..") }) {
                 "PROJECT_SCOPE: Git paths escape project"
             }
         }
-        if (tool in setOf("git.add", "git.commit")) args["project_scope"] = "true"
+        if (tool.startsWith("git.")) args["project_scope"] = "true"
+        if (tool.startsWith("file.") || tool.startsWith("git.") || tool.startsWith("python.") ||
+            tool in setOf("dir.create", "project.inspect", "project.search")) args["project_root"] = root
         if (tool == "python.tests") args["project_receipt"] = "true"
         return call.copy(tool = tool, args = args)
     }

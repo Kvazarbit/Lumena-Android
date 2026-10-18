@@ -140,6 +140,32 @@ class ProjectWorkspaceTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'staged changes outside'):
             self.bridge.execute_tool('git.commit', {'cwd':'demo/sub', 'message':'fixture', 'project_scope':'true'})
 
+    def test_git_top_pathspec_cannot_stage_a_sibling(self):
+        subprocess.run(['git', 'init', str(self.project)], check=True, capture_output=True)
+        (self.project/'sub').mkdir()
+        (self.project/'outside.py').write_text('outside', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'unsafe Git pathspec'):
+            self.bridge.execute_tool('git.add', {'cwd':'demo/sub', 'paths':':(top)outside.py', 'project_scope':'true'})
+        staged = subprocess.run(['git', 'diff', '--cached', '--name-only'], cwd=self.project, capture_output=True, check=True)
+        self.assertEqual(b'', staged.stdout)
+
+    def test_scoped_file_tools_reject_resolved_sibling_paths(self):
+        other = self.workspace/'other'
+        other.mkdir()
+        (other/'secret.py').write_text('PRIVATE_SIBLING', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'escapes project'):
+            self.bridge.execute_tool('file.read', {'path':'other/secret.py', 'project_root':'demo'})
+        link = self.project/'alias.py'
+        try:
+            link.symlink_to(other/'secret.py')
+        except OSError:
+            return
+        for tool in ('file.read', 'file.write'):
+            with self.assertRaisesRegex(ValueError, 'escapes project'):
+                self.bridge.execute_tool(tool, {'path':'demo/alias.py', 'content':'BAD', 'project_root':'demo'})
+        data = self.bridge.execute_tool('file.search', {'path':'demo', 'query':'PRIVATE_SIBLING', 'project_root':'demo'})
+        self.assertNotIn('PRIVATE_SIBLING', data['stdout'])
+
 
 if __name__ == '__main__':
     unittest.main()
