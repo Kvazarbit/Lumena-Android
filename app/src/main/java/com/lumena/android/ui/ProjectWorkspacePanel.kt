@@ -15,8 +15,8 @@ fun ProjectWorkspacePanel(
     projects: List<WorkspaceProject>, activeId: String?, error: String?,
     onDismiss: () -> Unit, onSelect: (String?) -> Unit,
     onCreate: (String?, String, String, String, List<String>, ProjectVerification) -> Unit,
-    onDecision: (String, String, String, List<String>) -> Unit,
-    onContinue: (ProjectWorkRecord) -> Unit, onCloseWork: (String, Boolean) -> Unit
+    onDecision: (String, String, String, String, List<String>) -> Unit,
+    onContinue: (String, ProjectWorkRecord) -> Unit, onCloseWork: (String, String, Boolean) -> Unit
 ) {
     var adding by remember { mutableStateOf(projects.isEmpty()) }
     var editingId by remember { mutableStateOf<String?>(null) }
@@ -77,13 +77,13 @@ fun ProjectWorkspacePanel(
                     Text(work.goal)
                     Text("${work.status} · ${work.modelId}" + if (work.unknownEffect) " · UNKNOWN: спочатку перевір наслідки" else "", style = MaterialTheme.typography.bodySmall)
                     Row {
-                        TextButton(onClick = { onContinue(work) }) { Text("Продовжити") }
-                        TextButton(onClick = { onCloseWork(work.id, true) }) { Text("Закрити зобов'язання") }
+                        TextButton(onClick = { onContinue(p.id, work) }) { Text("Продовжити") }
+                        TextButton(onClick = { onCloseWork(p.id, work.id, true) }) { Text("Закрити зобов'язання") }
                     }
                 }
                 p.tasks.filterNot { it.open }.takeLast(5).asReversed().forEach {
                     Text("${if (it.closedByOwner) "Закрито власником" else it.status} · ${it.goal.take(150)}", style = MaterialTheme.typography.bodySmall)
-                    if (it.closedByOwner) TextButton(onClick = { onCloseWork(it.id, false) }) { Text("Відкрити знову") }
+                    if (it.closedByOwner) TextButton(onClick = { onCloseWork(p.id, it.id, false) }) { Text("Відкрити знову") }
                 }
                 TextButton(onClick = { showContext = !showContext }) { Text("Показати обов'язковий контекст") }
                 if (showContext) Text(ProjectWorkspacePolicy.capsule(p).text, style = MaterialTheme.typography.bodySmall)
@@ -94,7 +94,7 @@ fun ProjectWorkspacePanel(
                     OutlinedTextField(rationale, { rationale = it.take(500) }, label = { Text("Чому обрано цей спосіб") }, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(alternatives, { alternatives = it.take(800) }, label = { Text("Відкинуті альтернативи — по рядках") }, modifier = Modifier.fillMaxWidth())
                     Button(enabled = problem.isNotBlank() && decision.isNotBlank() && rationale.isNotBlank(), onClick = {
-                        onDecision(problem.trim(), decision.trim(), rationale.trim(), alternatives.lines().filter { it.isNotBlank() })
+                        onDecision(p.id, problem.trim(), decision.trim(), rationale.trim(), alternatives.lines().filter { it.isNotBlank() })
                         decisionOpen = false
                     }) { Text("Зберегти рішення") }
                 }

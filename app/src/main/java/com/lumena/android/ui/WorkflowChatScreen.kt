@@ -2266,12 +2266,12 @@ fun WorkflowChatScreen(
                     } catch (failure: Exception) { workspaceError = failure.message.orEmpty().take(220) }
                 }
             },
-            onDecision = { problem, decision, rationale, alternatives ->
-                val decisionTask = currentTask
+            onDecision = { decisionProjectId, problem, decision, rationale, alternatives ->
+                val decisionTask = currentTask?.takeIf { it.projectId == decisionProjectId }
                 uiScope.launch {
                     try {
                         workspaceState = withContext(Dispatchers.IO) { ProjectWorkspaceStore.update(context) { state ->
-                            val project = state.projects.first { it.id == workspaceProjectId }
+                            val project = state.projects.first { it.id == decisionProjectId }
                             ProjectWorkspacePolicy.put(state, ProjectWorkspacePolicy.decision(project, ProjectDecisionRecord(
                                 UUID.randomUUID().toString(), problem, decision, rationale, alternatives,
                                 decisionTask?.id, decisionTask?.kernel?.evidence?.map { decisionTask.id + ":" + it.id }.orEmpty(), System.currentTimeMillis())))
@@ -2280,16 +2280,18 @@ fun WorkflowChatScreen(
                     } catch (failure: Exception) { workspaceError = failure.message.orEmpty().take(220) }
                 }
             },
-            onContinue = { work ->
-                continuationWorkId = work.id
-                input = "Продовж роботу над задачею: ${work.goal}\nСпочатку перевір поточний стан і попередні невідомі наслідки."
-                showProjects = false
+            onContinue = { sourceProjectId, work ->
+                if (sourceProjectId == workspaceProjectId) {
+                    continuationWorkId = work.id
+                    input = "Продовж роботу над задачею: ${work.goal}\nСпочатку перевір поточний стан і попередні невідомі наслідки."
+                    showProjects = false
+                }
             },
-            onCloseWork = { id, closed ->
+            onCloseWork = { sourceProjectId, id, closed ->
                 uiScope.launch {
                     try {
                         workspaceState = withContext(Dispatchers.IO) { ProjectWorkspaceStore.update(context) { state ->
-                            val project = state.projects.first { it.id == workspaceProjectId }
+                            val project = state.projects.first { it.id == sourceProjectId }
                             ProjectWorkspacePolicy.put(state, project.copy(tasks = project.tasks.map {
                                 if (it.id == id) it.copy(closedByOwner = closed) else it
                             }, updatedAt = System.currentTimeMillis()))
