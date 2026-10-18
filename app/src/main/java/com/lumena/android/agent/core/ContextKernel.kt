@@ -37,9 +37,17 @@ object ContextKernel {
         call.args.toSortedMap().forEach { (k, v) -> append(k.length).append(':').append(k).append(v.length).append(':').append(v) }
     })
 
-    fun target(call: AgentDecision.ToolCall): String =
-        listOf("path", "script", "cwd", "url", "query", "model")
-            .firstNotNullOfOrNull { call.args[it] }.orEmpty().take(200)
+    fun target(call: AgentDecision.ToolCall): String {
+        val tool = ToolRegistry.canonicalize(call.tool)
+        val keys = when {
+            tool.startsWith("file.") || tool == "dir.create" -> listOf("path")
+            tool in setOf("python.run", "python.syntax_check", "python.preview") -> listOf("script")
+            tool.startsWith("git.") || tool in setOf("python.tests", "project.inspect", "project.search") -> listOf("cwd")
+            tool in setOf("web.read", "http.get", "http.json") -> listOf("url")
+            else -> listOf("path", "script", "cwd", "url", "query", "model")
+        }
+        return keys.firstNotNullOfOrNull { call.args[it] }.orEmpty().take(200)
+    }
 
     fun before(state: ContextKernelState, call: AgentDecision.ToolCall): ContextKernelState {
         check(state.inFlight == null) { "An earlier tool has no recorded result; inspect its outcome before replay." }

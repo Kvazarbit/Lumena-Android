@@ -52,6 +52,15 @@ KOTLIN_MUTANTS = (
      'if (true) childArgs["url"]?.let(::add)',
      'com.lumena.android.agent.core.TrustGateTest',
      'ignoredUrlArgumentsCannotGrantEgressForLocalReadsOrSearch'),
+    ('execution-target-shadow', CORE / 'ContextKernel.kt',
+     'tool in setOf("python.run", "python.syntax_check", "python.preview") -> listOf("script")',
+     'tool in setOf("python.run", "python.syntax_check", "python.preview") -> listOf("path", "script")',
+     'com.lumena.android.settings.ProjectWorkspacePolicyTest',
+     'ignoredArgumentsCannotChangeExecutionEvidenceTarget'),
+    ('unknown-target-argument-variation', CORE / 'EffectiveTaskPolicy.kt',
+     'canonical == it.tool || canonical in', 'false || canonical in',
+     'com.lumena.android.settings.ProjectWorkspacePolicyTest',
+     'unknownExecutionCannotBeReplayedByChangingArgumentsForTheSameScript'),
 )
 
 
@@ -129,7 +138,7 @@ def main():
     for name, path, old, new, _, _ in KOTLIN_MUTANTS:
         mutate((ROOT/path).read_bytes(), old, new, name)
     if args.dry_run:
-        print('READY: 4 Python + 5 Kotlin semantic mutants; baseline and unrelated control')
+        print('READY: 4 Python + 7 Kotlin semantic mutants; baseline and unrelated control')
         return
     records = python_probe()
     if args.kotlin:

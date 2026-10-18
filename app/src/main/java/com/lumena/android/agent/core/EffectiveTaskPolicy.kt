@@ -719,11 +719,11 @@ object EffectiveTaskPolicyCompiler {
                         (
                             it.requestSignature == signature ||
                                 (
-                                    canonical in
+                                    (canonical == it.tool || canonical in
                                         setOf(
                                             "file.write",
                                             "file.patch"
-                                        ) &&
+                                        )) &&
                                         it.targetRef == targetRef
                                     )
                             )

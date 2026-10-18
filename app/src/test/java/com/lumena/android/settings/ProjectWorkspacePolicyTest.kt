@@ -182,4 +182,30 @@ class ProjectWorkspacePolicyTest {
         execution = controller.afterTool(execution, AgentDecision.ToolCall("python.syntax_check", mapOf("script" to "bot.py")), true, "Syntax OK", "", null).state
         assertFalse(GoalContractPolicy.allMandatoryPassed(execution.task.goalContract))
     }
+
+    @Test fun ignoredArgumentsCannotChangeExecutionEvidenceTarget() {
+        val controller = AgentController()
+        val call = AgentDecision.ToolCall("python.run", mapOf("script" to "other.py", "path" to "bot.py"))
+        assertTrue(ToolRegistry.validate(call).allowed)
+        assertEquals("other.py", ContextKernel.target(call))
+        val state = controller.afterTool(controller.initial(TaskState("run", null, "Запусти bot.py")),
+            call, true, "executed other.py", "", null).state
+        assertFalse(GoalContractPolicy.allMandatoryPassed(state.task.goalContract))
+        assertEquals("https://example.org/page", ContextKernel.target(AgentDecision.ToolCall("http.get",
+            mapOf("url" to "https://example.org/page", "path" to "fake.py"))))
+    }
+
+    @Test fun unknownExecutionCannotBeReplayedByChangingArgumentsForTheSameScript() {
+        val p = project().copy(constraints = emptyList())
+        val call = ProjectToolScope.bind(AgentDecision.ToolCall("python.run", mapOf("script" to "main.py", "argv" to "one")), p.root)
+        val interrupted = ProjectWorkspacePolicy.record(p, task(p = p).copy(status = TaskStatus.FAILED,
+            kernel = ContextKernel.before(ContextKernelState(), call)), "a", 1001)
+        val fresh = EffectiveTaskPolicyCompiler.compile("Запусти main.py", "Запусти main.py")
+        val policy = ProjectWorkspacePolicy.constrain(fresh, interrupted)
+        val varied = call.copy(args = call.args + ("argv" to "different"))
+        assertNotEquals(ContextKernel.signature(call), ContextKernel.signature(varied))
+        assertFalse(EffectiveTaskPolicyCompiler.validateTool(policy, varied).allowed)
+        val closed = interrupted.copy(tasks = interrupted.tasks.map { it.copy(closedByOwner = true) })
+        assertTrue(EffectiveTaskPolicyCompiler.validateTool(ProjectWorkspacePolicy.constrain(fresh, closed), varied).allowed)
+    }
 }
