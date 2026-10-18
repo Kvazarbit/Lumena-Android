@@ -4,6 +4,11 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Opt-in diagnostic fixtures exercise the unchanged ci2296 implementation.
+// They include desired-behavior assertions which may expose existing defects;
+// they are not part of the ordinary green release-test gate.
+val phoneDiagnostics = providers.gradleProperty("phoneDiagnostics").orNull == "true"
+
 android {
     namespace = "com.lumena.android"
     compileSdk = 35
@@ -38,6 +43,10 @@ android {
         freeCompilerArgs += listOf("-Xskip-metadata-version-check")
     }
     buildFeatures { compose = true }
+    if (phoneDiagnostics) {
+        sourceSets.getByName("test").java.srcDir("src/phoneDiagnostics/java")
+        testOptions.unitTests.isIncludeAndroidResources = true
+    }
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -65,5 +74,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     testImplementation("junit:junit:4.13.2")
+    if (phoneDiagnostics) {
+        testImplementation("org.robolectric:robolectric:4.15.1")
+        testImplementation("androidx.compose.ui:ui-test-junit4")
+        debugImplementation("androidx.compose.ui:ui-test-manifest")
+    }
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
