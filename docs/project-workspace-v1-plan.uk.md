@@ -78,4 +78,9 @@
 - [x] Інструменти репозиторію й перевірка меж.
 - [x] Контекст, досвід, UNKNOWN і перевірка завершення у робочому циклі.
 - [x] Панель проєктів та передача/продовження задач.
-- [ ] Регресії, semantic mutants, Android CI та артефакт APK.
+- [x] Регресії, semantic mutants і доставка артефакту APK через Android CI.
+
+Остаточний результат перевірок визначає CI для SHA гілки
+[`codex/project-workspace-v1`](https://github.com/Kvazarbit/Lumena-Android/actions?query=branch%3Acodex%2Fproject-workspace-v1).
+Наявність тесту або налаштування CI сама по собі не означає успішного прогону.
+Приймання на фізичному телефоні описане в [інструкції](project-workspace-v1-guide.uk.md).

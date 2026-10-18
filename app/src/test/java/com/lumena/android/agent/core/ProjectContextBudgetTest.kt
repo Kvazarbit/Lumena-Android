@@ -27,6 +27,19 @@ class ProjectContextBudgetTest {
         assertTrue(fit.contents.last().contains("CURRENT OWNER TASK"))
     }
 
+    @Test fun actualProjectContextKeepsToolSchemasWhenStaticPromptConsumesBudget() {
+        val project = WorkspaceProject("p", "Demo", "demo", "Maintain a tested application", listOf("Preserve public API"), updatedAt = 1)
+        val task = TaskState("t", "p", "Прочитай main.py", projectRoot = "demo", projectContext = ProjectWorkspacePolicy.capsule(project))
+        val dynamic = ContextBuilder().build(task, null, emptyList())
+        val compact = OllamaContextPolicy.compact(listOf(OllamaMessage("system", "static ".repeat(2000) + dynamic),
+            OllamaMessage("user", task.goal)), OllamaContextPolicy.budget(null, false))
+        val system = compact.first().content
+        assertTrue(system.contains("Preserve public API"))
+        assertTrue(system.contains("file.write{path,content}"))
+        assertTrue(system.contains("python.tests{cwd,argv}"))
+        assertTrue(system.contains(RequiredProjectContext.block(dynamic)!!))
+    }
+
     @Test fun impossibleBudgetFailsInsteadOfSilentlyRemovingObligations() {
         val huge = RequiredProjectContext.wrap("owner-rule".repeat(3000))
         assertThrows(IllegalArgumentException::class.java) {

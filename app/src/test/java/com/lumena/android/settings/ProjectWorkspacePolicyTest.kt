@@ -71,6 +71,23 @@ class ProjectWorkspacePolicyTest {
         assertThrows(IllegalArgumentException::class.java) { ProjectWorkspacePolicy.record(p, task().copy(projectId = "foreign"), "m", 1001) }
     }
 
+    @Test fun unresolvedProjectWriteBlocksReplayEvenWithoutItsOldConversation() {
+        val p = project().copy(constraints = emptyList())
+        val call = ProjectToolScope.bind(AgentDecision.ToolCall("file.write", mapOf("path" to "main.py", "content" to "x=1")), p.root)
+        val interrupted = ProjectWorkspacePolicy.record(p, task(p = p).copy(status = TaskStatus.FAILED,
+            kernel = ContextKernel.before(ContextKernelState(), call)), "a", 1001)
+        val fresh = ProjectWorkspacePolicy.constrain(EffectiveTaskPolicyCompiler.compile("Створи main.py", "Створи main.py"), interrupted)
+        assertFalse(EffectiveTaskPolicyCompiler.validateTool(fresh, call).allowed)
+        assertTrue(ProjectWorkspacePolicy.capsule(interrupted, "t").text.contains("unknown=true"))
+        val read = AgentDecision.ToolCall("file.read", mapOf("path" to "demo/main.py"))
+        val inspected = ProjectWorkspacePolicy.record(interrupted, task("next", p).copy(status = TaskStatus.PARTIAL,
+            kernel = ContextKernel.record(ContextKernelState(), read, true, "x=1")), "b", 1002)
+        assertTrue(inspected.tasks.first().unresolvedEffects.isEmpty())
+        assertTrue("Historical uncertainty must remain visible after current-state inspection", inspected.tasks.first().unknownEffect)
+        val reconciled = ProjectWorkspacePolicy.constrain(EffectiveTaskPolicyCompiler.compile("Створи main.py", "Створи main.py"), inspected)
+        assertTrue(EffectiveTaskPolicyCompiler.validateTool(reconciled, call).allowed)
+    }
+
     @Test fun mandatoryContextPreservesRulesAndOpenWorkWithoutQueryPopularity() {
         var p = project()
         p = ProjectWorkspacePolicy.record(p, task().copy(status = TaskStatus.PARTIAL), "a", 1001)

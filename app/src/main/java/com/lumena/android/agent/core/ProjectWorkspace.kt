@@ -14,7 +14,8 @@ data class ProjectWorkRecord(
     val id: String, val goal: String, val status: TaskStatus,
     val modelId: String, val summary: String = "", val evidence: List<ActionEvidence> = emptyList(),
     val unknownEffect: Boolean = false, val closedByOwner: Boolean = false,
-    val at: Long, val activeEpoch: String = "", val unknownOriginEpoch: String = ""
+    val at: Long, val activeEpoch: String = "", val unknownOriginEpoch: String = "",
+    val unresolvedEffects: List<PolicyUnresolvedEffect> = emptyList()
 ) {
     val open: Boolean get() = !closedByOwner && (status != TaskStatus.DONE || unknownEffect)
 }
@@ -68,8 +69,12 @@ object ProjectWorkspacePolicy {
             require(p.tasks.size <= MAX_TASKS && p.tasks.count { it.open } <= MAX_OPEN_TASKS)
             require(p.tasks.map { it.id }.distinct().size == p.tasks.size)
             p.tasks.forEach { t ->
-                require(t.id.length in 1..100 && t.goal.length in 1..2_000 && t.modelId.length <= 160)
+                require(t.id.length in 1..100 && t.goal.length in 1..8_000 && t.modelId.length <= 160)
                 require(t.summary.length <= 1_200 && t.evidence.size <= ContextKernel.MAX_EVIDENCE && t.at > 0)
+                require(t.unresolvedEffects.size <= 8 && t.unresolvedEffects.all {
+                    it.sourceTaskRef.matches(Regex("[a-f0-9]{64}")) && it.requestSignature.matches(Regex("[a-f0-9]{24}")) &&
+                        it.targetRef.matches(Regex("[a-f0-9]{64}")) && ToolRegistry.get(it.tool) != null
+                })
                 require(t.evidence.all { it.id.length <= 160 && it.tool.length <= 100 && it.target.length <= 240 && it.excerpt.length <= 300 })
             }
             require(p.decisions.size <= MAX_DECISIONS && p.decisions.map { it.id }.distinct().size == p.decisions.size)
@@ -91,15 +96,17 @@ object ProjectWorkspacePolicy {
         }
 
     fun constrain(policy: EffectiveTaskPolicy, project: WorkspaceProject): EffectiveTaskPolicy {
-        if (project.constraints.isEmpty()) return policy
         val rules = EffectiveTaskPolicyCompiler.compile(project.goal, project.constraints.joinToString("\n"))
         return policy.copy(allowedRisks = policy.allowedRisks.filter { it in rules.allowedRisks },
             deniedCapabilities = (policy.deniedCapabilities + rules.deniedCapabilities).distinct(),
-            forbiddenTools = (policy.forbiddenTools + rules.forbiddenTools).distinct())
+            forbiddenTools = (policy.forbiddenTools + rules.forbiddenTools).distinct(),
+            unresolvedEffects = (policy.unresolvedEffects + project.tasks.filter { it.open }.flatMap { it.unresolvedEffects })
+                .distinctBy { it.sourceTaskRef + it.requestSignature })
     }
 
     fun record(project: WorkspaceProject, task: TaskState, modelId: String, now: Long): WorkspaceProject {
         require(task.projectId == project.id && task.projectRoot == project.root) { "Project/task identity mismatch" }
+        require(task.goal.length in 1..8_000) { "Звузь задачу до 8000 символів; мета не буде обрізана мовчки" }
         val workId = task.projectObligationId ?: task.id
         val previous = project.tasks.firstOrNull { it.id == workId }
         require(task.projectObligationId == null || previous != null) { "Continuation obligation is missing" }
@@ -112,9 +119,20 @@ object ProjectWorkspacePolicy {
         val origin = if (priorOrigin != null && priorOrigin != task.id) priorOrigin
             else if (task.kernel.inFlight != null) task.id else ""
         val unknown = origin.isNotEmpty()
-        val entry = ProjectWorkRecord(workId, previous?.goal ?: task.goal.take(2_000), task.status, modelId.take(160),
-            task.lastResult.orEmpty().take(1_200), receipts, unknown, previous?.closedByOwner ?: false, now, task.id, origin)
-        val tasks = project.tasks.filterNot { it.id == workId } + entry
+        val taskRef = digest(task.id)
+        val unresolved = previous?.unresolvedEffects.orEmpty().filterNot { it.sourceTaskRef == taskRef } +
+            listOfNotNull(task.kernel.inFlight?.takeIf { ToolRegistry.get(it.tool)?.risk != ToolRisk.READ_ONLY }?.let {
+                PolicyUnresolvedEffect(taskRef, it.tool, it.signature, digest(it.target), HistoricalRecordOrigin.LOCAL_CURRENT)
+            })
+        require(unresolved.size <= 8) { "Надто багато невідомих дій у задачі; спочатку з'ясуй їхні наслідки" }
+        val entry = ProjectWorkRecord(workId, previous?.goal ?: task.goal, task.status, modelId.take(160),
+            task.lastResult.orEmpty().take(1_200), receipts, unknown, previous?.closedByOwner ?: false, now, task.id, origin, unresolved)
+        val observedTargets = task.kernel.evidence.filter { it.ok && it.tool == "file.read" }.map { digest(it.target) }.toSet()
+        val tasks = (project.tasks.filterNot { it.id == workId } + entry).map { work ->
+            work.copy(unresolvedEffects = work.unresolvedEffects.filterNot {
+                it.tool in setOf("file.write", "file.patch") && it.targetRef in observedTargets
+            })
+        }
         require(tasks.count { it.open } <= MAX_OPEN_TASKS) { "Закрий завершені зобов'язання перед новою задачею" }
         // Open/unknown work is never removed to satisfy the completed-history cap.
         val keep = tasks.filter { it.open }.map { it.id }.toSet() +
@@ -142,8 +160,8 @@ object ProjectWorkspacePolicy {
             p.constraints.forEach { appendLine("OWNER CONSTRAINT: ${quote(it)}") }
             appendLine("Last observed repository: head=${p.repository.head ?: "UNKNOWN"}; dirty=${p.repository.dirty ?: "UNKNOWN"}; observed_at=${p.repository.at}. Reinspect for current truth.")
             appendLine("OPEN OBLIGATIONS (closure is explicit; PARTIAL is unfinished):")
-            p.tasks.filter { it.open && it.id != currentTaskId }.forEach {
-                appendLine("${quote(it.id.take(12))} ${it.status} unknown=${it.unknownEffect} goal=${quote(it.goal.take(40))}")
+            p.tasks.filter { it.open && (it.id != currentTaskId || it.unknownEffect) }.forEach {
+                appendLine("${quote(it.id.take(12))} ${it.status} unknown=${it.unknownEffect} goal_excerpt=${quote(it.goal.take(40))}")
             }
             appendLine("Full goals and decisions remain in the project panel. Resolve the selected obligation only; preserve the others.")
         }

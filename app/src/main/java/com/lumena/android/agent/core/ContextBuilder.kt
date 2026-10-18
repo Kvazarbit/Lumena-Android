@@ -270,6 +270,8 @@ class ContextBuilder(
             appendLine()
             appendLine(capsule.text)
             appendLine("PROJECT TOOLS: inspect/search before edits; paths are relative to the selected project. Keep other projects untouched.")
+            appendLine("Project tool schemas: project.inspect{cwd}; project.search{cwd,query}; file.read{path}; file.write{path,content}; file.patch{path,old,new}; dir.create{path}; git.init/status/diff/log{cwd}; git.add{cwd,paths}; git.commit{cwd,message}; python.syntax_check{script}; python.run{script}; python.tests{cwd,argv}. Full tests: cwd='.', argv='-q'.")
+            appendLine("Return one JSON object: {\"tool\":\"file.read\",\"args\":{\"path\":\"README.md\"}} or {\"partial\":true,\"summary\":\"remaining work\"}. Use done only after recorded mandatory checks pass. A missing project directory can be created with dir.create path='.' after approval.")
         }
         if (
             task.currentInstruction.isNotBlank() ||
