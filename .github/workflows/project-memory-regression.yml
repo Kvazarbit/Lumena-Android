@@ -2,7 +2,7 @@ name: Project memory regression
 
 on:
   push:
-    branches: [ "codex/daily-project-memory", "codex/verified-collaboration-handoff", "feature/collaboration-local-state-card", "codex/daily-context-os-v1", "codex/verified-experience-loop" ]
+    branches: [ "codex/daily-project-memory", "codex/verified-collaboration-handoff", "feature/collaboration-local-state-card", "codex/daily-context-os-v1", "codex/verified-experience-loop", "feature/experience-loop-fixes-v1" ]
   workflow_dispatch:
 
 permissions:
