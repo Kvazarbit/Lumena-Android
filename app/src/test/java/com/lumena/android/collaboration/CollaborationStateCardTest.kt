@@ -216,6 +216,15 @@ class CollaborationStateCardTest {
         val compact = OllamaContextPolicy.compact(listOf(OllamaMessage("system", LocalWorkflowAgent.systemPrompt + "\n\n" + dynamic),
             OllamaMessage("user", task.goal)), OllamaContextPolicy.budget(null, false, "local-model"))
         assertTrue(compact.first().content.contains(text))
+
+        // Real sessions also retrieve advisory memory. It must not displace current receipts/UNKNOWNs.
+        val advice = (1..4).map { "ADVISORY_$it " + "older advice ".repeat(25) }
+        val withMemory = ContextBuilder().build(task, null, advice, collaborationCard = text)
+        assertTrue("ADVICE_DISPLACED_CURRENT_CARD", RequiredProjectContext.block(withMemory)!!.contains(text))
+        val compactMemory = OllamaContextPolicy.compact(listOf(OllamaMessage("system", LocalWorkflowAgent.systemPrompt + "\n\n" + withMemory),
+            OllamaMessage("user", task.goal)), OllamaContextPolicy.budget(null, false, "local-model"))
+        assertTrue("BACKEND_DROPPED_CURRENT_CARD", compactMemory.first().content.contains(text))
+        assertTrue(compactMemory.first().content.contains("Preserve public API"))
     }
 
     @Test fun cloudRouteNeverOpensTheJournalOrReceivesTheCard() = runBlocking {

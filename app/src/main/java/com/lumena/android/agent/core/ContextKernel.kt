@@ -19,7 +19,7 @@ data class ContextKernelState(
     val observed: Int = 0,
     val pendingVerification: Set<String> = emptySet(),
     val taint: TaskTaint = TaskTaint(),
-    /** Complete reads used only to narrow later writes with CAS; never permissions. */
+    /** Whole-file hashes observed during reads, used only to narrow writes with CAS; never permissions. */
     val observedFileHashes: Map<String, String> = emptyMap(),
     val completeFileReads: Set<String> = emptySet()
 )
