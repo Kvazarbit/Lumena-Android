@@ -71,12 +71,16 @@ class WorkflowRunnerTerminalContractTest {
         var unknowns = 0
         val runner = WorkflowRunner(model, bridge, "hub:fixture",
             onToolExperience = { _, request, _, _ -> learned += request.tool },
-            onUnknownOutcome = { _, request, _ -> assertEquals("file.patch", request.tool); unknowns++ })
+            onUnknownOutcome = { _, _, _ -> learned += "GLOBAL_UNKNOWN" },
+            projectObservation = { _, request, result ->
+                if (result.outcomeUnknown) { assertEquals("file.patch", request.tool); unknowns++ }
+            })
         val pending = runner.run(emptyList(), task("unknown")) as WorkflowOutcome.NeedsConfirmation
         val result = runner.approve(pending.pending)
         assertTrue(result.toString(), result is WorkflowOutcome.Failed)
         assertEquals(1, unknowns)
         assertFalse(learned.contains("file.patch"))
+        assertTrue("Private terminal history entered global learning", learned.isEmpty())
         assertEquals(1, bridge.calls.count { it.tool == "file.patch" })
         assertNotNull((result as WorkflowOutcome.Failed).control.task.kernel.inFlight)
     }
