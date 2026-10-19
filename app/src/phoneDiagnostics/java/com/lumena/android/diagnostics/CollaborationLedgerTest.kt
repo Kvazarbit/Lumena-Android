@@ -89,15 +89,15 @@ class CollaborationLedgerTest {
             override suspend fun execute(toolRequest: ToolRequest): ToolResult { started.complete(Unit); release.await(); return ToolResult(true) }
         }
         val running = async(Dispatchers.Default) { CollaborationLedger(context).execute(scope(), request, first, "first") }
-        started.await()
         try {
+            withTimeout(15_000) { started.await() }
             val executor = Executor()
             assertFalse(CollaborationLedger(context).execute(scope(), request, executor, "second").ok)
             assertEquals(0, executor.calls)
             val id = CollaborationLedger(context).entries().single().id
             assertTrue(runCatching { CollaborationLedger(context).acknowledgeUnknownFromOwner(id) }.isFailure)
         } finally { release.complete(Unit) }
-        assertTrue(running.await().ok)
+        assertTrue(withTimeout(15_000) { running.await() }.ok)
     }
     @Test fun ownerCanReleaseNextActionsWithoutReplayingOrRelabellingUnknownHistory() = runBlocking {
         val unknown = Executor(ToolResult(false, outcomeUnknown = true))

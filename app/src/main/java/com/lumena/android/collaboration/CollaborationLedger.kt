@@ -25,8 +25,9 @@ class CollaborationLedger(context: Context) {
 
     private class Helper(context: Context) : SQLiteOpenHelper(context, DATABASE, null, 1) {
         override fun onConfigure(db: SQLiteDatabase) {
+            db.disableWriteAheadLogging()
             db.execSQL("PRAGMA synchronous=FULL")
-            db.execSQL("PRAGMA max_page_count=16384")
+            require(db.setMaximumSize(64L * 1024 * 1024) <= 64L * 1024 * 1024) { "Collaboration database exceeds disk budget" }
         }
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("CREATE TABLE events (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, body TEXT NOT NULL, previous TEXT NOT NULL, digest TEXT NOT NULL)")
