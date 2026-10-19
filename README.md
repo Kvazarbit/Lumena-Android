@@ -2,6 +2,8 @@
 
 Android companion / local-agent client built with Kotlin + Jetpack Compose.
 
+* [Аудит нового multimodel RFC і локальний журнал / handoff V1](docs/collaboration-audit-and-stage-v1.uk.md)
+
 ## Project workspace V1 · bridge 0.31
 
 Explicit projects keep their own chat, owner constraints, open work, decisions

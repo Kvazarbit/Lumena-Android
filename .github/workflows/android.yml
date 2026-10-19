@@ -369,6 +369,9 @@ jobs:
               "com.lumena.android.ollama.CompletionReceiptWorkflowTest",
               "com.lumena.android.agent.core.OwnerActionTextTest",
               "com.lumena.android.ollama.WorkflowRunnerSemanticRecallTest",
+              "com.lumena.android.collaboration.CollaborationProtocolTest",
+              "com.lumena.android.collaboration.CollaborationReviewTest",
+              "com.lumena.android.ollama.WorkflowRunnerCollaborationAdapterTest",
           ]
           total = 0
           for name in checks:

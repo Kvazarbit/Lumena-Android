@@ -16,7 +16,9 @@ fun ProjectWorkspacePanel(
     onDismiss: () -> Unit, onSelect: (String?) -> Unit,
     onCreate: (String?, String, String, String, List<String>, ProjectVerification) -> Unit,
     onDecision: (String, String, String, String, List<String>) -> Unit,
-    onContinue: (String, ProjectWorkRecord) -> Unit, onCloseWork: (String, String, Boolean) -> Unit
+    onContinue: (String, ProjectWorkRecord) -> Unit, onCloseWork: (String, String, Boolean) -> Unit,
+    onReviewReceipts: (suspend (String, Boolean) -> String)? = null,
+    reviewIdentity: String = ""
 ) {
     var adding by remember { mutableStateOf(projects.isEmpty()) }
     var editingId by remember { mutableStateOf<String?>(null) }
@@ -63,6 +65,7 @@ fun ProjectWorkspacePanel(
             project?.let { p ->
                 HorizontalDivider()
                 Text(p.name, style = MaterialTheme.typography.titleMedium)
+                CollaborationPanel(p, onReviewReceipts, reviewIdentity)
                 Text(p.goal)
                 TextButton(onClick = {
                     editingId = p.id; adding = true; name = p.name; root = p.root; goal = p.goal

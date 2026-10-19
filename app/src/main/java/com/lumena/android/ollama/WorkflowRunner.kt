@@ -118,7 +118,8 @@ class WorkflowRunner(
     private val checkpoint: suspend (AgentControlState) -> Unit = {},
     private val projectContextProvider: suspend (TaskState) -> com.lumena.android.agent.core.ProjectContextCapsule? = { it.projectContext },
     private val onUnknownOutcome: (TaskState, ToolRequest, ToolResult) -> Unit = { _, _, _ -> },
-    private val semanticMemoryProvider: suspend (TaskState) -> List<String> = { emptyList() }
+    private val semanticMemoryProvider: suspend (TaskState) -> List<String> = { emptyList() },
+    private val executionAdapter: (TaskState, ToolExecutor) -> ToolExecutor = { _, executor -> executor }
 ) {
     suspend fun run(
         history: List<OllamaMessage>,
@@ -231,7 +232,7 @@ class WorkflowRunner(
                     )
                 }
 
-                val localBridge = bridge
+                val localBridge = bridge?.let { executionAdapter(state.task, it) }
                 if (localBridge == null) {
                     if (preflight.mandatory) {
                         val stopped = state.copy(
@@ -643,7 +644,7 @@ class WorkflowRunner(
                         onProgress("APPROVAL CACHE · exact action approved for this task")
                     }
 
-                    val localBridge = bridge ?: return WorkflowOutcome.Failed(
+                    val localBridge = bridge?.let { executionAdapter(state.task, it) } ?: return WorkflowOutcome.Failed(
                         "Bridge token is required for ${planned.request.tool}",
                         current,
                         state
@@ -799,7 +800,7 @@ class WorkflowRunner(
         isApprovedForTask: (String, ToolRequest) -> Boolean = { _, _ -> false },
         onState: (AgentControlState) -> Unit = {}
     ): WorkflowOutcome {
-        val localBridge = bridge ?: return WorkflowOutcome.Failed(
+        val localBridge = bridge?.let { executionAdapter(pending.control.task, it) } ?: return WorkflowOutcome.Failed(
             "Bridge token is required for ${pending.plan.request.tool}",
             pending.history,
             pending.control

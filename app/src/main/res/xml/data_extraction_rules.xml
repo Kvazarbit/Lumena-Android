@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="database" path="lumena_collaboration_v1.db" />
+        <exclude domain="database" path="lumena_collaboration_v1.db-journal" />
+        <exclude domain="database" path="lumena_collaboration_v1.db-wal" />
+        <exclude domain="database" path="lumena_collaboration_v1.db-shm" />
+        <exclude domain="sharedpref" path="lumena_collaboration.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="database" path="lumena_collaboration_v1.db" />
+        <exclude domain="database" path="lumena_collaboration_v1.db-journal" />
+        <exclude domain="database" path="lumena_collaboration_v1.db-wal" />
+        <exclude domain="database" path="lumena_collaboration_v1.db-shm" />
+        <exclude domain="sharedpref" path="lumena_collaboration.xml" />
+    </device-transfer>
+</data-extraction-rules>

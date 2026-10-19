@@ -276,9 +276,17 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
         val contributorModelId = command.modelId
             ?: CompanionProtocol.DEFAULT_COMPANION_MODEL_ID
 
+        // Owner UI selects project. External session_id/task_id are correlation data only.
+        val collaborationScope = com.lumena.android.collaboration.CollaborationRuntime.scope(
+            runCatching { com.lumena.android.settings.ProjectWorkspaceStore.project(context,
+                com.lumena.android.collaboration.CollaborationRuntime.companionProject(context)) }.getOrNull(),
+            command.taskId ?: command.fingerprint, episodeSessionId, contributorModelId,
+            "COMPANION", bridgeUrl, token)
+
         scope.launch {
             val result = try {
-                val client = TermuxBridgeClient(bridgeUrl, token, context)
+                val client = com.lumena.android.collaboration.CollaborationRuntime.executor(context.applicationContext,
+                    collaborationScope, TermuxBridgeClient(bridgeUrl, token, context), command.fingerprint)
                 if (PythonRunApproval.applies(plan.request.tool)) {
                     // automatic python.run only comes from a task grant with allowPython.
                     CompanionPythonApproval.execute(
@@ -572,6 +580,7 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        com.lumena.android.ui.CollaborationProjectPicker(busy)
         Text("Lumena Companion", style = MaterialTheme.typography.headlineMedium)
         Text(status, style = MaterialTheme.typography.bodyMedium)
         taskGrant?.let { grant ->

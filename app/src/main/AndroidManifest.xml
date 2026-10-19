@@ -12,6 +12,8 @@
     <application
         android:name=".LumenaApplication"
         android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="Lumena"
         android:theme="@style/Theme.Lumena"
         android:usesCleartextTraffic="true">

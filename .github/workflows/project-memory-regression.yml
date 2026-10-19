@@ -2,7 +2,7 @@ name: Project memory regression
 
 on:
   push:
-    branches: [ "codex/daily-project-memory" ]
+    branches: [ "codex/daily-project-memory", "codex/verified-collaboration-handoff" ]
   workflow_dispatch:
 
 permissions:
@@ -15,7 +15,7 @@ concurrency:
 jobs:
   regression:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       ANDROID_HOME: /usr/local/lib/android/sdk
@@ -43,6 +43,8 @@ jobs:
           --tests 'com.lumena.android.diagnostics.*'
           --tests 'com.lumena.android.agent.core.OwnerActionTextTest'
           --tests 'com.lumena.android.ollama.WorkflowRunnerSemanticRecallTest'
+          --tests 'com.lumena.android.collaboration.*'
+          --tests 'com.lumena.android.ollama.WorkflowRunnerCollaborationAdapterTest'
       - name: Verify nonempty passing JUnit reports
         run: |
           python - <<'PY'
@@ -50,7 +52,9 @@ jobs:
           import xml.etree.ElementTree as E
           expected = {'PhoneReport2296DiagnosticTest': 11, 'EmbeddingLifecycleDiagnosticTest': 5,
                       'SemanticMemoryCoordinatorTest': 5, 'OwnerActionTextTest': 5,
-                      'WorkflowRunnerSemanticRecallTest': 2}
+                      'WorkflowRunnerSemanticRecallTest': 2, 'CollaborationProtocolTest': 5,
+                      'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 13,
+                      'WorkflowRunnerCollaborationAdapterTest': 2}
           for name, minimum in expected.items():
               matches = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.' + name + '.xml'))
               assert len(matches) == 1, name
@@ -64,4 +68,29 @@ jobs:
         with:
           name: project-memory-regression
           path: app/build/test-results/testDebugUnitTest/TEST-*.xml
+          if-no-files-found: error
+      - name: Kill collaboration semantic mutants with exact-case oracles
+        if: github.ref_name == 'codex/verified-collaboration-handoff'
+        run: python scripts/collaboration_probe.py
+      - name: Check private journal is excluded from Android backup and transfer
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as E
+          ns = '{http://schemas.android.com/apk/res/android}'
+          app = E.parse('app/src/main/AndroidManifest.xml').getroot().find('application')
+          assert app.get(ns+'fullBackupContent') == '@xml/backup_rules'
+          assert app.get(ns+'dataExtractionRules') == '@xml/data_extraction_rules'
+          expected = {('database', 'lumena_collaboration_v1.db'+s) for s in ('', '-journal', '-wal', '-shm')} | {('sharedpref', 'lumena_collaboration.xml')}
+          old = E.parse('app/src/main/res/xml/backup_rules.xml').getroot()
+          new = E.parse('app/src/main/res/xml/data_extraction_rules.xml').getroot()
+          for node in (old, new.find('cloud-backup'), new.find('device-transfer')):
+              assert expected <= {(e.get('domain'), e.get('path')) for e in node.findall('exclude')}
+          print('VERIFIED backup privacy boundaries')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always() && github.ref_name == 'codex/verified-collaboration-handoff'
+        with:
+          name: collaboration-semantic-probe
+          path: app/build/collaboration-probe/
           if-no-files-found: error

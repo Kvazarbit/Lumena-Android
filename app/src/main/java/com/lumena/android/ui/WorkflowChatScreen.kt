@@ -965,6 +965,10 @@ fun WorkflowChatScreen(
             return if (show) lines else emptyList()
         }
         return WorkflowRunner(modelClient(), bridgeOrNull(), modelNameForRun(),
+            executionAdapter = { task, executor ->
+                com.lumena.android.collaboration.CollaborationRuntime.forTask(context.applicationContext,
+                    task, constitutionContributorModelId, bridgeUrl, bridgeToken, executor)
+            },
             semanticMemoryProvider = { task ->
                 com.lumena.android.settings.SemanticMemoryCoordinator(context.applicationContext, ollamaUrl).recall(task)
             },
@@ -2255,6 +2259,11 @@ fun WorkflowChatScreen(
 
     if (showProjects) {
         ProjectWorkspacePanel(workspaceState.projects, workspaceProjectId, workspaceError,
+            reviewIdentity = "$inferenceBackend|$ollamaUrl|${modelNameForRun()}",
+            onReviewReceipts = { handoff, localAttestation ->
+                com.lumena.android.collaboration.CollaborationReview.read(modelClient(),
+                    inferenceBackend, ollamaUrl, modelNameForRun(), localAttestation, handoff)
+            },
             onDismiss = { showProjects = false }, onSelect = { activateWorkspace(it) },
             onCreate = { editingId, name, root, goal, constraints, verification ->
                 uiScope.launch {
