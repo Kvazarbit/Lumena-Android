@@ -34,8 +34,16 @@ object ProjectWorkspaceHistoryArchive {
             if (n == null) { add(p.id, "project", p, WorkspaceProject::class.java); continue }
             for (t in p.tasks) {
                 val nt = n.tasks.firstOrNull { it.id == t.id }
-                if (nt == null || t.handoffs.any { it !in nt.handoffs } || t.evidence.any { e -> nt.evidence.none { it.id == e.id } })
-                    add(p.id, "task", t, ProjectWorkRecord::class.java)
+                if (nt == null) add(p.id, "task", t, ProjectWorkRecord::class.java)
+                else {
+                    // Store only evicted facts; copying a whole 48-receipt task each turn wastes phone storage.
+                    t.handoffs.filter { it !in nt.handoffs }.forEach {
+                        add(p.id, "handoff:" + t.id, it, ProjectHandoffRecord::class.java)
+                    }
+                    t.evidence.filter { e -> nt.evidence.none { it.id == e.id } }.forEach {
+                        add(p.id, "evidence:" + t.id, it, ActionEvidence::class.java)
+                    }
+                }
             }
             p.decisions.filter { d -> n.decisions.none { it.id == d.id } }
                 .forEach { add(p.id, "decision", it, ProjectDecisionRecord::class.java) }

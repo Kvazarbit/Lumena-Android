@@ -14,6 +14,23 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
 class ProjectWorkspaceHistoryTest {
+    @Test fun rollingHistoryArchivesOnlyEvictedFactsInsteadOfWholeTaskCopies() {
+        val c = RuntimeEnvironment.getApplication()
+        val h1 = ProjectHandoffRecord("old", "m", TaskStatus.PARTIAL, "old handoff", false, 1)
+        val h2 = h1.copy(epoch = "new", summary = "retained handoff", at = 2)
+        val e1 = ActionEvidence("old:e1", "file.read", "demo/a.py", "a".repeat(24), CognitivePhase.OBSERVE, true, "old evidence", "b".repeat(24), 0)
+        val e2 = e1.copy(id = "new:e1", excerpt = "retained evidence")
+        val work = ProjectWorkRecord("w", "Long project task", TaskStatus.PARTIAL, "m", evidence = listOf(e1, e2), at = 2, handoffs = listOf(h1, h2))
+        val old = ProjectWorkspaceState(projects = listOf(WorkspaceProject("sparse", "Demo", "demo", "Owner goal", tasks = listOf(work), updatedAt = 1)))
+        val next = old.copy(projects = old.projects.map { it.copy(tasks = listOf(work.copy(evidence = listOf(e2), handoffs = listOf(h2)))) })
+        ProjectWorkspaceHistoryArchive.preserveEvictions(c, old, next)
+        val db = SQLiteDatabase.openDatabase(requireNotNull(ProjectWorkspaceHistoryArchive.validatedFile(c)).absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+        try { db.rawQuery("SELECT kind,body FROM records WHERE project_id='sparse'", null).use {
+            var count = 0
+            while (it.moveToNext()) { count++; assertTrue(it.getString(0) in setOf("handoff:w", "evidence:w")); assertFalse(it.getString(1).contains("retained")) }
+            assertEquals(2, count)
+        } } finally { db.close() }
+    }
     @Test fun changedGoalCannotRelabelAnAlreadyApprovedTaskOrSendItsTool() = kotlinx.coroutines.runBlocking {
         val c = RuntimeEnvironment.getApplication()
         val p = WorkspaceProject("epoch", "Demo", "demo", "First owner goal", updatedAt = 1)
