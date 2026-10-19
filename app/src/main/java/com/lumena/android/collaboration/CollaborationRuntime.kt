@@ -23,9 +23,14 @@ object CollaborationRuntime {
         check(prefs(c).edit().putString("companion_project", id).commit())
     }
     /** Owner confirmed that this exact Ollama route is a local model, not a cloud proxy. Embedded needs no attestation. */
-    fun localAttested(c: Context, route: String): Boolean = route.isNotBlank() && prefs(c).getString("local_route", null) == route
+    fun localAttested(c: Context, route: String): Boolean = route.isNotBlank() &&
+        (prefs(c).getBoolean("local_" + CollaborationProtocol.hash(route), false) || prefs(c).getString("local_route", null) == route)
     fun attestLocal(c: Context, route: String, attested: Boolean) {
-        if (route.isNotBlank()) check(prefs(c).edit().putString("local_route", route.takeIf { attested }).commit())
+        if (route.isNotBlank()) {
+            val edit = prefs(c).edit().putBoolean("local_" + CollaborationProtocol.hash(route), attested)
+            if (prefs(c).getString("local_route", null) == route) edit.remove("local_route")
+            check(edit.commit())
+        }
     }
     fun route(backend: String, url: String, model: String): String = "$backend|$url|$model"
     /** Consent stays on this installation; a portable project JSON cannot authorize egress. */
@@ -54,7 +59,8 @@ object CollaborationRuntime {
         CollaborationProtocol.hash("installation-local-bridge"),
         BuildConfig.VERSION_NAME, BuildConfig.SOURCE_COMMIT)
 
-    fun forTask(c: Context, task: TaskState, model: String, url: String, token: String, delegate: ToolExecutor): ToolExecutor {
+    fun forTask(c: Context, task: TaskState, model: String, url: String, token: String, delegate: ToolExecutor,
+                privateProjectIds: List<String> = emptyList()): ToolExecutor {
         val project = runCatching { ProjectWorkspaceStore.project(c, task.projectId) }.getOrNull()
             ?.takeIf { it.root == task.projectRoot }
         if (task.projectRoot != null && (project == null || task.projectGoalEpoch != project.goalEpoch)) {
@@ -63,13 +69,25 @@ object CollaborationRuntime {
                     "PROJECT_GOAL_CHANGED: версія мети задачі відсутня або змінилася. Почни новий запит у проєкті; старий дозвіл не переноситься.", false)
             }
         }
-        val journal = if (!enabled(c) && !CollaborationLedger.exists(c)) delegate
-            else executor(c, scope(project, task.id, "local", model, "LOCAL", url, token), delegate)
-        return com.lumena.android.agent.local.ProjectFilePreconditions.wrap(task, journal, delegate)
+        // The same inference boundary also applies with journal capture disabled.
+        val guarded = executor(c, scope(project, task.id, "local", model, "LOCAL", url, token), delegate,
+            transportUrl = url, privateProjectIds = privateProjectIds)
+        return com.lumena.android.agent.local.ProjectFilePreconditions.wrap(task, guarded, delegate)
     }
 
-    fun executor(c: Context, scope: CollaborationScope, delegate: ToolExecutor, delivery: String? = null): ToolExecutor = object : ToolExecutor {
+    fun executor(c: Context, scope: CollaborationScope, delegate: ToolExecutor, delivery: String? = null,
+                 transportUrl: String = "", privateProjectIds: List<String> = emptyList()): ToolExecutor = object : ToolExecutor {
         override suspend fun execute(toolRequest: ToolRequest): ToolResult {
+            val privateIds = (privateProjectIds + scope.projectId).filter { it != "UNASSIGNED" }.distinct()
+            if (toolRequest.tool == "ollama.generate" && privateIds.isNotEmpty()) {
+                val remote = try { withContext(Dispatchers.IO) { privateIds.all { id ->
+                    ProjectWorkspaceStore.project(c, id)?.let { remoteAllowed(c, it) } == true
+                } } } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled } catch (_: Exception) { false }
+                val nestedModel = toolRequest.args["model"].orEmpty()
+                val attested = localAttested(c, route("ollama", ProjectToolPrivacy.BRIDGE_OLLAMA, nestedModel))
+                if (!ProjectToolPrivacy.inferenceAllowed(transportUrl, nestedModel, attested, remote))
+                    return CollaborationLedger.blocked("PROJECT_CONTEXT_PRIVATE: допоміжна модель теж потребує підтвердженого локального маршруту або дозволу зовнішньої передачі.", false)
+            }
             if (toolRequest.tool in setOf("health", "process.status", "python.preview")) return delegate.execute(toolRequest)
             if (!enabled(c)) {
                 // Disabling capture cannot clear a previously recorded UNKNOWN writer barrier.

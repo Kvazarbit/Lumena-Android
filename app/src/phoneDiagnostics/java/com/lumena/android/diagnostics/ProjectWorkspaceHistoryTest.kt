@@ -14,6 +14,34 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
 class ProjectWorkspaceHistoryTest {
+    @Test fun nestedCloudInferenceRespectsPrivateHistoryEvenWithCaptureOffAndLocalRoutesPersistSeparately() = kotlinx.coroutines.runBlocking {
+        val c = RuntimeEnvironment.getApplication()
+        val p = WorkspaceProject("nested", "Demo", "demo", "Private owner goal", updatedAt = 1)
+        ProjectWorkspaceStore.update(c) { ProjectWorkspaceState(projects = listOf(p)) }
+        com.lumena.android.collaboration.CollaborationRuntime.enable(c, false)
+        var calls = 0
+        val delegate = object : com.lumena.android.agent.local.ToolExecutor {
+            override suspend fun execute(toolRequest: com.lumena.android.agent.local.ToolRequest): com.lumena.android.agent.local.ToolResult {
+                calls++; return com.lumena.android.agent.local.ToolResult(true)
+            }
+        }
+        val task = TaskState("t", "nested", "Private step", projectRoot = "demo", projectGoalEpoch = 1)
+        val wrapped = com.lumena.android.collaboration.CollaborationRuntime.forTask(c, task, "fixture", "http://127.0.0.1:8765", "", delegate)
+        val cloud = com.lumena.android.agent.local.ToolRequest("ollama.generate", mapOf("model" to "minimax:cloud", "prompt" to "PRIVATE_TOOL_CANARY"))
+        assertFalse("NESTED_CLOUD_EGRESS", wrapped.execute(cloud).ok)
+        assertEquals(0, calls)
+        val local1 = com.lumena.android.collaboration.CollaborationRuntime.route("ollama", "http://127.0.0.1:11434", "local-one")
+        val local2 = com.lumena.android.collaboration.CollaborationRuntime.route("ollama", "http://127.0.0.1:11434", "local-two")
+        com.lumena.android.collaboration.CollaborationRuntime.attestLocal(c, local1, true)
+        com.lumena.android.collaboration.CollaborationRuntime.attestLocal(c, local2, true)
+        assertTrue(com.lumena.android.collaboration.CollaborationRuntime.localAttested(c, local1))
+        assertTrue(com.lumena.android.collaboration.CollaborationRuntime.localAttested(c, local2))
+        assertTrue(wrapped.execute(cloud.copy(args = cloud.args + ("model" to "local-one"))).ok)
+        assertEquals(1, calls)
+        com.lumena.android.collaboration.CollaborationRuntime.attestLocal(c, local1, false)
+        assertFalse(wrapped.execute(cloud.copy(args = cloud.args + ("model" to "local-one"))).ok)
+        assertEquals(1, calls)
+    }
     @Test fun rollingHistoryArchivesOnlyEvictedFactsInsteadOfWholeTaskCopies() {
         val c = RuntimeEnvironment.getApplication()
         val h1 = ProjectHandoffRecord("old", "m", TaskStatus.PARTIAL, "old handoff", false, 1)

@@ -59,9 +59,9 @@ jobs:
                       'WorkflowRunnerSemanticRecallTest': 2, 'CollaborationProtocolTest': 5,
                       'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 23,
                       'CollaborationStateCardTest': 15, 'WorkflowRunnerCollaborationAdapterTest': 4,
-                      'ProjectContextClientTest': 3, 'LocalSessionSnapshotCodecTest': 3,
+                      'ProjectContextClientTest': 4, 'LocalSessionSnapshotCodecTest': 3,
                       'ProjectWorkspacePolicyTest': 10, 'ProjectContinuationPolicyTest': 4,
-                      'ProjectFilePreconditionsTest': 3, 'ProjectWorkspaceHistoryTest': 5}
+                      'ProjectFilePreconditionsTest': 3, 'ProjectWorkspaceHistoryTest': 6}
           for name, minimum in expected.items():
               matches = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.' + name + '.xml'))
               assert len(matches) == 1, name

@@ -286,7 +286,7 @@ fun CompanionScreen(visible: Boolean = true, handoffVersion: Int = 0) {
         scope.launch {
             val result = try {
                 val client = com.lumena.android.collaboration.CollaborationRuntime.executor(context.applicationContext,
-                    collaborationScope, TermuxBridgeClient(bridgeUrl, token, context), deliveryId)
+                    collaborationScope, TermuxBridgeClient(bridgeUrl, token, context), deliveryId, transportUrl = bridgeUrl)
                 if (PythonRunApproval.applies(plan.request.tool)) {
                     // automatic python.run only comes from a task grant with allowPython.
                     CompanionPythonApproval.execute(

@@ -10,6 +10,10 @@ BASE = ROOT / "app/src/main/java/com/lumena/android/collaboration"
 REPORTS = ROOT / "app/build/test-results/testDebugUnitTest"
 OUT = ROOT / "app/build/collaboration-probe"
 MUTANTS = [
+    ("nested-private-inference", "ProjectToolPrivacy.kt",
+     "ownerAllowsRemote || (", "true || (",
+     "com.lumena.android.collaboration.ProjectContextClientTest.delegatedInferenceCannotUseACloudAliasOrRemoteBridgeWithoutConsent", "NESTED_CLOUD_EGRESS",
+     "com.lumena.android.collaboration.CollaborationReviewTest.embeddedWorksOfflineWithoutOllamaAttestation"),
     ("private-derived-history", "ProjectContextClient.kt",
      "if (privateProjects().all(ownerAllowsRemote)) null else", "if (true) null else",
      "com.lumena.android.collaboration.ProjectContextClientTest.derivedPrivateHistoryCannotLeaveOnRouteChangeOrDeselection", "PRIVATE_HISTORY_EGRESS",

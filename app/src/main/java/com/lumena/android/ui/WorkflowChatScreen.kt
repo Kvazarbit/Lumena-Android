@@ -994,7 +994,8 @@ fun WorkflowChatScreen(
         return WorkflowRunner(modelClient(), runnerBridge, cardModel,
             executionAdapter = { task, executor ->
                 com.lumena.android.collaboration.CollaborationRuntime.forTask(context.applicationContext,
-                    task, constitutionContributorModelId, bridgeUrl, bridgeToken, executor)
+                    task, constitutionContributorModelId, bridgeUrl, bridgeToken, executor,
+                    privateProjectIds = (privateProjectIds + listOfNotNull(workspaceProjectId)).distinct())
             },
             collaborationCardProvider = { task ->
                 com.lumena.android.collaboration.CollaborationRuntime.cardFor(context.applicationContext,

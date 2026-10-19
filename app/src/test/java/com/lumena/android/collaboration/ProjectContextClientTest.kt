@@ -7,6 +7,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ProjectContextClientTest {
+    @Test fun delegatedInferenceCannotUseACloudAliasOrRemoteBridgeWithoutConsent() {
+        assertTrue(ProjectToolPrivacy.inferenceAllowed("http://127.0.0.1:8765", "gemma:local", true, false))
+        assertFalse("NESTED_CLOUD_EGRESS", ProjectToolPrivacy.inferenceAllowed("http://127.0.0.1:8765", "minimax:cloud", true, false))
+        assertFalse(ProjectToolPrivacy.inferenceAllowed("https://remote.example", "gemma:local", true, false))
+        assertFalse(ProjectToolPrivacy.inferenceAllowed("http://127.0.0.1:8765", "gemma:local", false, false))
+        assertTrue(ProjectToolPrivacy.inferenceAllowed("https://remote.example", "minimax:cloud", false, true))
+    }
     @Test fun derivedPrivateHistoryCannotLeaveOnRouteChangeOrDeselection() = runBlocking {
         var sent = 0
         val delegate = object : ChatModelClient {
