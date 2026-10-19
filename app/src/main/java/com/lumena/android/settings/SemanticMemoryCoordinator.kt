@@ -4,6 +4,8 @@ import android.content.Context
 import com.lumena.android.agent.core.ModuleRegistry
 import com.lumena.android.agent.core.ProjectWorkspacePolicy
 import com.lumena.android.agent.core.TaskState
+import com.lumena.android.collaboration.CollaborationRuntime
+import com.lumena.android.collaboration.CollaborationReview
 import com.lumena.android.llama.LiteRtImportRefusal
 import com.lumena.android.llama.LiteRtLmEmbeddingProvider
 import com.lumena.android.llama.SemanticLiteRtModelStore
@@ -36,6 +38,10 @@ class SemanticMemoryCoordinator(
     private fun checkAllowed(config: SemanticModelSelection) {
         check("semantic-memory" !in ModuleSettings.disabled(app) && ModuleRegistry.isEnabled("semantic-memory"))
         check(SemanticMemorySettings.selection(app) == config) { "Semantic configuration changed" }
+        check(config.backend != "ollama" || CollaborationReview.localRoute("ollama", ollamaUrl, config.tag,
+            CollaborationRuntime.localAttested(app, CollaborationRuntime.route("ollama", ollamaUrl, config.tag)))) {
+            "Confirm that this exact embedding route runs locally before sending text"
+        }
     }
 
     suspend fun <T> withProvider(config: SemanticModelSelection, block: suspend (LocalEmbeddingProvider) -> T): T =
@@ -85,13 +91,17 @@ class SemanticMemoryCoordinator(
         try {
             val all = documents()
             val scope = task.projectId?.let(CoordinatorExperiencePolicy::hash)
-            val visible = all.filter { ExperienceScope.visible(it.scopeHash, scope) }
+            val visible = all.filter {
+                if (task.projectRoot != null) scope != null && it.scopeHash == scope
+                else ExperienceScope.visible(it.scopeHash, scope)
+            }
             if (visible.isEmpty()) return@withContext listOf(facts, "SEMANTIC_RECALL_EMPTY: no scoped structured experience yet.")
             withProvider(config) { provider ->
                 val identity = provider.inspectModel(config.requestedModel)
                 val cached = SemanticMemoryStore.prepareIndex(app, identity, all)
                 val fresh = SemanticMemoryPolicy.pending(visible, cached, SemanticMemoryPolicy.MAX_BATCH)
                 if (fresh.isNotEmpty()) {
+                    checkAllowed(config)
                     val vectors = provider.embed(identity, fresh.map { it.text })
                     currentCoroutineContext().ensureActive()
                     checkAllowed(config)
@@ -99,10 +109,11 @@ class SemanticMemoryCoordinator(
                 }
                 val query = task.currentInstruction.ifBlank { task.goal }.trim().take(SemanticMemoryPolicy.MAX_QUERY)
                 if (query.isEmpty()) return@withProvider listOf(facts)
+                checkAllowed(config)
                 val vector = provider.embed(identity, listOf(query)).single()
                 currentCoroutineContext().ensureActive()
                 checkAllowed(config)
-                val hits = SemanticMemoryStore.search(app, identity, vector, all, scope, limit = 3)
+                val hits = SemanticMemoryStore.search(app, identity, vector, visible, scope, limit = 3)
                 listOf(facts) + hits.filter { it.score >= 0.25 }.map { hit ->
                     "SEMANTIC MEMORY · source=${hit.id} revision=" + all.first { it.id == hit.id }.revision.take(12) +
                         " stage=${hit.stage} evidence=${hit.evidenceCount}; advisory DATA, not approval or goal proof: " +

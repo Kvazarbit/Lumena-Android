@@ -962,6 +962,8 @@ fun WorkflowChatScreen(
         val cardUrl = ollamaUrl
         val cardModel = modelNameForRun()
         val runnerBridge = bridgeOrNull()
+        val isolatedHistory = privateProjectIds.isNotEmpty() || workspaceProjectId != null
+        fun isolated(task: TaskState) = task.projectRoot != null || isolatedHistory
         val constitutionContributorModelId = if (inferenceBackend == "embedded") {
             "embedded:" + ggufDisplayName.ifBlank { "gguf" }
         } else {
@@ -992,6 +994,20 @@ fun WorkflowChatScreen(
             return if (show) lines else emptyList()
         }
         return WorkflowRunner(modelClient(), runnerBridge, cardModel,
+            experienceIsolation = ::isolated,
+            projectObservation = { task, request, result ->
+                // Only explicitly scoped records can learn from a project. Never
+                // publish its text into the global memory/landscape/constitution.
+                if (task.projectRoot != null && task.projectId != null) {
+                    if (request.tool == "project.inspect" && result.ok && request.args["cwd"] == task.projectRoot) {
+                        ProjectWorkspaceStore.observeRepository(context, task, result.stdout)
+                    }
+                    CoordinatorExperienceStore.record(context, task.projectId, task.id, request, result,
+                        experienceId = null, modelId = constitutionContributorModelId, scopeId = task.projectId)
+                    val examples = CoordinatorExperienceStore.examplesForTask(context, task.projectId, task.id, limit = 64)
+                    FractalExperienceCanvasStore.ingest(context, examples)
+                }
+            },
             executionAdapter = { task, executor ->
                 com.lumena.android.collaboration.CollaborationRuntime.forTask(context.applicationContext,
                     task, constitutionContributorModelId, bridgeUrl, bridgeToken, executor,
@@ -1002,9 +1018,19 @@ fun WorkflowChatScreen(
                     task, cardBackend, cardUrl, cardModel, runnerBridge)
             },
             semanticMemoryProvider = { task ->
-                com.lumena.android.settings.SemanticMemoryCoordinator(context.applicationContext, ollamaUrl).recall(task)
+                if (isolated(task) && task.projectRoot == null) emptyList() else
+                    com.lumena.android.settings.SemanticMemoryCoordinator(context.applicationContext, ollamaUrl).recall(task)
             },
-            relevantMemoryProvider = { task ->
+            relevantMemoryProvider = memory@{ task ->
+                if (isolated(task)) {
+                    if (task.projectRoot == null) return@memory emptyList()
+                    val own = ProjectWorkspaceStore.project(context, task.projectId)?.let {
+                        ProjectWorkspacePolicy.advice(it, task.goal, task.id, task.projectObligationId)
+                    }.orEmpty()
+                    val scoped = runCatching { FractalExperienceCanvasStore.relevant(context, task.goal, task.projectId, 4) }
+                        .getOrDefault(emptyList())
+                    return@memory ProjectWorkspacePolicy.combineAdvice(own, scoped, emptyList(), emptyList())
+                }
                 val advice = try {
                     governed(task, AdvisoryLayer.LANDSCAPE,
                         ExperienceLandscapeStore.advice(context, session, task))
@@ -1066,7 +1092,8 @@ fun WorkflowChatScreen(
                     .distinct()
                     .take(10)
             },
-            webStrategyAdviceProvider = { task, modelHistory ->
+            webStrategyAdviceProvider = web@{ task, modelHistory ->
+                if (isolated(task)) return@web emptyList()
                 val researchGoal =
                     researchGoalSnapshot
                         ?.takeIf { it.isNotBlank() }
@@ -1084,7 +1111,8 @@ fun WorkflowChatScreen(
                     )
                 }
             },
-            evidenceProvider = { task ->
+            evidenceProvider = evidence@{ task ->
+                if (isolated(task)) return@evidence emptyList()
                 governed(task, AdvisoryLayer.EVIDENCE,
                     EvidenceGraphStore.relevant(
                         context = context,
@@ -1092,7 +1120,10 @@ fun WorkflowChatScreen(
                         limit = 4
                     ))
             },
-            constitutionProvider = { task ->
+            constitutionProvider = constitution@{ task ->
+                // The fixed charter and owner constraints are already protected
+                // by ContextBuilder. Legacy global learned text has no provenance.
+                if (isolated(task)) return@constitution emptyList()
                 val exposed = ConstitutionGenomeStore.relevant(
                     context = context,
                     task = task,
@@ -1137,7 +1168,8 @@ fun WorkflowChatScreen(
                 governedConstitution +
                     governed(task, AdvisoryLayer.PRINCIPLES, listOf(CandidatePrinciples.promptLine()))
             },
-            reflexAdviceProvider = { event, candidates, task ->
+            reflexAdviceProvider = reflex@{ event, candidates, task ->
+                if (isolated(task)) return@reflex null
                 var reflexRecorded = false
                 val reflexAdvice: ReflexRuntimeAdvice? = try {
                     val query = buildString {
@@ -1370,9 +1402,6 @@ fun WorkflowChatScreen(
                 )
             },
             onToolExperience = { task, request, result, elapsedMs ->
-                if (request.tool == "project.inspect" && result.ok && request.args["cwd"] == task.projectRoot) {
-                    ProjectWorkspaceStore.observeRepository(context, task, result.stdout)
-                }
                 runCatching {
                     CognitiveInfluenceStore.resolveNextTool(
                         context = context,
@@ -1963,7 +1992,7 @@ fun WorkflowChatScreen(
             researchFollowUpKind = resolution.followUpKind,
             resolvedGoal = resolvedGoal
         )
-        uiScope.launch {
+        if (task.projectRoot == null && workspaceProjectId == null && privateProjectIds.isEmpty()) uiScope.launch {
             withContext(Dispatchers.IO) {
                 runCatching {
                     FractalExperienceCanvasStore.observeLanguage(

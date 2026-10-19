@@ -112,9 +112,9 @@ class CollaborationStateCardTest {
 
     @Test fun changedOwnerGoalInvalidatesReceiptEvenWhenCoveredBytesMatch() {
         val receipt = call("python.tests", mapOf("cwd" to "demo"), ToolResult(true, exitCode = 0))[1]
-        assertEquals("STALE_GOAL", CollaborationProtocol.freshness(receipt,
+        assertEquals("STALE_GOAL must invalidate old receipts", "STALE_GOAL", CollaborationProtocol.freshness(receipt,
             project.copy(goal = "A new owner goal"), build, SourceObservation(digestA)))
-        assertEquals("STALE_GOAL", CollaborationProtocol.freshness(receipt,
+        assertEquals("STALE_GOAL must invalidate old receipts", "STALE_GOAL", CollaborationProtocol.freshness(receipt,
             project.copy(constraints = listOf("Preserve the legacy API")), build, SourceObservation(digestA)))
     }
     @Test fun legacyGoalDigestStaysHistoricalAndBuildStatusIsIndependentOfCoveredSource() {

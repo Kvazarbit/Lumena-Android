@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
     <cloud-backup>
+        <!-- Project context travels only in an explicit owner-created copy. -->
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
         <exclude domain="database" path="lumena_collaboration_v1.db" />
         <exclude domain="database" path="lumena_collaboration_v1.db-journal" />
         <exclude domain="database" path="lumena_collaboration_v1.db-wal" />
@@ -8,6 +14,12 @@
         <exclude domain="sharedpref" path="lumena_collaboration.xml" />
     </cloud-backup>
     <device-transfer>
+        <!-- Project context travels only in an explicit owner-created copy. -->
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
         <exclude domain="database" path="lumena_collaboration_v1.db" />
         <exclude domain="database" path="lumena_collaboration_v1.db-journal" />
         <exclude domain="database" path="lumena_collaboration_v1.db-wal" />

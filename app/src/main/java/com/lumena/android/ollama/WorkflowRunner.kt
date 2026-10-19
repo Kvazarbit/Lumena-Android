@@ -120,7 +120,9 @@ class WorkflowRunner(
     private val onUnknownOutcome: (TaskState, ToolRequest, ToolResult) -> Unit = { _, _, _ -> },
     private val semanticMemoryProvider: suspend (TaskState) -> List<String> = { emptyList() },
     private val executionAdapter: (TaskState, ToolExecutor) -> ToolExecutor = { _, executor -> executor },
-    private val collaborationCardProvider: suspend (TaskState) -> String? = { null }
+    private val collaborationCardProvider: suspend (TaskState) -> String? = { null },
+    private val experienceIsolation: (TaskState) -> Boolean = { it.projectRoot != null },
+    private val projectObservation: (TaskState, ToolRequest, ToolResult) -> Unit = { _, _, _ -> }
 ) {
     suspend fun run(
         history: List<OllamaMessage>,
@@ -747,7 +749,7 @@ class WorkflowRunner(
 
                 is ControllerInstruction.Finish -> {
                     state = instruction.state
-                    if (state.task.status == TaskStatus.PARTIAL) {
+                    if (state.task.status == TaskStatus.PARTIAL && !experienceIsolation(state.task)) {
                         runCatching { onReflexPartial(state.task) }
                     }
                     publish(state, onState)
@@ -1101,6 +1103,7 @@ class WorkflowRunner(
         val event = transition.failureEvent ?: return baseState
         val candidates = transition.reflexCandidates ?: return baseState
 
+        if (experienceIsolation(baseState.task)) return baseState
         val advice = try {
             reflexAdviceProvider(
                 event,
@@ -1273,6 +1276,11 @@ class WorkflowRunner(
         causeProbeIntent: CauseProbeExecutionIntent? = null,
         prediction: OutcomePrediction? = null
     ) {
+        // Scoped history is kept even for UNKNOWN. Global learning must never
+        // strip the project provenance from tool output or owner instructions.
+        runCatching { projectObservation(task, request, result) }
+            .onFailure { onProgress("PROJECT OBSERVATION NOT SAVED · " + it::class.java.simpleName) }
+        if (experienceIsolation(task)) return
         if (result.outcomeUnknown) {
             try {
                 onUnknownOutcome(task, request, result)

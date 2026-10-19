@@ -10,6 +10,43 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WorkflowRunnerCollaborationAdapterTest {
+    private suspend fun observeLearning(root: String?, derivedPrivate: Boolean = false, unknown: Boolean = false): Pair<List<String>, List<String>> {
+        val scoped = mutableListOf<String>()
+        val global = mutableListOf<String>()
+        var turns = 0
+        val model = object : ChatModelClient {
+            override suspend fun chat(model: String, messages: List<OllamaMessage>) = Result.success(
+                if (turns++ == 0) """{"tool":"file.read","args":{"path":"notes.txt"},"reason":"read"}"""
+                else """{"partial":true,"summary":"read fixture"}""")
+        }
+        val bridge = object : ToolExecutor {
+            override suspend fun execute(toolRequest: ToolRequest) = if (toolRequest.tool == "project.inspect")
+                ToolResult(true, toolRequest.tool, 0, """{"schema":"lumena.project.v1","cwd":"demo","git":{},"source_digest":"${"a".repeat(64)}","files_count":1,"truncated":false}""")
+            else ToolResult(!unknown, toolRequest.tool, stdout = "PRIVATE_LEARNING_CANARY", outcomeUnknown = unknown)
+        }
+        val task = TaskState("learning", if (root == null) null else "p", "Прочитай notes.txt", projectRoot = root)
+        WorkflowRunner(model, bridge, "fixture",
+            experienceIsolation = { it.projectRoot != null || derivedPrivate },
+            projectObservation = { _, _, result -> scoped += result.stdout },
+            onToolExperience = { _, _, result, _ -> global += result.stdout },
+            onActionOutcome = { _, _, result, _, _ -> global += result.stdout },
+            onUnknownOutcome = { _, _, result -> global += result.stdout },
+            onCauseProbeExperience = { _, _, result, _, _ -> global += result.stdout })
+            .run(listOf(OllamaMessage("user", task.goal)), task)
+        return scoped to global
+    }
+    @Test fun isolatedProjectObservationNeverPublishesIntoGlobalLearning() = runBlocking {
+        for ((root, derived, unknown) in listOf(Triple("demo", false, false), Triple("demo", false, true), Triple(null, true, false))) {
+            val (scoped, global) = observeLearning(root, derived, unknown)
+            assertTrue("Scoped observation was lost", scoped.contains("PRIVATE_LEARNING_CANARY"))
+            assertTrue("PRIVATE_LEARNING_EGRESS: $global", global.isEmpty())
+        }
+    }
+    @Test fun ordinaryUnscopedChatStillRecordsKnownExperience() = runBlocking {
+        val (scoped, global) = observeLearning(null)
+        assertTrue(scoped.contains("PRIVATE_LEARNING_CANARY"))
+        assertTrue(global.contains("PRIVATE_LEARNING_CANARY"))
+    }
     @Test fun continuationCardRefreshesAfterAnObservedTool() = runBlocking {
         val revisions = mutableListOf<Int>()
         val seen = mutableListOf<String>()

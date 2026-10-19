@@ -10,6 +10,10 @@ BASE = ROOT / "app/src/main/java/com/lumena/android/collaboration"
 REPORTS = ROOT / "app/build/test-results/testDebugUnitTest"
 OUT = ROOT / "app/build/collaboration-probe"
 MUTANTS = [
+    ("private-project-learning", "../ollama/WorkflowRunner.kt",
+     "if (experienceIsolation(task)) return", "if (false) return",
+     "com.lumena.android.ollama.WorkflowRunnerCollaborationAdapterTest.isolatedProjectObservationNeverPublishesIntoGlobalLearning", "PRIVATE_LEARNING_EGRESS",
+     "com.lumena.android.ollama.WorkflowRunnerCollaborationAdapterTest.ordinaryUnscopedChatStillRecordsKnownExperience"),
     ("nested-private-inference", "ProjectToolPrivacy.kt",
      "ownerAllowsRemote || (", "true || (",
      "com.lumena.android.collaboration.ProjectContextClientTest.delegatedInferenceCannotUseACloudAliasOrRemoteBridgeWithoutConsent", "NESTED_CLOUD_EGRESS",

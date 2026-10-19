@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import com.lumena.android.agent.core.ModuleRegistry
 import com.lumena.android.agent.core.TaskState
+import com.lumena.android.collaboration.CollaborationRuntime
 import com.lumena.android.ollama.*
 import com.lumena.android.settings.*
 import kotlinx.coroutines.CancellationException
@@ -39,6 +40,8 @@ class SemanticMemoryCoordinatorTest {
         ModuleSettings.setEnabled(context, "semantic-memory", true)
         SemanticMemorySettings.setBackend(context, "ollama")
         SemanticMemorySettings.setChatEnabled(context, true)
+        CollaborationRuntime.attestLocal(context, CollaborationRuntime.route("ollama", "http://127.0.0.1:11434",
+            SemanticMemorySettings.selection(context).tag), true)
     }
     @After fun cleanup() { ModuleRegistry.setDisabled(emptySet()) }
 
@@ -70,6 +73,33 @@ class SemanticMemoryCoordinatorTest {
         assertFalse(lines.any { it.contains("source=foreign") })
         assertFalse(provider.inputs.flatten().contains(foreign.text))
         assertTrue(provider.closed)
+    }
+    @Test fun projectRecallNeverEmbedsOrReturnsUnscopedLegacyText() = runBlocking {
+        val current = doc("current", CoordinatorExperiencePolicy.hash("project-a"))
+        val global = doc("PRIVATE_GLOBAL_CANARY")
+        val foreign = doc("PRIVATE_FOREIGN_CANARY", CoordinatorExperiencePolicy.hash("project-b"))
+        val provider = Provider(identity)
+        val lines = SemanticMemoryCoordinator(context, "http://127.0.0.1:11434", { provider },
+            { listOf(global, current, foreign) }).recall(TaskState("t", "project-a", "Remember experience", projectRoot = "demo"))
+        assertTrue(lines.any { it.contains("source=current") })
+        assertFalse("SEMANTIC_SCOPE_EGRESS", lines.any { it.contains("CANARY") })
+        assertFalse("SEMANTIC_SCOPE_EGRESS", provider.inputs.flatten().any { it.contains("CANARY") })
+    }
+    @Test fun revokedEmbeddingRouteCannotOpenProviderOrSendText() = runBlocking {
+        val config = SemanticMemorySettings.selection(context)
+        CollaborationRuntime.attestLocal(context, CollaborationRuntime.route("ollama", "http://127.0.0.1:11434", config.tag), false)
+        var opened = 0
+        val coordinator = SemanticMemoryCoordinator(context, "http://127.0.0.1:11434", {
+            opened++; Provider(identity)
+        }, { listOf(doc("a")) })
+        try {
+            coordinator.index(config) { _, _ -> }
+            fail("Unattested indexing was allowed")
+        } catch (_: IllegalStateException) { }
+        val lines = coordinator.recall(TaskState("t", null, "PRIVATE_QUERY_CANARY"))
+        assertEquals("EMBEDDING_ROUTE_EGRESS", 0, opened)
+        assertTrue(lines.any { it.contains("SEMANTIC_RECALL_UNAVAILABLE") })
+        assertFalse(lines.any { it.contains("PRIVATE_QUERY_CANARY") })
     }
     @Test fun disabledChatRecallDoesNotOpenProvider() = runBlocking {
         SemanticMemorySettings.setChatEnabled(context, false)

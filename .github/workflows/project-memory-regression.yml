@@ -55,10 +55,10 @@ jobs:
           from pathlib import Path
           import xml.etree.ElementTree as E
           expected = {'PhoneReport2296DiagnosticTest': 11, 'EmbeddingLifecycleDiagnosticTest': 5,
-                      'SemanticMemoryCoordinatorTest': 5, 'OwnerActionTextTest': 5,
+                      'SemanticMemoryCoordinatorTest': 7, 'OwnerActionTextTest': 5,
                       'WorkflowRunnerSemanticRecallTest': 2, 'CollaborationProtocolTest': 5,
                       'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 23,
-                      'CollaborationStateCardTest': 15, 'WorkflowRunnerCollaborationAdapterTest': 4,
+                      'CollaborationStateCardTest': 15, 'WorkflowRunnerCollaborationAdapterTest': 6,
                       'ProjectContextClientTest': 4, 'LocalSessionSnapshotCodecTest': 3,
                       'ProjectWorkspacePolicyTest': 10, 'ProjectContinuationPolicyTest': 4,
                       'ProjectFilePreconditionsTest': 3, 'ProjectWorkspaceHistoryTest': 6}
@@ -94,9 +94,11 @@ jobs:
           import xml.etree.ElementTree as E
           ns = '{http://schemas.android.com/apk/res/android}'
           app = E.parse('app/src/main/AndroidManifest.xml').getroot().find('application')
+          assert app.get(ns+'allowBackup') == 'false'
           assert app.get(ns+'fullBackupContent') == '@xml/backup_rules'
           assert app.get(ns+'dataExtractionRules') == '@xml/data_extraction_rules'
           expected = {('database', 'lumena_collaboration_v1.db'+s) for s in ('', '-journal', '-wal', '-shm')} | {('sharedpref', 'lumena_collaboration.xml')}
+          expected |= {(d, '.') for d in ('root', 'file', 'database', 'sharedpref', 'external')}
           old = E.parse('app/src/main/res/xml/backup_rules.xml').getroot()
           new = E.parse('app/src/main/res/xml/data_extraction_rules.xml').getroot()
           for node in (old, new.find('cloud-backup'), new.find('device-transfer')):

@@ -18,6 +18,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Checkbox
+import com.lumena.android.collaboration.CollaborationRuntime
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
@@ -68,7 +70,9 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
     var tag by remember { mutableStateOf(SemanticMemorySettings.selection(context).tag) }
     var backend by remember { mutableStateOf(SemanticMemorySettings.selection(context).backend) }
     var chatMemory by remember { mutableStateOf(SemanticMemorySettings.selection(context).chatEnabled) }
-    val coordinator = remember { SemanticMemoryCoordinator(context.applicationContext, ollamaUrl) }
+    val coordinator = remember(ollamaUrl) { SemanticMemoryCoordinator(context.applicationContext, ollamaUrl) }
+    val embeddingRoute = CollaborationRuntime.route("ollama", ollamaUrl, tag.trim())
+    var embeddingLocal by remember(embeddingRoute) { mutableStateOf(CollaborationRuntime.localAttested(context, embeddingRoute)) }
     val workManager = remember { WorkManager.getInstance(context.applicationContext) }
     val indexJobs by remember { workManager.getWorkInfosForUniqueWorkFlow(SemanticIndexWorker.NAME) }
         .collectAsState(initial = emptyList())
@@ -218,6 +222,13 @@ fun SemanticMemoryPanel(ollamaUrl: String) {
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = embeddingLocal, enabled = enabled && !busy && !indexing, onCheckedChange = {
+                        CollaborationRuntime.attestLocal(context, embeddingRoute, it)
+                        embeddingLocal = it
+                    })
+                    Text("Підтверджую: ця Embedding-модель працює локально, без хмарного проксі.")
+                }
             } else {
                 Text(
                     "LiteRT-LM 0.18.0 · CPU, 2 потоки · Android без Ollama та Bridge. " +

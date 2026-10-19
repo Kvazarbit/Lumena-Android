@@ -79,9 +79,8 @@ class WorkflowRunnerProjectWorkspaceTest {
         val learned = mutableListOf<String>()
         val runner = WorkflowRunner(model, bridge, "fixture",
             onToolExperience = { _, request, _, _ -> learned += request.tool },
-            onUnknownOutcome = { task, request, result ->
-                assertTrue(result.outcomeUnknown)
-                ledger = FractalEvidenceLedgerPolicy.captureEvent(ledger,
+            projectObservation = { task, request, result ->
+                if (result.outcomeUnknown) ledger = FractalEvidenceLedgerPolicy.captureEvent(ledger,
                     CoordinatorEpisodeEvent("unknown", task.projectId!!, task.id, request.tool, request.args["path"].orEmpty(),
                         false, null, 1000, 0.0, outcomeKnown = false))
             })
