@@ -685,6 +685,7 @@ fun WorkflowChatScreen(
         currentTask = null
         history = listOf(systemMessage)
         privateProjectIds = emptyList()
+        workThreads = WorkThreadState()
         contextUsage = null
         researchThread = null
         codeGoal = null
@@ -933,7 +934,9 @@ fun WorkflowChatScreen(
                 context.applicationContext, com.lumena.android.collaboration.CollaborationRuntime.route(backend, url, model)) },
             privateProjects = { (privateProjectIds + listOfNotNull(workspaceProjectId,
                 currentTask?.takeIf { it.projectRoot != null }?.projectId)).toSet() },
-            ownerAllowsRemote = { id -> ProjectWorkspaceStore.project(context.applicationContext, id)?.allowRemoteContext == true })
+            ownerAllowsRemote = { id -> ProjectWorkspaceStore.project(context.applicationContext, id)?.let {
+                com.lumena.android.collaboration.CollaborationRuntime.remoteAllowed(context.applicationContext, it)
+            } == true })
     }
 
     fun currentModelId(): String =
@@ -2293,6 +2296,7 @@ fun WorkflowChatScreen(
                     try {
                         workspaceState = withContext(Dispatchers.IO) { ProjectWorkspaceStore.update(context) { state ->
                             val p = state.projects.first { it.id == projectId }
+                            com.lumena.android.collaboration.CollaborationRuntime.allowRemoteFromOwner(context.applicationContext, p, allowed)
                             ProjectWorkspacePolicy.put(state, p.copy(allowRemoteContext = allowed, updatedAt = System.currentTimeMillis()))
                         } }
                         workspaceError = null

@@ -28,6 +28,12 @@ object CollaborationRuntime {
         if (route.isNotBlank()) check(prefs(c).edit().putString("local_route", route.takeIf { attested }).commit())
     }
     fun route(backend: String, url: String, model: String): String = "$backend|$url|$model"
+    /** Consent stays on this installation; a portable project JSON cannot authorize egress. */
+    fun remoteAllowed(c: Context, project: WorkspaceProject): Boolean = project.allowRemoteContext &&
+        prefs(c).getBoolean("remote_" + CollaborationProtocol.goalRevision(project), false)
+    fun allowRemoteFromOwner(c: Context, project: WorkspaceProject, allowed: Boolean) {
+        check(prefs(c).edit().putBoolean("remote_" + CollaborationProtocol.goalRevision(project), allowed).commit())
+    }
 
     /** Receipt card for the acting model; null for cloud routes, other projects or an empty journal. Never creates the journal. */
     suspend fun cardFor(c: Context, task: TaskState, backend: String, url: String, model: String, bridge: ToolExecutor?): String? =

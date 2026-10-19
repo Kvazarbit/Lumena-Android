@@ -6,6 +6,17 @@ import org.junit.Test
 
 class ProjectContinuationPolicyTest {
     private val p = WorkspaceProject("p", "Demo", "demo", "Maintain the aquarium", updatedAt = 1)
+    @Test fun returningToAnOldGoalStillCreatesANewOwnerEpoch() {
+        val a = ProjectWorkspaceState(projects = listOf(p))
+        val b = ProjectWorkspacePolicy.advanceGoalEpochs(a, a.copy(projects = listOf(p.copy(goal = "Different goal"))))
+        val again = ProjectWorkspacePolicy.advanceGoalEpochs(b, a)
+        assertEquals(2L, b.projects.single().goalEpoch)
+        assertEquals(3L, again.projects.single().goalEpoch)
+        assertNotEquals(com.lumena.android.collaboration.CollaborationProtocol.goalRevision(p),
+            com.lumena.android.collaboration.CollaborationProtocol.goalRevision(again.projects.single()))
+        assertEquals(3L, ProjectWorkspacePolicy.advanceGoalEpochs(again,
+            again.copy(projects = again.projects.map { it.copy(updatedAt = 99) })).projects.single().goalEpoch)
+    }
     @Test fun causalDecisionAndRejectedAlternativeSurviveModelChangeAndCodecRestart() {
         val decision = ProjectDecisionRecord("d", "aquarium state", "Use SQLite", "Transactions preserve state", listOf("Global mutable counters"), at = 2)
         val initial = p.copy(decisions = listOf(decision))

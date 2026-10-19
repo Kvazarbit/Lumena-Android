@@ -10,10 +10,20 @@ object ProjectFilePreconditions {
         return when {
             request.tool in setOf("python.run", "python.tests") -> emptyMap()
             request.tool in setOf("file.write", "file.patch") -> hashes - path
-            request.tool == "file.read" && result.ok && result.sourceComplete &&
+            request.tool == "file.read" && result.ok &&
                 result.sourceSha256?.matches(Regex("[a-f0-9]{64}")) == true ->
                 (hashes - path).entries.toList().takeLast(47).associate { it.key to it.value } + (path to requireNotNull(result.sourceSha256))
             else -> hashes
+        }
+    }
+    fun completeReads(paths: Set<String>, request: ToolRequest, result: ToolResult): Set<String> {
+        val path = request.args["path"].orEmpty()
+        return when (request.tool) {
+            "python.run", "python.tests" -> emptySet()
+            "file.write", "file.patch" -> paths - path
+            "file.read" -> if (result.ok && result.sourceComplete && result.sourceSha256?.matches(Regex("[a-f0-9]{64}")) == true)
+                ((paths - path).toList().takeLast(47) + path).toSet() else paths - path
+            else -> paths
         }
     }
     fun wrap(task: TaskState, journal: ToolExecutor, transport: ToolExecutor): ToolExecutor {
@@ -23,7 +33,9 @@ object ProjectFilePreconditions {
                 if (toolRequest.tool !in setOf("file.write", "file.patch")) return journal.execute(toolRequest)
                 val path = toolRequest.args["path"].orEmpty()
                 val expected = task.kernel.observedFileHashes[path] ?: "ABSENT"
-                if (toolRequest.tool == "file.patch" && expected == "ABSENT") return hold("Спочатку повністю прочитай файл для patch.")
+                if (toolRequest.tool == "file.patch" && expected == "ABSENT") return hold("Спочатку прочитай потрібну частину файла для patch.")
+                if (toolRequest.tool == "file.write" && expected != "ABSENT" && path !in task.kernel.completeFileReads)
+                    return hold("Для повного перезапису прочитай файл повністю або використай точковий patch.")
                 val health = try { transport.execute(ToolRequest("health")) }
                     catch (cancelled: CancellationException) { throw cancelled }
                     catch (_: Exception) { return hold("Не вдалося перевірити підтримку безпечного запису bridge.") }

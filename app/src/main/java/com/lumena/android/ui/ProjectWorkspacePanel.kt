@@ -69,7 +69,8 @@ fun ProjectWorkspacePanel(
                 CollaborationPanel(p, onReviewReceipts, reviewIdentity)
                 Text(p.goal)
                 Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Checkbox(p.allowRemoteContext, { onRemoteContext(p.id, it) })
+                    Checkbox(com.lumena.android.collaboration.CollaborationRuntime.remoteAllowed(
+                        androidx.compose.ui.platform.LocalContext.current.applicationContext, p), { onRemoteContext(p.id, it) })
                     Text("Дозволяю передавати контекст цього проєкту зовнішнім моделям: історію, рішення та результати.")
                 }
                 if (!p.allowRemoteContext) Text("Контекст локальний. Для Ollama підтвердь локальний маршрут у спільному журналі.", style = MaterialTheme.typography.bodySmall)

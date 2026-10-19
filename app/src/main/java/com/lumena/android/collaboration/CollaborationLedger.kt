@@ -110,7 +110,12 @@ class CollaborationLedger(context: Context) {
     fun exportArchive(output: java.io.OutputStream) = synchronized(leaseMonitor) {
         require(active.isEmpty()) { "Stop active operations before exporting" }
         withHelper { h -> read(h.readableDatabase, archiveIndex().tail) }
-        archive.export(output)
+        synchronized(com.lumena.android.settings.StateVaultLock.monitor) {
+            val projects = com.lumena.android.settings.ProjectWorkspaceCodec.encode(
+                com.lumena.android.settings.ProjectWorkspaceStore.load(appContext))
+            val history = com.lumena.android.settings.ProjectWorkspaceHistoryArchive.validatedFile(appContext)
+            archive.export(output, projects, history)
+        }
     }
 
     /** Move a fully closed segment. Pending effects stay in the active journal until owner inspection. */

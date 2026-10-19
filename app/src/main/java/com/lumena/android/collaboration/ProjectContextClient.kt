@@ -13,6 +13,7 @@ class ProjectContextClient(
     private val privateProjects: () -> Set<String>,
     private val ownerAllowsRemote: (String) -> Boolean
 ) : ChatModelClient {
+    val contextTelemetry get() = delegate as? com.lumena.android.ollama.ModelContextTelemetrySource
     private fun refusal(model: String): String? {
         return try {
             if (CollaborationReview.localRoute(backend, url, model, localAttested(model))) return null

@@ -20,7 +20,8 @@ data class ContextKernelState(
     val pendingVerification: Set<String> = emptySet(),
     val taint: TaskTaint = TaskTaint(),
     /** Complete reads used only to narrow later writes with CAS; never permissions. */
-    val observedFileHashes: Map<String, String> = emptyMap()
+    val observedFileHashes: Map<String, String> = emptyMap(),
+    val completeFileReads: Set<String> = emptySet()
 )
 
 /** A bounded task-local evidence ledger. Model prose never writes this state. */

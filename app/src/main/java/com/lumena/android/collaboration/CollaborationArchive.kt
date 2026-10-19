@@ -109,7 +109,7 @@ internal class CollaborationArchive(context: Context) {
         afterPrepare()
         recover()
     }
-    fun export(output: java.io.OutputStream) {
+    fun export(output: java.io.OutputStream, projects: String, history: File?) {
         recover()
         val state = read()
         java.util.zip.ZipOutputStream(output).use { zip ->
@@ -122,6 +122,9 @@ internal class CollaborationArchive(context: Context) {
             add(manifest.baseFile, "archive/manifest.json")
             state.segments.forEach { add(File(directory, it.name), "archive/" + it.name) }
             add(database, "active/" + CollaborationLedger.DATABASE)
+            zip.putNextEntry(java.util.zip.ZipEntry("workspace/lumena_projects_v1.json"))
+            zip.write(projects.toByteArray(Charsets.UTF_8)); zip.closeEntry()
+            history?.let { add(it, "workspace/" + it.name) }
             zip.putNextEntry(java.util.zip.ZipEntry("READ-ME.txt"))
             zip.write(("Private historical Lumena receipts. Export is not approval, current goal proof, or imported app-observed provenance. " +
                 "No automatic restore/import. Keep this file private.\n").toByteArray(Charsets.UTF_8))

@@ -8,10 +8,12 @@ import org.junit.Test
 
 class ProjectFilePreconditionsTest {
     private val task = TaskState("t", "p", "Maintain demo", projectRoot = "demo")
-    @Test fun onlyCompleteObservedReadsBindTheHashAndWritesInvalidateIt() {
+    @Test fun partialReadBindsPatchHashWhileFullOverwriteRequiresCompleteRead() {
         val read = ToolRequest("file.read", mapOf("path" to "demo/a.py"))
         val r = ToolResult(true, sourceSha256 = "a".repeat(64), sourceComplete = true)
-        assertTrue(ProjectFilePreconditions.observe(emptyMap(), read, r.copy(sourceComplete = false)).isEmpty())
+        assertEquals("a".repeat(64), ProjectFilePreconditions.observe(emptyMap(), read, r.copy(sourceComplete = false))["demo/a.py"])
+        assertTrue(ProjectFilePreconditions.completeReads(emptySet(), read, r.copy(sourceComplete = false)).isEmpty())
+        assertEquals(setOf("demo/a.py"), ProjectFilePreconditions.completeReads(emptySet(), read, r))
         val hashes = ProjectFilePreconditions.observe(emptyMap(), read, r)
         assertEquals("a".repeat(64), hashes["demo/a.py"])
         assertTrue(ProjectFilePreconditions.observe(hashes, ToolRequest("file.patch", read.args), r).isEmpty())
@@ -28,7 +30,7 @@ class ProjectFilePreconditionsTest {
         val write = ToolRequest("file.write", mapOf("path" to "demo/a.py", "content" to "new", "expected_sha256" to "forged"))
         assertTrue(ProjectFilePreconditions.wrap(task, delegate, delegate).execute(write).ok)
         assertEquals("ABSENT", sent.last().args["expected_sha256"])
-        val observed = task.copy(kernel = task.kernel.copy(observedFileHashes = mapOf("demo/a.py" to "a".repeat(64))))
+        val observed = task.copy(kernel = task.kernel.copy(observedFileHashes = mapOf("demo/a.py" to "a".repeat(64)), completeFileReads = setOf("demo/a.py")))
         ProjectFilePreconditions.wrap(observed, delegate, delegate).execute(write)
         assertEquals("a".repeat(64), sent.last().args["expected_sha256"])
         val count = sent.size

@@ -40,6 +40,16 @@ class FileReadRangeTest(unittest.TestCase):
         self.assertEqual('old', target.read_text(encoding='utf-8'))
         self.assertFalse(list(self.workspace.glob('.lumena-write-*')))
 
+    def test_oversized_and_invalid_utf8_reads_cannot_claim_complete_source(self):
+        target = self.workspace / 'large.txt'
+        target.write_bytes(b'x' * (2 * 1024 * 1024 + 1))
+        result = self.b.execute_tool('file.read', {'path': 'large.txt'})
+        self.assertFalse(result['sourceComplete'])
+        self.assertIsNone(result['sourceSha256'])
+        self.assertLess(len(result['stdout']), 200_000)
+        target.write_bytes(b'\xff\xfe')
+        self.assertFalse(self.b.execute_tool('file.read', {'path': 'large.txt'})['sourceComplete'])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="lumena-file-read-")
         self.root = Path(self.temp.name)

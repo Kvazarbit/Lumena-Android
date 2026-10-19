@@ -68,7 +68,7 @@ fun CollaborationPanel(project: WorkspaceProject, review: (suspend (String, Bool
                 finally { busy = false }
             }
         }) { Text("Архівувати завершене") }
-        OutlinedButton(enabled = !busy, onClick = { export.launch("Lumena-private-receipts.zip") }) { Text("Зберегти копію") }
+        OutlinedButton(enabled = !busy, onClick = { export.launch("Lumena-private-projects.zip") }) { Text("Копія всіх проєктів") }
     }
     OutlinedButton(onClick = { visible = !visible; refresh() }) { Text(if (visible) "Згорнути квитанції" else "Переглянути квитанції") }
     if (status.isNotBlank()) Text(status, color = MaterialTheme.colorScheme.error)

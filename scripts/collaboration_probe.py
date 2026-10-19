@@ -10,6 +10,18 @@ BASE = ROOT / "app/src/main/java/com/lumena/android/collaboration"
 REPORTS = ROOT / "app/build/test-results/testDebugUnitTest"
 OUT = ROOT / "app/build/collaboration-probe"
 MUTANTS = [
+    ("private-derived-history", "ProjectContextClient.kt",
+     "if (privateProjects().all(ownerAllowsRemote)) null else", "if (true) null else",
+     "com.lumena.android.collaboration.ProjectContextClientTest.derivedPrivateHistoryCannotLeaveOnRouteChangeOrDeselection", "PRIVATE_HISTORY_EGRESS",
+     "com.lumena.android.collaboration.CollaborationReviewTest.embeddedWorksOfflineWithoutOllamaAttestation"),
+    ("stale-owner-goal", "CollaborationProtocol.kt",
+     'e.scope.goalRevision != goalRevision(project) -> "STALE_GOAL"', 'false -> "STALE_GOAL"',
+     "com.lumena.android.collaboration.CollaborationStateCardTest.changedOwnerGoalInvalidatesReceiptEvenWhenCoveredBytesMatch", "STALE_GOAL",
+     "com.lumena.android.collaboration.CollaborationProtocolTest.sameProjectNameCannotBindOtherRootAndRevisionUsesUnambiguousFraming"),
+    ("archived-delivery-replay", "CollaborationLedger.kt",
+     'require(key !in old.deliveries)', 'require(true)',
+     "com.lumena.android.diagnostics.CollaborationLedgerTest.archivedReceiptsKeepChainAndDeliveryIdentityAcrossColdOpen", "ARCHIVED_REPLAY_EXECUTED",
+     "com.lumena.android.diagnostics.CollaborationLedgerTest.disabledLayerKeepsOriginalSingleModelTransportAndCreatesNoDatabase"),
     ("companion-content-is-not-delivery", "../companion/CompanionTaskGrantStore.kt",
      "return deliveryId", "return fingerprint",
      "com.lumena.android.diagnostics.CollaborationLedgerTest.legitimateCompanionRetestHasNewDurableDeliveryButOldDeliveryStillCannotReplay", "NEW_EXECUTION_CONFLATED_WITH_REDELIVERY",

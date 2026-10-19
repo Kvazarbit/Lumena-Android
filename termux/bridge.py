@@ -4034,7 +4034,16 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         path = safe_read_path(str(args.get("path", "")), must_exist=True)
         if not path.is_file():
             raise ValueError("Requested path is not a file")
-        source_bytes = path.read_bytes()
+        with path.open('rb') as stream:
+            source_bytes = stream.read(2 * 1024 * 1024 + 1)
+        source_bounded = len(source_bytes) > 2 * 1024 * 1024
+        if source_bounded:
+            source_bytes = source_bytes[:2 * 1024 * 1024]
+        try:
+            source_bytes.decode('utf-8', errors='strict')
+            source_valid = True
+        except UnicodeError:
+            source_valid = False
         data = source_bytes.decode("utf-8", errors="replace").replace('\r\n', '\n').replace('\r', '\n')
         full_data = data
 
@@ -4057,8 +4066,8 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
             data = "".join(lines[start_line - 1:selected_end]) if start_line <= len(lines) else ""
 
         return {"ok": True, "exitCode": 0, "stdout": clamp(data), "stderr": "", "error": None,
-                "sourceSha256": hashlib.sha256(source_bytes).hexdigest(),
-                "sourceComplete": start_raw is None and end_raw is None and clamp(data) == full_data}
+                "sourceSha256": None if source_bounded else hashlib.sha256(source_bytes).hexdigest(),
+                "sourceComplete": not source_bounded and source_valid and start_raw is None and end_raw is None and clamp(data) == full_data}
 
     if tool == "project.create":
         name = str(args.get("name", "")).strip()

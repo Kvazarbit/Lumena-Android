@@ -60,8 +60,8 @@ jobs:
                       'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 22,
                       'CollaborationStateCardTest': 14, 'WorkflowRunnerCollaborationAdapterTest': 4,
                       'ProjectContextClientTest': 3, 'LocalSessionSnapshotCodecTest': 3,
-                      'ProjectWorkspacePolicyTest': 10, 'ProjectContinuationPolicyTest': 2,
-                      'ProjectFilePreconditionsTest': 3}
+                      'ProjectWorkspacePolicyTest': 10, 'ProjectContinuationPolicyTest': 3,
+                      'ProjectFilePreconditionsTest': 3, 'ProjectWorkspaceHistoryTest': 3}
           for name, minimum in expected.items():
               matches = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.' + name + '.xml'))
               assert len(matches) == 1, name
@@ -77,8 +77,16 @@ jobs:
           path: app/build/test-results/testDebugUnitTest/TEST-*.xml
           if-no-files-found: error
       - name: Kill collaboration semantic mutants with exact-case oracles
-        if: github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card'
+        if: github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card' || github.ref_name == 'codex/daily-context-os-v1'
         run: python scripts/collaboration_probe.py
+      - name: Kill file-CAS semantic mutant with an unrelated passing control
+        run: python scripts/daily_context_file_probe.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: daily-context-file-probe
+          path: app/build/daily-context-file-probe/
+          if-no-files-found: error
       - name: Check private journal is excluded from Android backup and transfer
         run: |
           python - <<'PY'
@@ -96,7 +104,7 @@ jobs:
           print('VERIFIED backup privacy boundaries')
           PY
       - uses: actions/upload-artifact@v4
-        if: always() && github.ref_name == 'codex/verified-collaboration-handoff'
+        if: always() && (github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card' || github.ref_name == 'codex/daily-context-os-v1')
         with:
           name: collaboration-semantic-probe
           path: app/build/collaboration-probe/

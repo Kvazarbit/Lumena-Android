@@ -947,6 +947,7 @@ class WorkflowRunner(
         onContextUsage: (ModelContextUsage) -> Unit
     ): Result<String> {
         val telemetry = modelClient as? ModelContextTelemetrySource
+            ?: (modelClient as? com.lumena.android.collaboration.ProjectContextClient)?.contextTelemetry
         telemetry?.estimateContextUsage(messages)?.let(onContextUsage)
 
         val result = modelClient.chatStreaming(model, messages) { partial ->
@@ -1254,7 +1255,8 @@ class WorkflowRunner(
             step = state.task.step
         )
         val hashes = com.lumena.android.agent.local.ProjectFilePreconditions.observe(kernel.observedFileHashes, request, result)
-        val updated = kernel.copy(taint = taint, observedFileHashes = hashes)
+        val complete = com.lumena.android.agent.local.ProjectFilePreconditions.completeReads(kernel.completeFileReads, request, result)
+        val updated = kernel.copy(taint = taint, observedFileHashes = hashes, completeFileReads = complete)
         return if (updated == kernel) state else state.copy(task = state.task.copy(kernel = updated))
     }
 

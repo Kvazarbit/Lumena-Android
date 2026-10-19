@@ -17,7 +17,7 @@ class ProjectContextClientTest {
         val history = listOf(OllamaMessage("assistant", "DERIVED_PRIVATE_CANARY"))
         val client = ProjectContextClient(delegate, "ollama", "https://remote.example", { false },
             { setOf("old-project") }, { false })
-        assertTrue(client.chat("remote", history).isFailure)
+        assertTrue("PRIVATE_HISTORY_EGRESS", client.chat("remote", history).isFailure)
         var streamed = false
         assertTrue(client.chatStreaming("remote", history) { streamed = true }.isFailure)
         assertEquals("PRIVATE_HISTORY_EGRESS", 0, sent)

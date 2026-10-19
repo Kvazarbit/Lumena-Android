@@ -45,7 +45,7 @@ object CollaborationProtocol {
         .digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
     fun goalRevision(p: WorkspaceProject): String = hash(
         // Length framing prevents ambiguous separators in owner text.
-        listOf(p.id, p.root, p.goal, p.verification.name).plus(p.constraints)
+        listOf(p.id, p.root, p.goal, p.verification.name, p.goalEpoch.toString()).plus(p.constraints)
             .joinToString("") { "${it.length}:$it" })
     fun requestDigest(request: ToolRequest): String = hash(requestAdapter.toJson(
         request.copy(args = request.args.toSortedMap())))
