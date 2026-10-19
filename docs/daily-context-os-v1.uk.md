@@ -84,7 +84,19 @@ V1
 
 ## Журнал виконання
 
-- S1–S4 реалізовано в коді; остаточний CI та фізичне приймання ще не завершені.
+- S1–S5 реалізовано й перевірено. Автоматична частина S6 завершена: APK готовий
+  для підпису власником. Фізичне приймання залишається NOT_RUN.
+- Фінальний код `c5120f35023cd8e84eecd6f9ded5ebae3f13c7c9`, версія `0.12.31-ci2325`,
+  versionCode 66. Обидва CI на цьому самому коміті — PASS:
+  [Android CI 39249664832](https://github.com/Kvazarbit/Lumena-Android/actions/runs/39249664832),
+  [project memory 39249664653](https://github.com/Kvazarbit/Lumena-Android/actions/runs/39249664653).
+  1308 основних і 120 цільових JUnit-тестів без failures/errors/skips (набори частково
+  перетинаються); 106 Linux bridge-тестів. Виявлено всі 58 навмисних помилок: 46 чинних,
+  11 collaboration/privacy і 1 file-CAS. Native host smoke та перевірка APK з `zipalign -P 16` — PASS.
+- Завантажений unsigned ZIP звірено з GitHub artifact digest:
+  `a9909f0c1bf9e2fde446aeb6b6b9409ed7eb4068c4e2bac4cdb5486c0176689d`.
+  Ключ не відкривався, підпис не виконувався. Остаточні правки цього документа
+  після CI змінюють лише звіт, не код перевіреного APK.
 - Попередній крок `b2618207`: цільовий CI [39241253868](https://github.com/Kvazarbit/Lumena-Android/actions/runs/39241253868) PASS.
   Цей результат не засвідчує подальші коміти.
 - Локально: 9 file-tool тестів і 12 project-workspace тестів PASS; CAS-mutant відхилено
@@ -153,3 +165,29 @@ V1
 6. Для зовнішньої моделі явно обрати передачу проєктного контексту. Зміна мети
    потребує нової згоди. Старе pending-підтвердження не виконується під новою метою.
 7. «Копія всіх проєктів» зберігає приватний ZIP; наявність експорту не звільняє квоту.
+
+## Підпис CI2325 у Termux
+
+Завантажити [UNSIGNED-Lumena-ci2325-signing-input](https://github.com/Kvazarbit/Lumena-Android/actions/runs/39249664832/artifacts/12187024918)
+у телефонну папку Download. ZIP не розпаковувати. Наявні Java/keytool, aapt/aapt2 та
+`~/.lumena/Lumena-signing.enc` використовуються як раніше. Команда бере скрипт із
+перевіреного коміту; пароль запитується тільки в локальному терміналі:
+
+```sh
+curl -fL https://raw.githubusercontent.com/Kvazarbit/Lumena-Android/c5120f35023cd8e84eecd6f9ded5ebae3f13c7c9/scripts/sign_lumena.py -o "$HOME/sign_lumena_ci2325.py" &&
+python "$HOME/sign_lumena_ci2325.py" --run-id 39249664832
+```
+
+Скрипт спочатку перевіряє походження CI, digest ZIP, APK і наявний сертифікат;
+підписаний файл та команду відкриття покаже після завершення. Оновити наявну Lumena
+цим APK без видалення застосунку.
+
+Для файлових операцій потрібен Bridge 0.32. У вікні старого моста спочатку натиснути
+Ctrl+C. Потім оновити код і запустити; наявна конфігурація й токен лишаються:
+
+```sh
+curl -fL https://raw.githubusercontent.com/Kvazarbit/Lumena-Android/c5120f35023cd8e84eecd6f9ded5ebae3f13c7c9/termux/bridge.py -o "$HOME/.lumena/bridge.py.new" &&
+mv "$HOME/.lumena/bridge.py.new" "$HOME/.lumena/bridge.py" &&
+chmod 700 "$HOME/.lumena/bridge.py" &&
+python "$HOME/.lumena/bridge.py"
+```
