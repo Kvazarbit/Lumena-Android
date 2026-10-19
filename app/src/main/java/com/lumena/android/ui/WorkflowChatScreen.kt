@@ -258,6 +258,9 @@ fun WorkflowChatScreen(
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var progressExpanded by rememberSaveable { mutableStateOf(false) }
     var currentTask by remember { mutableStateOf(restored.task) }
+    var privateProjectIds by remember {
+        mutableStateOf(com.lumena.android.settings.ProjectSessionPrivacy.labels(restored))
+    }
     var history by remember {
         mutableStateOf(listOf(systemMessage) + restored.history.map { OllamaMessage(it.role, it.content) })
     }
@@ -515,7 +518,8 @@ fun WorkflowChatScreen(
         historicalFacts = historicalFacts,
         historicalFactsQuarantined =
             historicalFactsQuarantined,
-        workspaceProjectId = workspaceProjectId
+        workspaceProjectId = workspaceProjectId,
+        privateProjectIds = privateProjectIds
     )
 
     fun currentBranchId(): String =
@@ -543,6 +547,7 @@ fun WorkflowChatScreen(
                 pythonApprovals = PythonApprovalLedger()
                 continuationWorkId = null
                 workspaceProjectId = stored.workspaceProjectId
+                privateProjectIds = com.lumena.android.settings.ProjectSessionPrivacy.labels(stored)
                 currentTask = stored.task
                 pending = null
                 input = stored.inputDraft
@@ -632,6 +637,7 @@ fun WorkflowChatScreen(
         }
 
         val storedHistory = listOf(systemMessage) + stored.history.map { OllamaMessage(it.role, it.content) }
+        privateProjectIds = com.lumena.android.settings.ProjectSessionPrivacy.labels(stored)
         if (storedHistory != history) history = storedHistory
 
         val storedPending = restoredPendingFrom(stored.pending)
@@ -678,6 +684,8 @@ fun WorkflowChatScreen(
         taskApprovals.clear()
         currentTask = null
         history = listOf(systemMessage)
+        privateProjectIds = emptyList()
+        workThreads = com.lumena.android.agent.core.WorkThreadState()
         contextUsage = null
         researchThread = null
         codeGoal = null
@@ -909,16 +917,27 @@ fun WorkflowChatScreen(
         }
     }
 
-    fun modelClient(): ChatModelClient =
-        if (inferenceBackend == "embedded") {
+    fun modelClient(): ChatModelClient {
+        val backend = inferenceBackend
+        val url = ollamaUrl
+        val delegate = if (backend == "embedded") {
             EmbeddedLlamaClient(context, ggufPath, computeMode = computeMode)
         } else {
             OllamaClient(
-                ollamaUrl,
+                url,
                 runtimeProfile = LlamaHardwareProfile.detect(context),
                 modelHint = selectedModel
             )
         }
+        return com.lumena.android.collaboration.ProjectContextClient(delegate, backend, url,
+            localAttested = { model -> com.lumena.android.collaboration.CollaborationRuntime.localAttested(
+                context.applicationContext, com.lumena.android.collaboration.CollaborationRuntime.route(backend, url, model)) },
+            privateProjects = { (privateProjectIds + listOfNotNull(workspaceProjectId,
+                currentTask?.takeIf { it.projectRoot != null }?.projectId)).toSet() },
+            ownerAllowsRemote = { id -> ProjectWorkspaceStore.project(context.applicationContext, id)?.let {
+                com.lumena.android.collaboration.CollaborationRuntime.remoteAllowed(context.applicationContext, it)
+            } == true })
+    }
 
     fun currentModelId(): String =
         if (inferenceBackend == "embedded") {
@@ -930,11 +949,19 @@ fun WorkflowChatScreen(
     fun modelNameForRun(): String = if (inferenceBackend == "embedded") "embedded-gguf" else selectedModel
 
     fun workflowRunner(): WorkflowRunner {
+        privateProjectIds = (privateProjectIds + listOfNotNull(workspaceProjectId,
+            currentTask?.takeIf { it.projectRoot != null }?.projectId)).distinct()
+        persistSession()
         // Capture one environment for this runner; later UI changes cannot relabel its observations.
         val session = ExperienceLandscapeStore.session(context, inferenceBackend,
             if (inferenceBackend == "embedded") ggufPath else selectedModel, computeMode,
             "$bridgeUrl|$ollamaUrl")
         val researchGoalSnapshot = researchThread?.rootGoal
+        // The receipt card follows the route this runner's model client actually uses.
+        val cardBackend = inferenceBackend
+        val cardUrl = ollamaUrl
+        val cardModel = modelNameForRun()
+        val runnerBridge = bridgeOrNull()
         val constitutionContributorModelId = if (inferenceBackend == "embedded") {
             "embedded:" + ggufDisplayName.ifBlank { "gguf" }
         } else {
@@ -964,10 +991,14 @@ fun WorkflowChatScreen(
             }
             return if (show) lines else emptyList()
         }
-        return WorkflowRunner(modelClient(), bridgeOrNull(), modelNameForRun(),
+        return WorkflowRunner(modelClient(), runnerBridge, cardModel,
             executionAdapter = { task, executor ->
                 com.lumena.android.collaboration.CollaborationRuntime.forTask(context.applicationContext,
                     task, constitutionContributorModelId, bridgeUrl, bridgeToken, executor)
+            },
+            collaborationCardProvider = { task ->
+                com.lumena.android.collaboration.CollaborationRuntime.cardFor(context.applicationContext,
+                    task, cardBackend, cardUrl, cardModel, runnerBridge)
             },
             semanticMemoryProvider = { task ->
                 com.lumena.android.settings.SemanticMemoryCoordinator(context.applicationContext, ollamaUrl).recall(task)
@@ -1903,6 +1934,7 @@ fun WorkflowChatScreen(
             id = UUID.randomUUID().toString(),
             projectId = projectId,
             projectRoot = selectedWorkspace?.root,
+            projectGoalEpoch = selectedWorkspace?.goalEpoch,
             projectVerification = selectedWorkspace?.verification,
             projectContext = selectedWorkspace?.let { ProjectWorkspacePolicy.capsule(it) },
             projectObligationId = continuationWorkId ?: previous?.takeIf {
@@ -2097,6 +2129,7 @@ fun WorkflowChatScreen(
                 .coerceAtLeast(0)
         contextUsage = null
         history = listOf(systemMessage) + branch.session.history.map { OllamaMessage(it.role, it.content) }
+        privateProjectIds = com.lumena.android.settings.ProjectSessionPrivacy.labels(branch.session)
         val retainedIds = branch.session.chat.map { it.id }.toSet()
         bubbles.removeAll { it.id !in retainedIds }
         input = branch.session.inputDraft
@@ -2259,7 +2292,19 @@ fun WorkflowChatScreen(
 
     if (showProjects) {
         ProjectWorkspacePanel(workspaceState.projects, workspaceProjectId, workspaceError,
-            reviewIdentity = "$inferenceBackend|$ollamaUrl|${modelNameForRun()}",
+            onRemoteContext = { projectId, allowed ->
+                uiScope.launch {
+                    try {
+                        workspaceState = withContext(Dispatchers.IO) { ProjectWorkspaceStore.update(context) { state ->
+                            val p = state.projects.first { it.id == projectId }
+                            com.lumena.android.collaboration.CollaborationRuntime.allowRemoteFromOwner(context.applicationContext, p, allowed)
+                            ProjectWorkspacePolicy.put(state, p.copy(allowRemoteContext = allowed, updatedAt = System.currentTimeMillis()))
+                        } }
+                        workspaceError = null
+                    } catch (failure: Exception) { workspaceError = failure.message.orEmpty().take(220) }
+                }
+            },
+            reviewIdentity = com.lumena.android.collaboration.CollaborationRuntime.route(inferenceBackend, ollamaUrl, modelNameForRun()),
             onReviewReceipts = { handoff, localAttestation ->
                 com.lumena.android.collaboration.CollaborationReview.read(modelClient(),
                     inferenceBackend, ollamaUrl, modelNameForRun(), localAttestation, handoff)

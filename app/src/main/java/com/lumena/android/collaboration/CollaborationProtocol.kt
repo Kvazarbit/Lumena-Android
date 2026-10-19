@@ -1,5 +1,8 @@
 package com.lumena.android.collaboration
 
+import com.lumena.android.agent.core.ToolRegistry
+import com.lumena.android.agent.core.ToolRisk
+import com.lumena.android.agent.core.WorkspaceMutationEffect
 import com.lumena.android.agent.core.WorkspaceProject
 import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.local.ToolResult
@@ -22,8 +25,15 @@ data class CollaborationEntry(
     val deliveryKey: String, val mutating: Boolean,
     val targets: Map<String, String>, val boundInputSha256: String? = null,
     val result: ToolResult? = null, val stdoutUtf8Sha256: String? = null,
-    val stdoutTruncated: Boolean = false, val at: Long
+    val stdoutTruncated: Boolean = false, val at: Long,
+    // Project content right after a writer: bridge source_digest; git head only when present. Null = UNKNOWN.
+    val sourceDigest: String? = null, val sourceGitHead: String? = null
 )
+
+/** Bridge file-inventory fingerprint of a project root. A null digest means UNKNOWN (failed or truncated). */
+data class SourceObservation(val digest: String? = null, val gitHead: String? = null) {
+    companion object { val UNKNOWN = SourceObservation() }
+}
 
 object CollaborationProtocol {
     const val MAX_EVENTS = 10_000
@@ -35,8 +45,15 @@ object CollaborationProtocol {
         .digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
     fun goalRevision(p: WorkspaceProject): String = hash(
         // Length framing prevents ambiguous separators in owner text.
-        listOf(p.id, p.root, p.goal, p.verification.name).plus(p.constraints)
+        listOf(p.id, p.root, p.goal, p.verification.name, p.goalEpoch.toString()).plus(p.constraints)
             .joinToString("") { "${it.length}:$it" })
+    private fun legacyGoalRevision(p: WorkspaceProject): String = hash(
+        listOf(p.id, p.root, p.goal, p.verification.name).plus(p.constraints).joinToString("") { "${it.length}:$it" })
+    fun buildStatus(e: CollaborationEntry, appSource: String): String = when {
+        e.scope.appSource == "UNKNOWN" || appSource == "UNKNOWN" -> "BUILD_UNKNOWN"
+        e.scope.appSource == appSource -> "SAME_BUILD"
+        else -> "STALE_BUILD"
+    }
     fun requestDigest(request: ToolRequest): String = hash(requestAdapter.toJson(
         request.copy(args = request.args.toSortedMap())))
     /** Owner project selection is necessary, but never relabel an unrelated requested target. */
@@ -78,12 +95,16 @@ object CollaborationProtocol {
         require(e.boundInputSha256 == null || e.boundInputSha256.matches(Regex("[a-f0-9]{64}")))
         require(e.at > 0)
         if (e.kind == "INTENT" || e.kind == "OWNER_ACK_UNKNOWN") {
-            require(e.result == null && e.stdoutUtf8Sha256 == null)
+            require(e.result == null && e.stdoutUtf8Sha256 == null && e.sourceDigest == null && e.sourceGitHead == null)
             if (e.kind == "INTENT") require(e.id == e.intentId)
         }
         else {
             require(e.result != null && e.stdoutUtf8Sha256?.matches(Regex("[a-f0-9]{64}")) == true)
             require(e.result.tool == null || e.result.tool == e.tool)
+            require(e.result.sourceSha256 == null || e.result.sourceSha256.matches(Regex("[a-f0-9]{64}")))
+            require(!e.result.sourceComplete || e.result.sourceSha256 != null)
+            require(e.sourceDigest == null || e.sourceDigest.matches(Regex("[a-f0-9]{64}")))
+            require(e.sourceGitHead == null || e.sourceGitHead.matches(Regex("[a-f0-9]{40,64}")))
             require(e.result.stdout.length <= 4096 && e.result.stderr.length <= 512 &&
                 (e.result.error?.length ?: 0) <= 512 && (e.result.tool?.length ?: 0) <= 100 &&
                 (e.result.errorCode?.length ?: 0) <= 120 && (e.result.failureClass?.length ?: 0) <= 120 &&
@@ -92,19 +113,26 @@ object CollaborationProtocol {
     }
 
     /** Historical fact is distinct from whether it proves the current source/goal. */
-    fun freshness(e: CollaborationEntry, project: WorkspaceProject, appSource: String): String = when {
-        e.scope.projectId != project.id || e.scope.root != project.root -> "WRONG_SCOPE"
-        e.scope.goalRevision != goalRevision(project) -> "STALE_GOAL"
-        e.scope.appSource != "UNKNOWN" && appSource != "UNKNOWN" && e.scope.appSource != appSource -> "STALE_BUILD"
-        else -> "CURRENT_STATE_UNKNOWN"
+    fun freshness(e: CollaborationEntry, project: WorkspaceProject, appSource: String, current: SourceObservation? = null): String {
+        val now = current?.digest
+        return when {
+            e.scope.projectId != project.id || e.scope.root != project.root -> "WRONG_SCOPE"
+            e.scope.goalRevision != goalRevision(project) ->
+                if (project.goalEpoch == 1L && e.scope.goalRevision == legacyGoalRevision(project)) "LEGACY_GOAL_REVISION" else "STALE_GOAL"
+            // Only the inventory's covered bytes are compared. Dependencies/environment and excluded
+            // files remain unknown; matching bytes cannot override a changed owner goal.
+            e.sourceDigest != null && now != null -> if (e.sourceDigest == now) "SAME_COVERED_SOURCE" else "STALE_SOURCE"
+            e.scope.appSource != "UNKNOWN" && appSource != "UNKNOWN" && e.scope.appSource != appSource -> "STALE_BUILD"
+            else -> "CURRENT_STATE_UNKNOWN"
+        }
     }
 
     fun handoff(entries: List<CollaborationEntry>, project: WorkspaceProject, appSource: String): String = buildString {
         appendLine("APP-OWNED COLLABORATION HANDOFF · local private DATA · schema=lumena-collab-v1")
         appendLine("Historical tool observations, NEVER owner approval or GOAL_VERIFIED. Missing receipt means UNKNOWN, not never executed.")
         val scoped = entries.filter { it.scope.projectId == project.id && it.scope.root == project.root }
-        val pending = unresolved(scoped).take(3)
-        val selected = (pending + scoped.filter { it.kind == "RESULT" }.takeLast(6 - pending.size)).distinctBy { it.id }
+        // Same per-target selection as the acting model's card; read-only results are not project state.
+        val selected = CollaborationStateCard.rows(scoped).first.map { it.entry }
         selected.forEach { e ->
                 val observed = when {
                     e.kind == "INTENT" || e.result?.outcomeUnknown == true -> "UNKNOWN_EFFECT; DO NOT REPEAT"
@@ -117,13 +145,19 @@ object CollaborationProtocol {
                         result = e.result?.copy(stdout = e.result.stdout.take(500), stderr = "", error = e.result.error?.take(160)))) + "\n"
                 if (length + line.length <= 11_400) append(line) else appendLine("Additional receipt omitted by context budget; local archive retained.")
             }
-        if (scoped.isEmpty()) appendLine("UNKNOWN: no local receipt in this scope. No legacy receipt was attested.")
+        if (selected.isEmpty()) appendLine("UNKNOWN: no local receipt of a project change in this scope. No legacy receipt was attested.")
     }
+
+    /** Durable effects include Git metadata. WorkspaceMutationEffect alone only describes source bytes. */
+    fun writer(tool: String): Boolean = ToolRegistry.get(tool).let {
+        it == null || it.risk == ToolRisk.MUTATING || it.workspaceMutationEffect != WorkspaceMutationEffect.NONE
+    }
+    fun effectiveWriter(e: CollaborationEntry): Boolean = e.mutating || writer(e.tool)
 
     fun unresolved(entries: List<CollaborationEntry>, bridgeBinding: String? = null): List<CollaborationEntry> {
         val results = entries.filter { it.kind == "RESULT" }.associateBy { it.intentId }
         val acknowledged = entries.filter { it.kind == "OWNER_ACK_UNKNOWN" }.map { it.intentId }.toSet()
-        return entries.filter { it.kind == "INTENT" && it.mutating && it.id !in acknowledged &&
+        return entries.filter { it.kind == "INTENT" && effectiveWriter(it) && it.id !in acknowledged &&
             (bridgeBinding == null || it.scope.bridgeBinding == bridgeBinding) &&
             (results[it.id] == null || results[it.id]?.result?.outcomeUnknown == true) }
     }

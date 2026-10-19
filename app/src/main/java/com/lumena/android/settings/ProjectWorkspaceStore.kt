@@ -43,9 +43,14 @@ object ProjectWorkspaceStore {
     fun update(context: Context, transform: (ProjectWorkspaceState) -> ProjectWorkspaceState): ProjectWorkspaceState =
         synchronized(StateVaultLock.monitor) {
             val current = load(context)
-            val next = transform(current)
+            val next = ProjectWorkspacePolicy.advanceGoalEpochs(current, transform(current))
             if (next != current) {
                 val bytes = ProjectWorkspaceCodec.encode(next).toByteArray(Charsets.UTF_8)
+                current.projects.filter { p -> next.projects.none { it.id == p.id && it.goalEpoch == p.goalEpoch } }.forEach {
+                    com.lumena.android.collaboration.CollaborationRuntime.allowRemoteFromOwner(context.applicationContext, it, false)
+                }
+                // Archive evicted history durably BEFORE committing the new bounded working state.
+                ProjectWorkspaceHistoryArchive.preserveEvictions(context.applicationContext, current, next)
                 val f = file(context)
                 val output = f.startWrite()
                 try { output.write(bytes); f.finishWrite(output) }

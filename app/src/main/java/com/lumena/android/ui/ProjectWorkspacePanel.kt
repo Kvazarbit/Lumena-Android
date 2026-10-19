@@ -18,7 +18,8 @@ fun ProjectWorkspacePanel(
     onDecision: (String, String, String, String, List<String>) -> Unit,
     onContinue: (String, ProjectWorkRecord) -> Unit, onCloseWork: (String, String, Boolean) -> Unit,
     onReviewReceipts: (suspend (String, Boolean) -> String)? = null,
-    reviewIdentity: String = ""
+    reviewIdentity: String = "",
+    onRemoteContext: (String, Boolean) -> Unit = { _, _ -> }
 ) {
     var adding by remember { mutableStateOf(projects.isEmpty()) }
     var editingId by remember { mutableStateOf<String?>(null) }
@@ -67,6 +68,12 @@ fun ProjectWorkspacePanel(
                 Text(p.name, style = MaterialTheme.typography.titleMedium)
                 CollaborationPanel(p, onReviewReceipts, reviewIdentity)
                 Text(p.goal)
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Checkbox(com.lumena.android.collaboration.CollaborationRuntime.remoteAllowed(
+                        androidx.compose.ui.platform.LocalContext.current.applicationContext, p), { onRemoteContext(p.id, it) })
+                    Text("Дозволяю передавати контекст цього проєкту зовнішнім моделям: історію, рішення та результати.")
+                }
+                if (!p.allowRemoteContext) Text("Контекст локальний. Для Ollama підтвердь локальний маршрут у спільному журналі.", style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = {
                     editingId = p.id; adding = true; name = p.name; root = p.root; goal = p.goal
                     constraints = p.constraints.joinToString("\n"); verification = p.verification

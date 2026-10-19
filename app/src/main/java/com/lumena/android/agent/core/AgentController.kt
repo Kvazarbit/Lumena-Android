@@ -1848,7 +1848,8 @@ class AgentController(
         state: AgentControlState,
         relevantMemory: List<String> = emptyList(),
         constitutionalGuidance: List<String> = emptyList(),
-        verifiedEvidence: List<String> = emptyList()
+        verifiedEvidence: List<String> = emptyList(),
+        collaborationCard: String? = null
     ): String {
         return ContextBuilder(
             maxMemoryItems = 6,
@@ -1868,7 +1869,8 @@ class AgentController(
             intentGuidance = state.intentGuidance,
             recoveryGuidance = state.recoveryHint,
             kernelContext = if (state.task.kernel.observed > 0 || state.task.kernel.inFlight != null)
-                ContextKernel.capsule(state.task.kernel) else null
+                ContextKernel.capsule(state.task.kernel) else null,
+            collaborationCard = collaborationCard
         )
     }
 

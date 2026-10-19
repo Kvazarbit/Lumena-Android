@@ -29,8 +29,68 @@ class CollaborationLedgerTest {
     }
     @Before fun prepare() {
         context.deleteDatabase(CollaborationLedger.DATABASE)
+        val fixtureArchive = context.noBackupFilesDir.resolve("collaboration-segments-v1")
+        require(fixtureArchive.canonicalFile.parentFile == context.noBackupFilesDir.canonicalFile)
+        fixtureArchive.deleteRecursively()
         CompanionTaskGrantStore.clear(context)
         context.getSharedPreferences("lumena_collaboration", Context.MODE_PRIVATE).edit().clear().commit()
+    }
+    @Test fun archivedReceiptsKeepChainAndDeliveryIdentityAcrossColdOpen() = runBlocking {
+        val executor = Executor()
+        val ledger = CollaborationLedger(context)
+        assertTrue(ledger.execute(scope(), request, executor, "archived-delivery").ok)
+        val before = ledger.entries()
+        ledger.archiveClosedSegment()
+        assertEquals(1, CollaborationLedger(context).archivedSegments())
+        assertEquals(before, CollaborationLedger(context).entries())
+        assertFalse("ARCHIVED_REPLAY_EXECUTED", CollaborationLedger(context).execute(scope(), request, executor, "archived-delivery").ok)
+        assertEquals(1, executor.calls)
+        assertTrue(CollaborationLedger(context).execute(scope(), request, executor, "new-delivery").ok)
+        assertEquals(before + CollaborationLedger(context).entries().takeLast(2), CollaborationLedger(context).entries())
+        CollaborationLedger(context).archiveClosedSegment()
+        assertEquals(2, CollaborationLedger(context).archivedSegments())
+        assertEquals(4, CollaborationLedger(context).entries().size)
+    }
+    @Test fun preparedArchiveRecoversAfterProcessInterruptionWithoutRepeatingTransport() = runBlocking {
+        val executor = Executor()
+        val ledger = CollaborationLedger(context)
+        ledger.execute(scope(), request, executor, "before-crash")
+        val before = ledger.entries()
+        assertThrows(IllegalStateException::class.java) {
+            ledger.archiveClosedSegmentAfterPrepare { error("simulated process interruption") }
+        }
+        assertEquals(before, CollaborationLedger(context).entries())
+        assertEquals(1, CollaborationLedger(context).archivedSegments())
+        assertFalse(CollaborationLedger(context).execute(scope(), request, executor, "before-crash").ok)
+        assertEquals(1, executor.calls)
+    }
+    @Test fun unresolvedWriterCannotBeArchivedAndExportPreservesUnknown() = runBlocking {
+        val executor = Executor(ToolResult(false, outcomeUnknown = true))
+        val ledger = CollaborationLedger(context)
+        ledger.execute(scope(), request, executor, "unknown")
+        assertThrows(IllegalArgumentException::class.java) { ledger.archiveClosedSegment() }
+        assertEquals(1, CollaborationProtocol.unresolved(ledger.entries()).size)
+        val bytes = java.io.ByteArrayOutputStream()
+        ledger.exportArchive(bytes)
+        val names = mutableListOf<String>()
+        java.util.zip.ZipInputStream(bytes.toByteArray().inputStream()).use { zip ->
+            while (true) { val entry = zip.nextEntry ?: break; names += entry.name; zip.closeEntry() }
+        }
+        assertTrue(names.contains("active/" + CollaborationLedger.DATABASE))
+        assertEquals(1, CollaborationProtocol.unresolved(CollaborationLedger(context).entries()).size)
+    }
+    @Test fun corruptArchivedSegmentBlocksTransportAndKeepsOriginalBytes() = runBlocking {
+        val executor = Executor()
+        val ledger = CollaborationLedger(context)
+        ledger.execute(scope(), request, executor, "one")
+        ledger.archiveClosedSegment()
+        val segment = context.noBackupFilesDir.resolve("collaboration-segments-v1").listFiles()!!.single { it.extension == "db" }
+        segment.appendBytes(byteArrayOf(42))
+        val damaged = segment.readBytes()
+        assertThrows(IllegalArgumentException::class.java) { CollaborationLedger(context).entries() }
+        assertFalse("CORRUPT_ARCHIVE_EXECUTED", CollaborationLedger(context).execute(scope(), request, executor, "two").ok)
+        assertArrayEquals(damaged, segment.readBytes())
+        assertEquals(1, executor.calls)
     }
     @Test fun tenColdStartsRetainImmutableReceiptsAndExactDecodedOutputDigest() = runBlocking {
         val executor = Executor()
@@ -42,6 +102,31 @@ class CollaborationLedgerTest {
             assertEquals("e".repeat(64), all.last().boundInputSha256)
         }
         assertEquals(10, executor.calls)
+    }
+    @Test fun legacyUnknownGitClassificationCannotBypassTheNewWriterBarrier() = runBlocking {
+        val executor = Executor(ToolResult(false, outcomeUnknown = true))
+        val ledger = CollaborationLedger(context)
+        val git = ToolRequest("git.commit", mapOf("cwd" to "aquarium", "message" to "owner change"))
+        ledger.execute(scope(), git, executor, "git-unknown")
+        val original = ledger.entries().first()
+        // Recreate the old schema's classifier without changing identity, request, or event order.
+        val db = SQLiteDatabase.openDatabase(context.getDatabasePath(CollaborationLedger.DATABASE).path, null, SQLiteDatabase.OPEN_READWRITE)
+        try {
+            db.execSQL("DROP TRIGGER immutable_update")
+            val all = ledger.entries()
+            var previous = "GENESIS"
+            for (e in all) {
+                val body = CollaborationProtocol.encode(e.copy(mutating = false))
+                val digest = CollaborationProtocol.hash(previous + "\n" + body)
+                db.execSQL("UPDATE events SET body=?,previous=?,digest=? WHERE id=?", arrayOf(body, previous, digest, e.id))
+                previous = digest
+            }
+        } finally { db.close() }
+        assertEquals(original.id, CollaborationProtocol.unresolved(ledger.entries()).single().id)
+        assertFalse(ledger.execute(scope(), request, executor, "next-writer").ok)
+        ledger.acknowledgeUnknownFromOwner(original.id)
+        assertTrue(CollaborationProtocol.unresolved(ledger.entries()).isEmpty())
+        assertFalse(ledger.entries().first().mutating)
     }
     @Test fun redeliveryDoesNotExecuteOrInventANewReceipt() = runBlocking {
         val executor = Executor()
@@ -194,5 +279,41 @@ class CollaborationLedgerTest {
         assertTrue(result.stdoutTruncated)
         assertEquals(CollaborationProtocol.hash(output), result.stdoutUtf8Sha256)
         assertNotEquals(CollaborationProtocol.hash(result.result.stdout), result.stdoutUtf8Sha256)
+    }
+    @Test fun writerReceiptKeepsProjectFingerprintFromPlainFolderWithoutGit() = runBlocking {
+        val inspect = """{"schema":"lumena.project.v1","cwd":"aquarium","exists":true,"git":{"head":null,"branch":null,"dirty":null},""" +
+            """"source_digest":"${"a".repeat(64)}","files_count":2,"truncated":false}"""
+        val tools = mutableListOf<String>()
+        val bridge = object : ToolExecutor {
+            override suspend fun execute(toolRequest: ToolRequest): ToolResult {
+                tools += toolRequest.tool
+                return if (toolRequest.tool == "project.inspect") ToolResult(true, stdout = inspect) else ToolResult(true, exitCode = 0, stdout = "written")
+            }
+        }
+        val write = ToolRequest("file.write", mapOf("path" to "aquarium/brain.py", "content" to "x = 1"))
+        assertTrue(CollaborationLedger(context).execute(scope(), write, bridge, "write-1") { CollaborationStateCard.observe(bridge, it) }.ok)
+        val read = ToolRequest("file.read", mapOf("path" to "aquarium/brain.py"))
+        assertTrue(CollaborationLedger(context).execute(scope(), read, bridge, "read-1") { CollaborationStateCard.observe(bridge, it) }.ok)
+        val results = CollaborationLedger(context).entries().filter { it.kind == "RESULT" }
+        assertEquals("a".repeat(64), results.first().sourceDigest)
+        assertNull(results.first().sourceGitHead)
+        assertNull(results.last().sourceDigest)
+        assertEquals(listOf("file.write", "project.inspect", "file.read"), tools)
+    }
+    @Test fun failedFingerprintIsUnknownAndNeverLosesTheReceipt() = runBlocking {
+        val executor = Executor()
+        assertTrue(CollaborationLedger(context).execute(scope(), request, executor, "fingerprint-offline") { error("synthetic bridge offline") }.ok)
+        val all = CollaborationLedger(context).entries()
+        assertEquals(listOf("INTENT", "RESULT"), all.map { it.kind })
+        assertNull(all.last().sourceDigest)
+        assertTrue(CollaborationProtocol.unresolved(all).isEmpty())
+        assertEquals(1, executor.calls)
+    }
+    @Test fun killedModelCallDoesNotFreezeProjectWrites() = runBlocking {
+        val killed = Executor(ToolResult(false, outcomeUnknown = true))
+        CollaborationLedger(context).execute(scope(), ToolRequest("ollama.generate", mapOf("model" to "gemma", "prompt" to "hi")), killed, "killed-model")
+        val executor = Executor()
+        assertTrue(CollaborationLedger(context).execute(scope(), request, executor, "after-killed-model").ok)
+        assertEquals(1, executor.calls)
     }
 }

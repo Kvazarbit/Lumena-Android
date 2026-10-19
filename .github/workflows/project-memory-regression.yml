@@ -2,7 +2,7 @@ name: Project memory regression
 
 on:
   push:
-    branches: [ "codex/daily-project-memory", "codex/verified-collaboration-handoff" ]
+    branches: [ "codex/daily-project-memory", "codex/verified-collaboration-handoff", "feature/collaboration-local-state-card", "codex/daily-context-os-v1" ]
   workflow_dispatch:
 
 permissions:
@@ -45,6 +45,10 @@ jobs:
           --tests 'com.lumena.android.ollama.WorkflowRunnerSemanticRecallTest'
           --tests 'com.lumena.android.collaboration.*'
           --tests 'com.lumena.android.ollama.WorkflowRunnerCollaborationAdapterTest'
+          --tests 'com.lumena.android.settings.LocalSessionSnapshotCodecTest'
+          --tests 'com.lumena.android.settings.ProjectWorkspacePolicyTest'
+          --tests 'com.lumena.android.settings.ProjectContinuationPolicyTest'
+          --tests 'com.lumena.android.ollama.ProjectFilePreconditionsTest'
       - name: Verify nonempty passing JUnit reports
         run: |
           python - <<'PY'
@@ -53,8 +57,11 @@ jobs:
           expected = {'PhoneReport2296DiagnosticTest': 11, 'EmbeddingLifecycleDiagnosticTest': 5,
                       'SemanticMemoryCoordinatorTest': 5, 'OwnerActionTextTest': 5,
                       'WorkflowRunnerSemanticRecallTest': 2, 'CollaborationProtocolTest': 5,
-                      'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 15,
-                      'WorkflowRunnerCollaborationAdapterTest': 2}
+                      'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 23,
+                      'CollaborationStateCardTest': 15, 'WorkflowRunnerCollaborationAdapterTest': 4,
+                      'ProjectContextClientTest': 3, 'LocalSessionSnapshotCodecTest': 3,
+                      'ProjectWorkspacePolicyTest': 10, 'ProjectContinuationPolicyTest': 4,
+                      'ProjectFilePreconditionsTest': 3, 'ProjectWorkspaceHistoryTest': 4}
           for name, minimum in expected.items():
               matches = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.' + name + '.xml'))
               assert len(matches) == 1, name
@@ -70,8 +77,16 @@ jobs:
           path: app/build/test-results/testDebugUnitTest/TEST-*.xml
           if-no-files-found: error
       - name: Kill collaboration semantic mutants with exact-case oracles
-        if: github.ref_name == 'codex/verified-collaboration-handoff'
+        if: github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card' || github.ref_name == 'codex/daily-context-os-v1'
         run: python scripts/collaboration_probe.py
+      - name: Kill file-CAS semantic mutant with an unrelated passing control
+        run: python scripts/daily_context_file_probe.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: daily-context-file-probe
+          path: app/build/daily-context-file-probe/
+          if-no-files-found: error
       - name: Check private journal is excluded from Android backup and transfer
         run: |
           python - <<'PY'
@@ -89,7 +104,7 @@ jobs:
           print('VERIFIED backup privacy boundaries')
           PY
       - uses: actions/upload-artifact@v4
-        if: always() && github.ref_name == 'codex/verified-collaboration-handoff'
+        if: always() && (github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card' || github.ref_name == 'codex/daily-context-os-v1')
         with:
           name: collaboration-semantic-probe
           path: app/build/collaboration-probe/

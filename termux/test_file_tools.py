@@ -8,6 +8,48 @@ from unittest.mock import patch
 
 
 class FileReadRangeTest(unittest.TestCase):
+    def test_observed_hash_cas_rejects_external_change_and_allows_fresh_retry(self):
+        import hashlib
+        target = self.workspace / 'a.py'
+        target.write_text('x = 1\n', encoding='utf-8')
+        read = self.b.execute_tool('file.read', {'path': 'a.py'})
+        self.assertTrue(read['sourceComplete'])
+        self.assertEqual(hashlib.sha256(target.read_bytes()).hexdigest(), read['sourceSha256'])
+        target.write_text('x = 2\n', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'FILE_PRECONDITION_CHANGED'):
+            self.b.execute_tool('file.write', {'path': 'a.py', 'content': 'x = 3\n', 'expected_sha256': read['sourceSha256']})
+        self.assertEqual('x = 2\n', target.read_text(encoding='utf-8'))
+        current = self.b.execute_tool('file.read', {'path': 'a.py'})
+        self.b.execute_tool('file.patch', {'path': 'a.py', 'old': '2', 'new': '3', 'expected_sha256': current['sourceSha256']})
+        self.assertEqual('x = 3\n', target.read_text(encoding='utf-8'))
+
+    def test_creation_requires_absence_and_partial_read_is_not_a_full_observation(self):
+        self.b.execute_tool('file.write', {'path': 'new.py', 'content': 'a\nb\n', 'expected_sha256': 'ABSENT'})
+        with self.assertRaisesRegex(ValueError, 'FILE_PRECONDITION_CHANGED'):
+            self.b.execute_tool('file.write', {'path': 'new.py', 'content': 'lost', 'expected_sha256': 'ABSENT'})
+        read = self.b.execute_tool('file.read', {'path': 'new.py', 'start_line': '1'})
+        self.assertFalse(read['sourceComplete'])
+        self.assertEqual('a\nb\n', (self.workspace/'new.py').read_text(encoding='utf-8'))
+
+    def test_failed_atomic_replace_preserves_live_file_and_cleans_staging_file(self):
+        target = self.workspace / 'a.py'
+        target.write_text('old', encoding='utf-8')
+        with patch.object(self.b.os, 'replace', side_effect=OSError('disk failure')):
+            with self.assertRaisesRegex(OSError, 'disk failure'):
+                self.b.execute_tool('file.write', {'path': 'a.py', 'content': 'new'})
+        self.assertEqual('old', target.read_text(encoding='utf-8'))
+        self.assertFalse(list(self.workspace.glob('.lumena-write-*')))
+
+    def test_oversized_and_invalid_utf8_reads_cannot_claim_complete_source(self):
+        target = self.workspace / 'large.txt'
+        target.write_bytes(b'x' * (2 * 1024 * 1024 + 1))
+        result = self.b.execute_tool('file.read', {'path': 'large.txt'})
+        self.assertFalse(result['sourceComplete'])
+        self.assertIsNone(result['sourceSha256'])
+        self.assertLess(len(result['stdout']), 200_000)
+        target.write_bytes(b'\xff\xfe')
+        self.assertFalse(self.b.execute_tool('file.read', {'path': 'large.txt'})['sourceComplete'])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="lumena-file-read-")
         self.root = Path(self.temp.name)
@@ -107,7 +149,8 @@ class FileReadRangeTest(unittest.TestCase):
 
         health = self.b.execute_tool("health", {})
         self.assertIn("read_only_roots=@phone", health["stdout"])
-        self.assertIn("version=0.31", health["stdout"])
+        self.assertIn("version=0.32", health["stdout"])
+        self.assertIn("file_cas_v1", health["stdout"])
 
     def test_read_only_root_never_expands_write_scope(self):
         with self.assertRaises(ValueError):

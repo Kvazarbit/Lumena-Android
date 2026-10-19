@@ -56,8 +56,17 @@ data class LocalSessionSnapshot(
     val workThreads: WorkThreadState = WorkThreadState(),
     val historicalFacts: List<HistoricalTaskRecord> = emptyList(),
     val historicalFactsQuarantined: Int = 0,
-    val workspaceProjectId: String? = null
+    val workspaceProjectId: String? = null,
+    /** Whole-history provenance; derived replies keep their contributing project's privacy. */
+    val privateProjectIds: List<String> = emptyList()
 )
+
+object ProjectSessionPrivacy {
+    /** Migration derives labels from old project/pending sessions without marking ordinary chats private. */
+    fun labels(s: LocalSessionSnapshot): List<String> = (s.privateProjectIds + listOfNotNull(
+        s.workspaceProjectId, s.task?.takeIf { it.projectRoot != null }?.projectId,
+        s.pending?.control?.task?.takeIf { it.projectRoot != null }?.projectId)).distinct().sorted()
+}
 
 /**
  * Persists bounded Local-tab state independently from Compose lifecycle.
@@ -100,6 +109,7 @@ object LocalSessionStore {
                     normalizedFacts.size
                 ).coerceAtLeast(0)
         return decoded.copy(
+            privateProjectIds = ProjectSessionPrivacy.labels(decoded),
             historicalFacts =
                 normalizedFacts,
             historicalFactsQuarantined =
@@ -123,6 +133,7 @@ object LocalSessionStore {
                     normalizedFacts.size
                 ).coerceAtLeast(0)
         val bounded = snapshot.copy(
+            privateProjectIds = ProjectSessionPrivacy.labels(snapshot),
             chat = snapshot.chat.takeLast(MAX_CHAT_MESSAGES).map { message ->
                 message.copy(
                     text = message.text.take(MAX_MESSAGE_CHARS),
@@ -209,7 +220,7 @@ object LocalSessionStore {
                         newlyQuarantined
                     ).coerceAtMost(10_000)
         )
-        prefs(context).edit().putString(KEY_SNAPSHOT, adapter.toJson(bounded)).apply()
+        check(prefs(context).edit().putString(KEY_SNAPSHOT, adapter.toJson(bounded)).commit()) { "Session checkpoint was not saved" }
         // History mirrors only bounded, app-private context. Workspace files are never copied/rolled back.
         HistoryTreeStore.mirrorActiveSession(context, bounded)
         StateVault.requestSave(context)
