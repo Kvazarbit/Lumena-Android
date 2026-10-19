@@ -6,6 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import com.lumena.android.agent.core.WorkspaceProject
 import com.lumena.android.agent.local.*
 import com.lumena.android.collaboration.*
+import com.lumena.android.companion.CompanionTaskGrantStore
 import kotlinx.coroutines.*
 import org.junit.Assert.*
 import org.junit.Before
@@ -28,6 +29,7 @@ class CollaborationLedgerTest {
     }
     @Before fun prepare() {
         context.deleteDatabase(CollaborationLedger.DATABASE)
+        CompanionTaskGrantStore.clear(context)
         context.getSharedPreferences("lumena_collaboration", Context.MODE_PRIVATE).edit().clear().commit()
     }
     @Test fun tenColdStartsRetainImmutableReceiptsAndExactDecodedOutputDigest() = runBlocking {
@@ -58,6 +60,26 @@ class CollaborationLedgerTest {
         assertEquals("test_aquarium_brain_baseline_v1.py", CollaborationLedger(context).entries().first().targets["script"])
         assertFalse(CollaborationLedger(context).execute(scope(project.copy(id = "btc", root = "btc")), request, executor, "one").ok)
         assertEquals(1, executor.calls)
+    }
+    @Test fun legitimateCompanionRetestHasNewDurableDeliveryButOldDeliveryStillCannotReplay() = runBlocking {
+        val executor = Executor()
+        val first = CompanionTaskGrantStore.begin(context, "same-test-command").toString()
+        assertTrue(CollaborationLedger(context).execute(scope(), request, executor, first).ok)
+        CompanionTaskGrantStore.finish(context, "same-test-command", null)
+        // A real project loop patches code before asking for the same test command again.
+        CompanionTaskGrantStore.begin(context, "intervening-patch")
+        CompanionTaskGrantStore.finish(context, "intervening-patch", null)
+        val second = CompanionTaskGrantStore.begin(context, "same-test-command").toString()
+        assertNotEquals("NEW_EXECUTION_CONFLATED_WITH_REDELIVERY", first, second)
+        assertEquals(second, org.json.JSONObject(context.noBackupFilesDir.resolve("companion-consent.json").readText())
+            .getString("pending_delivery"))
+        assertTrue(CollaborationLedger(context).execute(scope(), request, executor, second).ok)
+        assertFalse(CollaborationLedger(context).execute(scope(), request, executor, first).ok)
+        assertEquals(2, executor.calls)
+        val recovered = CompanionTaskGrantStore.recover(context)
+        assertEquals("same-test-command", recovered.handled)
+        assertNull(recovered.pending)
+        assertNull(recovered.pendingDelivery)
     }
     @Test fun unknownWriterBlocksOtherProjectAndConnectionChangeButAllowsReading() = runBlocking {
         val first = Executor(ToolResult(false, outcomeUnknown = true))

@@ -10,6 +10,10 @@ BASE = ROOT / "app/src/main/java/com/lumena/android/collaboration"
 REPORTS = ROOT / "app/build/test-results/testDebugUnitTest"
 OUT = ROOT / "app/build/collaboration-probe"
 MUTANTS = [
+    ("companion-content-is-not-delivery", "../companion/CompanionTaskGrantStore.kt",
+     "return deliveryId", "return fingerprint",
+     "com.lumena.android.diagnostics.CollaborationLedgerTest.legitimateCompanionRetestHasNewDurableDeliveryButOldDeliveryStillCannotReplay", "NEW_EXECUTION_CONFLATED_WITH_REDELIVERY",
+     "com.lumena.android.diagnostics.CollaborationLedgerTest.disabledLayerKeepsOriginalSingleModelTransportAndCreatesNoDatabase"),
     ("duplicate-delivery", "CollaborationLedger.kt",
      'error("Delivery already recorded: ${it.id}; consult historical receipt, no re-execution")', "Unit",
      "com.lumena.android.diagnostics.CollaborationLedgerTest.redeliveryDoesNotExecuteOrInventANewReceipt", "REPLAY_EXECUTED",

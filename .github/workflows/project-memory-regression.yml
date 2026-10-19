@@ -53,7 +53,7 @@ jobs:
           expected = {'PhoneReport2296DiagnosticTest': 11, 'EmbeddingLifecycleDiagnosticTest': 5,
                       'SemanticMemoryCoordinatorTest': 5, 'OwnerActionTextTest': 5,
                       'WorkflowRunnerSemanticRecallTest': 2, 'CollaborationProtocolTest': 5,
-                      'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 14,
+                      'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 15,
                       'WorkflowRunnerCollaborationAdapterTest': 2}
           for name, minimum in expected.items():
               matches = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.' + name + '.xml'))
