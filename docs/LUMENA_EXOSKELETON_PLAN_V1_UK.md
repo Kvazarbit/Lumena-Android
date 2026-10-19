@@ -15,7 +15,7 @@
 | Блокування за реальним ефектом (помилка 1A-4) | **EXISTS**: `CollaborationProtocol.writer()` = MUTATING або `workspaceMutationEffect != NONE` | NOT_RUN |
 | R1 «спершу прочитай, потім змінюй» | **EXISTS**: CAS для file.write/patch (`ProjectFilePreconditions.kt`, bridge `file_cas_v1`) | NOT_RUN |
 | 5. Межа приватності для зовнішньої моделі | **PARTIAL**: явний дозвіл власника на передачу контексту є; мінімального режиму CARD і автоматичного офлайн-перемикання (`ConnectivityManager`) немає | NOT_RUN |
-| 2. Перевірка заяв (фільтр обману) | **MISSING** | — |
+| 2. Перевірка заяв (фільтр обману) | **EXISTS у `feature/claim-check-v1`** (частина для Companion/вставленого тексту: `ClaimCheck.kt`, `docs/claim-check-v1.uk.md`); блокування DONE у Local через `CLAIMS` — ще ні | NOT_RUN |
 | 3. Золоте ядро (біблійна преамбула) | **MISSING** (чекає вибору власника) | — |
 | 4. Дисципліна ядра + «фальшиві моделі» | **PARTIAL**: скриптовані моделі є в окремих тестах WorkflowRunner; окремого набору «підлабузник / галюцинатор / лінивий / зациклений» немає | — |
 | 8. Вимірювання користі | **PARTIAL**: синтетичний desktop-probe `gemma3:270m`, N=4 (0/4 → 1/4), це ще не доказ | — |
