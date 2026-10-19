@@ -170,7 +170,9 @@ class CollaborationLedger(context: Context) {
                 tool = request.tool, requestDigest = CollaborationProtocol.requestDigest(request), deliveryKey = key,
                 mutating = mutating, targets = request.args.filterKeys { it in setOf("cwd", "path", "script", "file") }
                     .mapValues { it.value.take(360) },
-                boundInputSha256 = request.args["approved_sha256"]?.takeIf { request.tool == "python.run" && it.matches(Regex("[a-f0-9]{64}")) },
+                boundInputSha256 = (if (request.tool == "python.run") request.args["approved_sha256"]
+                    else if (request.tool in setOf("file.write", "file.patch")) request.args["expected_sha256"] else null)
+                    ?.takeIf { it.matches(Regex("[a-f0-9]{64}")) },
                 at = System.currentTimeMillis())
             // Reserve room for a result BEFORE authorizing transport. Full journal never discards data.
             val completed = all.filter { it.kind == "RESULT" }.map { it.intentId }.toHashSet()

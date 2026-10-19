@@ -14,6 +14,23 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35], application = Application::class)
 class ProjectWorkspaceHistoryTest {
+    @Test fun changedGoalCannotRelabelAnAlreadyApprovedTaskOrSendItsTool() = kotlinx.coroutines.runBlocking {
+        val c = RuntimeEnvironment.getApplication()
+        val p = WorkspaceProject("epoch", "Demo", "demo", "First owner goal", updatedAt = 1)
+        ProjectWorkspaceStore.update(c) { ProjectWorkspaceState(projects = listOf(p)) }
+        val task = TaskState("old", "epoch", "Approved old step", projectRoot = "demo", projectGoalEpoch = 1)
+        ProjectWorkspaceStore.update(c) { it.copy(projects = it.projects.map { project -> project.copy(goal = "New owner goal") }) }
+        var calls = 0
+        val delegate = object : com.lumena.android.agent.local.ToolExecutor {
+            override suspend fun execute(toolRequest: com.lumena.android.agent.local.ToolRequest): com.lumena.android.agent.local.ToolResult {
+                calls++; return com.lumena.android.agent.local.ToolResult(true)
+            }
+        }
+        val bound = com.lumena.android.collaboration.CollaborationRuntime.forTask(c, task, "fixture", "", "", delegate)
+        assertFalse(bound.execute(com.lumena.android.agent.local.ToolRequest("file.read", mapOf("path" to "demo/a.py"))).ok)
+        assertEquals(0, calls)
+        assertEquals(2L, ProjectWorkspaceStore.project(c, "epoch")!!.goalEpoch)
+    }
     @Test fun importedProjectFlagCannotGrantRemoteContextPermission() {
         val c = RuntimeEnvironment.getApplication()
         val p = WorkspaceProject("privacy", "Private", "demo", "Owner goal", updatedAt = 1, allowRemoteContext = true)

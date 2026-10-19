@@ -61,7 +61,8 @@ data class TaskState(
     val projectRoot: String? = null,
     val projectObligationId: String? = null,
     val projectVerification: ProjectVerification? = null,
-    val projectContext: ProjectContextCapsule? = null
+    val projectContext: ProjectContextCapsule? = null,
+    val projectGoalEpoch: Long? = null
 ) {
     /**
      * maxSteps limits tool executions, not the final model conclusion.

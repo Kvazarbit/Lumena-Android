@@ -57,6 +57,12 @@ fun CollaborationPanel(project: WorkspaceProject, review: (suspend (String, Bool
         Text("Зберігати нові виклики локально")
     }
     Text("Старі результати не переатестовуються. Успіх інструмента не підтверджує всю мету. Локальна модель отримує коротку картку; зовнішня передача потребує дозволу в параметрах проєкту.", style = MaterialTheme.typography.bodySmall)
+    if (review != null && reviewIdentity.startsWith("ollama|")) {
+        Row {
+            Checkbox(localAttestation, { CollaborationRuntime.attestLocal(context, reviewIdentity, it); localAttestation = it })
+            Text("Підтверджую локальну Ollama без хмарного проксі для роботи з приватним контекстом.")
+        }
+    }
     Text("Архівних сегментів: $archived. Панель показує поточні й останні архівні квитанції; повна історія є в експорті.", style = MaterialTheme.typography.bodySmall)
     Row {
         OutlinedButton(enabled = !busy, onClick = {
@@ -81,10 +87,6 @@ fun CollaborationPanel(project: WorkspaceProject, review: (suspend (String, Bool
             OutlinedButton(onClick = { acknowledge = intent.id }) { Text("Після перевірки дозволити наступні дії…") }
         }
         if (review != null) {
-            Row {
-                Checkbox(localAttestation, { CollaborationRuntime.attestLocal(context, reviewIdentity, it); localAttestation = it })
-                Text("Для Ollama: підтверджую локальну модель без хмарного проксі. Тоді вона бачить картку стану в задачах цього проєкту.")
-            }
             OutlinedButton(enabled = !busy, onClick = {
                 busy = true; answer = ""
                 scope.launch {

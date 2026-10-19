@@ -1934,6 +1934,7 @@ fun WorkflowChatScreen(
             id = UUID.randomUUID().toString(),
             projectId = projectId,
             projectRoot = selectedWorkspace?.root,
+            projectGoalEpoch = selectedWorkspace?.goalEpoch,
             projectVerification = selectedWorkspace?.verification,
             projectContext = selectedWorkspace?.let { ProjectWorkspacePolicy.capsule(it) },
             projectObligationId = continuationWorkId ?: previous?.takeIf {

@@ -100,7 +100,7 @@ internal class CollaborationArchive(context: Context) {
     fun rotate(tail: String, events: Int, afterPrepare: () -> Unit = {}) {
         val state = read()
         require(state.pending == null && events > 0 && state.segments.size < MAX_SEGMENTS)
-        require(state.segments.sumOf { it.bytes } + database.length() <= MAX_BYTES) { "Private archive disk budget reached; export before continuing" }
+        require(state.segments.sumOf { it.bytes } + database.length() <= MAX_BYTES) { "Private archive budget reached; data retained. Export a copy; capture remains stopped." }
         val digest = hash(database)
         val segment = CollaborationSegment("segment-%04d-%s.db".format(state.segments.size + 1, digest.take(12)), digest,
             state.segments.lastOrNull()?.tail ?: "GENESIS", tail, events, database.length())

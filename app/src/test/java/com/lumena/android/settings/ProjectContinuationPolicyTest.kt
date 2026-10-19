@@ -6,6 +6,14 @@ import org.junit.Test
 
 class ProjectContinuationPolicyTest {
     private val p = WorkspaceProject("p", "Demo", "demo", "Maintain the aquarium", updatedAt = 1)
+    @Test fun newOwnerTaskDoesNotAdoptAnUnrelatedOpenObligation() {
+        val old = p.copy(tasks = listOf(ProjectWorkRecord("old", "Old unrelated work", TaskStatus.PARTIAL, "m", at = 1)))
+        val fresh = TaskState("new", "p", "New explicit owner task", projectRoot = "demo")
+        val card = ProjectContinuationPolicy.render(old, fresh)
+        assertTrue(card.contains("New explicit owner task"))
+        assertFalse(card.contains("Old unrelated work"))
+        assertTrue(ProjectContinuationPolicy.render(old, fresh.copy(projectObligationId = "old")).contains("Old unrelated work"))
+    }
     @Test fun returningToAnOldGoalStillCreatesANewOwnerEpoch() {
         val a = ProjectWorkspaceState(projects = listOf(p))
         val b = ProjectWorkspacePolicy.advanceGoalEpochs(a, a.copy(projects = listOf(p.copy(goal = "Different goal"))))

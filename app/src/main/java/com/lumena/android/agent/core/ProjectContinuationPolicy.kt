@@ -4,11 +4,11 @@ package com.lumena.android.agent.core
 object ProjectContinuationPolicy {
     const val MAX_CHARS = 650
     fun render(p: WorkspaceProject, task: TaskState? = null): String {
-        val work = task?.projectObligationId?.let { id -> p.tasks.firstOrNull { it.id == id } }
-            ?: p.tasks.lastOrNull { it.open }
+        val work = if (task != null) task.projectObligationId?.let { id -> p.tasks.firstOrNull { it.id == id } }
+            else p.tasks.lastOrNull { it.open }
         val goal = work?.goal ?: task?.goal ?: p.goal
         val terms = goal.lowercase().split(Regex("[^\\p{L}\\p{N}_]+" )).filter { it.length >= 3 }.toSet()
-        val decision = p.decisions.maxByOrNull { d ->
+        val decision = p.decisions.asReversed().maxByOrNull { d ->
             terms.count { (d.problem + " " + d.decision).lowercase().contains(it) }
         }
         fun q(s: String, n: Int) = ProjectWorkspacePolicy.quote(s.take(n)).replace("[LUMENA_", "(LUMENA_")

@@ -2,7 +2,12 @@
 
 Android companion / local-agent client built with Kotlin + Jetpack Compose.
 
+* [Щоденна ОС контексту V1: план, реалізація, перевірки та телефонне приймання](docs/daily-context-os-v1.uk.md)
 * [Аудит нового multimodel RFC і локальний журнал / handoff V1](docs/collaboration-audit-and-stage-v1.uk.md)
+
+The daily-context stage needs Bridge 0.32 (`file_cas_v1`) for Local project writes.
+Update the APK and the Termux bridge together. Project context is local by default;
+remote inference requires explicit, device-local owner consent in project settings.
 
 ## Project workspace V1 · bridge 0.31
 

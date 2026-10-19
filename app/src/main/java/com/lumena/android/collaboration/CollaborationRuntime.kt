@@ -57,6 +57,12 @@ object CollaborationRuntime {
     fun forTask(c: Context, task: TaskState, model: String, url: String, token: String, delegate: ToolExecutor): ToolExecutor {
         val project = runCatching { ProjectWorkspaceStore.project(c, task.projectId) }.getOrNull()
             ?.takeIf { it.root == task.projectRoot }
+        if (task.projectRoot != null && (project == null || task.projectGoalEpoch != project.goalEpoch)) {
+            return object : ToolExecutor {
+                override suspend fun execute(toolRequest: ToolRequest) = CollaborationLedger.blocked(
+                    "PROJECT_GOAL_CHANGED: версія мети задачі відсутня або змінилася. Почни новий запит у проєкті; старий дозвіл не переноситься.", false)
+            }
+        }
         val journal = if (!enabled(c) && !CollaborationLedger.exists(c)) delegate
             else executor(c, scope(project, task.id, "local", model, "LOCAL", url, token), delegate)
         return com.lumena.android.agent.local.ProjectFilePreconditions.wrap(task, journal, delegate)
