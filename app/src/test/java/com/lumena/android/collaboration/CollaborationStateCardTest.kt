@@ -1,11 +1,16 @@
 package com.lumena.android.collaboration
 
+import com.lumena.android.agent.core.ContextBuilder
+import com.lumena.android.agent.core.ProjectWorkspacePolicy
 import com.lumena.android.agent.core.RequiredProjectContext
 import com.lumena.android.agent.core.TaskState
 import com.lumena.android.agent.core.WorkspaceProject
 import com.lumena.android.agent.local.ToolExecutor
 import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.local.ToolResult
+import com.lumena.android.ollama.LocalWorkflowAgent
+import com.lumena.android.ollama.OllamaContextPolicy
+import com.lumena.android.ollama.OllamaMessage
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -164,6 +169,25 @@ class CollaborationStateCardTest {
         val before = card(entries, SourceObservation(digestA))
         assertEquals(before, card(reloaded, SourceObservation(digestA)))
         assertTrue(before!!.contains("SAME_SOURCE"))
+    }
+
+    @Test fun fullCardFitsDefaultLocalOllamaBudgetInsideProtectedContext() {
+        val entries = (1..12).flatMap { n ->
+            call("file.write", mapOf("path" to "demo/module_$n.py"), ToolResult(true, exitCode = 0)) +
+                call("python.tests", mapOf("cwd" to "demo/pkg$n"), ToolResult(n % 2 == 0, exitCode = n % 2, stdout = "Ran $n tests ".repeat(40)))
+        } + (1..3).map { intent("python.run", mapOf("script" to "demo/run$it.py")) }
+        val text = card(entries, SourceObservation(digestA))!!
+        assertTrue(text.length.toString(), text.length > 1_000)
+        val p = project.copy(constraints = listOf("Preserve public API"))
+        val task = TaskState("t", "demo", "Продовж", currentInstruction = "Продовж", projectRoot = "demo",
+            projectContext = ProjectWorkspacePolicy.capsule(p))
+        val dynamic = ContextBuilder().build(task, null, emptyList(), collaborationCard = text)
+        val required = RequiredProjectContext.block(dynamic)!!
+        assertTrue("protected=${required.length}", required.contains(text))
+        // The weakest default: local Ollama at 4K context must still accept the request, card included.
+        val compact = OllamaContextPolicy.compact(listOf(OllamaMessage("system", LocalWorkflowAgent.systemPrompt + "\n\n" + dynamic),
+            OllamaMessage("user", task.goal)), OllamaContextPolicy.budget(null, false, "local-model"))
+        assertTrue(compact.first().content.contains(text))
     }
 
     @Test fun cloudRouteNeverOpensTheJournalOrReceivesTheCard() = runBlocking {

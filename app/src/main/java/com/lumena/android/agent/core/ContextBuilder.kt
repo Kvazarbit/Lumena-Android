@@ -33,7 +33,8 @@ class ContextBuilder(
         recoveryGuidance: String? = null,
         kernelContext: String? = null,
         constitutionalGuidance: List<String> = emptyList(),
-        verifiedEvidence: List<String> = emptyList()
+        verifiedEvidence: List<String> = emptyList(),
+        collaborationCard: String? = null
     ): String {
         val protectedAdvice = relevantMemory.map(::sanitize).filter { it.isNotBlank() }.distinct()
             .take(minOf(maxMemoryItems, 4))
@@ -49,8 +50,14 @@ class ContextBuilder(
                 protectedAdvice.forEach { appendLine(ProjectWorkspacePolicy.quote(it.take(240))) }
             }
         }
+        // Local receipt card for the selected project. Protected only while the block still fits a 4K local
+        // model; otherwise it becomes the last optional section, so it can never make a run fail.
+        val card = collaborationCard?.trim()?.take(1_600)?.takeIf { task.projectRoot != null && it.isNotEmpty() }
+        val protectedCard = card?.takeIf {
+            RequiredProjectContext.wrap(mandatoryText).length + it.length + 2 <= minOf(maxChars, PROTECTED_WITH_CARD)
+        }
         // The constitution must survive backend compaction in ordinary chats too.
-        val mandatory = RequiredProjectContext.wrap(mandatoryText)
+        val mandatory = RequiredProjectContext.wrap(protectedCard?.let { mandatoryText + "\n" + it + "\n" } ?: mandatoryText)
         require(mandatory.length <= maxChars) {
             "Mandatory constitutional context exceeds configured budget: " +
                 "${mandatory.length} > $maxChars"
@@ -250,6 +257,9 @@ class ContextBuilder(
             )
         }
 
+        // Last optional section: backend clipping keeps the tail of the system prompt longest.
+        if (card != null && protectedCard == null) appendOptional(card)
+
         val omissionMarker = "\n[lower-priority context omitted]"
         if (omitted && out.length + omissionMarker.length <= maxChars) {
             out.append(omissionMarker)
@@ -333,6 +343,11 @@ class ContextBuilder(
         .replace('\u0000', ' ')
         .replace(Regex("[\\r\\n]+"), " ")
         .trim()
+
+    companion object {
+        /** Protected block size that still leaves room on a default 4K-context local Ollama. */
+        const val PROTECTED_WITH_CARD = 5_000
+    }
 
     private fun sanitizeMultiline(value: String): String = value
         .replace('\u0000', ' ')

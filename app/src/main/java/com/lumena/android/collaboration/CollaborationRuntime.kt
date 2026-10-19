@@ -3,8 +3,6 @@ package com.lumena.android.collaboration
 import android.content.Context
 import com.lumena.android.BuildConfig
 import com.lumena.android.agent.core.TaskState
-import com.lumena.android.agent.core.ToolRegistry
-import com.lumena.android.agent.core.ToolRisk
 import com.lumena.android.agent.core.WorkspaceProject
 import com.lumena.android.agent.local.ToolExecutor
 import com.lumena.android.agent.local.ToolRequest
@@ -24,6 +22,23 @@ object CollaborationRuntime {
         require(id == null || ProjectWorkspaceStore.project(c, id) != null)
         check(prefs(c).edit().putString("companion_project", id).commit())
     }
+    /** Owner confirmed that this exact Ollama route is a local model, not a cloud proxy. Embedded needs no attestation. */
+    fun localAttested(c: Context, route: String): Boolean = route.isNotBlank() && prefs(c).getString("local_route", null) == route
+    fun attestLocal(c: Context, route: String, attested: Boolean) {
+        if (route.isNotBlank()) check(prefs(c).edit().putString("local_route", route.takeIf { attested }).commit())
+    }
+    fun route(backend: String, url: String, model: String): String = "$backend|$url|$model"
+
+    /** Receipt card for the acting model; null for cloud routes, other projects or an empty journal. Never creates the journal. */
+    suspend fun cardFor(c: Context, task: TaskState, backend: String, url: String, model: String, bridge: ToolExecutor?): String? =
+        CollaborationStateCard.forLocalModel(backend, url, model, localAttested(c, route(backend, url, model)), task,
+            project = { withContext(Dispatchers.IO) { ProjectWorkspaceStore.project(c, task.projectId) } },
+            appSource = BuildConfig.SOURCE_COMMIT,
+            entries = { withContext(Dispatchers.IO) {
+                if (c.getDatabasePath(CollaborationLedger.DATABASE).exists()) CollaborationLedger(c).entries() else emptyList()
+            } },
+            observe = { root -> bridge?.let { CollaborationStateCard.observe(it, root) } ?: SourceObservation.UNKNOWN })
+
     fun scope(project: WorkspaceProject?, taskId: String, sessionId: String, modelId: String,
               channel: String, bridgeUrl: String, token: String): CollaborationScope = CollaborationScope(
         project?.id ?: "UNASSIGNED", project?.root ?: ".",
@@ -46,7 +61,7 @@ object CollaborationRuntime {
             if (!enabled(c)) {
                 // Disabling capture cannot clear a previously recorded UNKNOWN writer barrier.
                 if (c.getDatabasePath(CollaborationLedger.DATABASE).exists() &&
-                    ToolRegistry.get(toolRequest.tool)?.risk != ToolRisk.READ_ONLY) {
+                    CollaborationProtocol.writer(toolRequest.tool)) {
                     val safe = try { withContext(Dispatchers.IO) {
                         val all = CollaborationLedger(c).entries()
                         CollaborationProtocol.unresolved(all, scope.bridgeBinding).isEmpty()
@@ -56,7 +71,7 @@ object CollaborationRuntime {
                 return delegate.execute(toolRequest)
             }
             return CollaborationLedger(c).execute(CollaborationProtocol.attributedScope(scope, toolRequest), toolRequest, delegate,
-                delivery ?: toolRequest.requestId ?: UUID.randomUUID().toString())
+                delivery ?: toolRequest.requestId ?: UUID.randomUUID().toString()) { root -> CollaborationStateCard.observe(delegate, root) }
         }
     }
 }

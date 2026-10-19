@@ -54,7 +54,7 @@ jobs:
                       'SemanticMemoryCoordinatorTest': 5, 'OwnerActionTextTest': 5,
                       'WorkflowRunnerSemanticRecallTest': 2, 'CollaborationProtocolTest': 5,
                       'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 18,
-                      'CollaborationStateCardTest': 11, 'WorkflowRunnerCollaborationAdapterTest': 3}
+                      'CollaborationStateCardTest': 12, 'WorkflowRunnerCollaborationAdapterTest': 3}
           for name, minimum in expected.items():
               matches = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.' + name + '.xml'))
               assert len(matches) == 1, name

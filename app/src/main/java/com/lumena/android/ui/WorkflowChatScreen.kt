@@ -935,6 +935,11 @@ fun WorkflowChatScreen(
             if (inferenceBackend == "embedded") ggufPath else selectedModel, computeMode,
             "$bridgeUrl|$ollamaUrl")
         val researchGoalSnapshot = researchThread?.rootGoal
+        // The receipt card follows the route this runner's model client actually uses.
+        val cardBackend = inferenceBackend
+        val cardUrl = ollamaUrl
+        val cardModel = modelNameForRun()
+        val runnerBridge = bridgeOrNull()
         val constitutionContributorModelId = if (inferenceBackend == "embedded") {
             "embedded:" + ggufDisplayName.ifBlank { "gguf" }
         } else {
@@ -964,10 +969,14 @@ fun WorkflowChatScreen(
             }
             return if (show) lines else emptyList()
         }
-        return WorkflowRunner(modelClient(), bridgeOrNull(), modelNameForRun(),
+        return WorkflowRunner(modelClient(), runnerBridge, cardModel,
             executionAdapter = { task, executor ->
                 com.lumena.android.collaboration.CollaborationRuntime.forTask(context.applicationContext,
                     task, constitutionContributorModelId, bridgeUrl, bridgeToken, executor)
+            },
+            collaborationCardProvider = { task ->
+                com.lumena.android.collaboration.CollaborationRuntime.cardFor(context.applicationContext,
+                    task, cardBackend, cardUrl, cardModel, runnerBridge)
             },
             semanticMemoryProvider = { task ->
                 com.lumena.android.settings.SemanticMemoryCoordinator(context.applicationContext, ollamaUrl).recall(task)
@@ -2259,7 +2268,7 @@ fun WorkflowChatScreen(
 
     if (showProjects) {
         ProjectWorkspacePanel(workspaceState.projects, workspaceProjectId, workspaceError,
-            reviewIdentity = "$inferenceBackend|$ollamaUrl|${modelNameForRun()}",
+            reviewIdentity = com.lumena.android.collaboration.CollaborationRuntime.route(inferenceBackend, ollamaUrl, modelNameForRun()),
             onReviewReceipts = { handoff, localAttestation ->
                 com.lumena.android.collaboration.CollaborationReview.read(modelClient(),
                     inferenceBackend, ollamaUrl, modelNameForRun(), localAttestation, handoff)

@@ -6,13 +6,12 @@ import android.database.DatabaseErrorHandler
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
 import android.database.sqlite.SQLiteOpenHelper
-import com.lumena.android.agent.core.ToolRegistry
-import com.lumena.android.agent.core.ToolRisk
 import com.lumena.android.agent.local.ToolExecutor
 import com.lumena.android.agent.local.ToolRequest
 import com.lumena.android.agent.local.ToolResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
@@ -115,7 +114,7 @@ class CollaborationLedger(context: Context) {
                 require(it.scope == scope && it.requestDigest == CollaborationProtocol.requestDigest(request)) { "Conflicting collaboration delivery" }
                 error("Delivery already recorded: ${it.id}; consult historical receipt, no re-execution")
             }
-            val mutating = ToolRegistry.get(request.tool)?.risk != ToolRisk.READ_ONLY
+            val mutating = CollaborationProtocol.writer(request.tool)
             if (mutating) {
                 require(CollaborationProtocol.unresolved(all, scope.bridgeBinding).isEmpty()) {
                     "Unresolved writer on this bridge; reconciliation required, no repeat"
@@ -154,7 +153,7 @@ class CollaborationLedger(context: Context) {
         } finally { db.endTransaction() }
     } }
 
-    private fun finish(intent: CollaborationEntry, result: ToolResult) = withHelper { h ->
+    private fun finish(intent: CollaborationEntry, result: ToolResult, source: SourceObservation) = withHelper { h ->
         val db = h.writableDatabase
         db.beginTransaction()
         try {
@@ -164,7 +163,7 @@ class CollaborationLedger(context: Context) {
                 stdoutUtf8Sha256 = CollaborationProtocol.hash(result.stdout), stdoutTruncated = result.stdout.length > 4096,
                 result = result.copy(stdout = result.stdout.take(4096), stderr = result.stderr.take(512), error = result.error?.take(512),
                     tool = result.tool?.take(100), errorCode = result.errorCode?.take(120), failureClass = result.failureClass?.take(120),
-                    dependency = result.dependency?.take(160))))
+                    dependency = result.dependency?.take(160)), sourceDigest = source.digest, sourceGitHead = source.gitHead))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
@@ -182,8 +181,16 @@ class CollaborationLedger(context: Context) {
             val result = try { delegate.execute(request) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { blocked("Transport failed after intent; effect UNKNOWN", true) }
+            // Project fingerprint right after a writer. Failure leaves it UNKNOWN; the receipt itself is never lost.
+            val source = if (observe == null || !intent.mutating || intent.scope.projectId == "UNASSIGNED" || result.outcomeUnknown) {
+                SourceObservation.UNKNOWN
+            } else try { observe(intent.scope.root) }
+            catch (cancelled: CancellationException) {
+                withContext(NonCancellable + Dispatchers.IO) { runCatching { finish(intent, result, SourceObservation.UNKNOWN) } }
+                throw cancelled
+            } catch (_: Exception) { SourceObservation.UNKNOWN }
             return try {
-                withContext(Dispatchers.IO) { finish(intent, result) }
+                withContext(Dispatchers.IO) { finish(intent, result, source) }
                 result
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { blocked("Result not durably saved; effect UNKNOWN; intent=${intent.id}", true) }

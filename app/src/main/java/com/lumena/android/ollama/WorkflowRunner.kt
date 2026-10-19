@@ -139,6 +139,8 @@ class WorkflowRunner(
         val collectedImages = initialImages.toMutableList()
         var protocolTurns = 0
         var semanticMemory: List<String>? = null
+        var collaborationCard: String? = null
+        var collaborationCardRead = false
         publish(state, onState)
 
         // A question about an earlier operation has an app-owned local
@@ -447,10 +449,23 @@ class WorkflowRunner(
             } catch (_: Exception) {
                 emptyList<String>().also { semanticMemory = it }
             }
+            if (!collaborationCardRead && state.task.projectRoot != null) {
+                // Read once per run from the local journal; a cloud route's provider returns null.
+                collaborationCardRead = true
+                collaborationCard = try {
+                    collaborationCardProvider(state.task)?.takeIf { it.isNotBlank() }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
+                collaborationCard?.let { onProgress("COLLABORATION STATE CARD\n" + it.take(1_600)) }
+            }
             val relevantMemory = (semantic.filter { it.startsWith("SEMANTIC MEMORY") } +
                 ordinaryMemory.take(2) + semantic.filterNot { it.startsWith("SEMANTIC MEMORY") } +
                 ordinaryMemory.drop(2)).distinct().take(10)
-            if (capsule != null || relevantMemory.isNotEmpty() || webStrategyAdvice.isNotEmpty() || evidenceContext.isNotEmpty()) {
+            if (capsule != null || relevantMemory.isNotEmpty() || webStrategyAdvice.isNotEmpty() || evidenceContext.isNotEmpty() ||
+                collaborationCard != null) {
                 val kernel = state.task.kernel
                 state = state.copy(task = state.task.copy(kernel = kernel.copy(taint = TrustGate.withMemory(kernel.taint))))
             }
@@ -469,7 +484,8 @@ class WorkflowRunner(
                 state,
                 if (state.task.projectRoot != null) relevantMemory + webStrategyAdvice.take(1) else webStrategyAdvice.take(4) + relevantMemory,
                 constitutionalGuidance,
-                evidenceContext.take(6)
+                evidenceContext.take(6),
+                collaborationCard
             )
             val replyResult = chatWithContextTelemetry(
                 messages = modelMessages,
@@ -1016,7 +1032,8 @@ class WorkflowRunner(
         state: AgentControlState,
         relevantMemory: List<String>,
         constitutionalGuidance: List<String>,
-        verifiedEvidence: List<String>
+        verifiedEvidence: List<String>,
+        collaborationCard: String? = null
     ): List<OllamaMessage> {
         val staticSystem = history.firstOrNull { it.role == "system" }?.content
             ?: LocalWorkflowAgent.systemPrompt
@@ -1024,7 +1041,8 @@ class WorkflowRunner(
             state,
             relevantMemory = relevantMemory,
             constitutionalGuidance = constitutionalGuidance,
-            verifiedEvidence = verifiedEvidence
+            verifiedEvidence = verifiedEvidence,
+            collaborationCard = collaborationCard
         )
         val compactGoal =
             GoalContext.clip(

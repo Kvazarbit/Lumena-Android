@@ -24,7 +24,7 @@ fun CollaborationPanel(project: WorkspaceProject, review: (suspend (String, Bool
     var visible by remember(project.id) { mutableStateOf(false) }
     var answer by remember(project.id) { mutableStateOf("") }
     var busy by remember(project.id) { mutableStateOf(false) }
-    var localAttestation by remember(project.id, reviewIdentity) { mutableStateOf(false) }
+    var localAttestation by remember(project.id, reviewIdentity) { mutableStateOf(CollaborationRuntime.localAttested(context, reviewIdentity)) }
     var acknowledge by remember(project.id) { mutableStateOf<String?>(null) }
     fun refresh() { scope.launch {
         try { entries = withContext(Dispatchers.IO) { CollaborationLedger(context).entries() }; status = "" }
@@ -50,8 +50,8 @@ fun CollaborationPanel(project: WorkspaceProject, review: (suspend (String, Bool
         }
         if (review != null) {
             Row {
-                Checkbox(localAttestation, { localAttestation = it })
-                Text("Для Ollama: підтверджую локальну модель без хмарного проксі")
+                Checkbox(localAttestation, { CollaborationRuntime.attestLocal(context, reviewIdentity, it); localAttestation = it })
+                Text("Для Ollama: підтверджую локальну модель без хмарного проксі. Тоді вона бачить картку стану в задачах цього проєкту.")
             }
             OutlinedButton(enabled = !busy, onClick = {
                 busy = true; answer = ""
