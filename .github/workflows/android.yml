@@ -371,6 +371,7 @@ jobs:
               "com.lumena.android.ollama.WorkflowRunnerSemanticRecallTest",
               "com.lumena.android.collaboration.CollaborationProtocolTest",
               "com.lumena.android.collaboration.CollaborationReviewTest",
+              "com.lumena.android.collaboration.CollaborationStateCardTest",
               "com.lumena.android.ollama.WorkflowRunnerCollaborationAdapterTest",
           ]
           total = 0

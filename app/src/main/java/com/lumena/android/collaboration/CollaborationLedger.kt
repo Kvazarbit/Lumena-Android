@@ -169,7 +169,8 @@ class CollaborationLedger(context: Context) {
         } finally { db.endTransaction() }
     }
 
-    suspend fun execute(scope: CollaborationScope, request: ToolRequest, delegate: ToolExecutor, delivery: String): ToolResult {
+    suspend fun execute(scope: CollaborationScope, request: ToolRequest, delegate: ToolExecutor, delivery: String,
+                        observe: (suspend (String) -> SourceObservation)? = null): ToolResult {
         var captured: CollaborationEntry? = null
         try {
             val intent = try { withContext(Dispatchers.IO) { synchronized(leaseMonitor) {

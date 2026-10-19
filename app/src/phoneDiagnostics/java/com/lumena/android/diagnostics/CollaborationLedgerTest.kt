@@ -195,4 +195,40 @@ class CollaborationLedgerTest {
         assertEquals(CollaborationProtocol.hash(output), result.stdoutUtf8Sha256)
         assertNotEquals(CollaborationProtocol.hash(result.result.stdout), result.stdoutUtf8Sha256)
     }
+    @Test fun writerReceiptKeepsProjectFingerprintFromPlainFolderWithoutGit() = runBlocking {
+        val inspect = """{"schema":"lumena.project.v1","cwd":"aquarium","exists":true,"git":{"head":null,"branch":null,"dirty":null},""" +
+            """"source_digest":"${"a".repeat(64)}","files_count":2,"truncated":false}"""
+        val tools = mutableListOf<String>()
+        val bridge = object : ToolExecutor {
+            override suspend fun execute(toolRequest: ToolRequest): ToolResult {
+                tools += toolRequest.tool
+                return if (toolRequest.tool == "project.inspect") ToolResult(true, stdout = inspect) else ToolResult(true, exitCode = 0, stdout = "written")
+            }
+        }
+        val write = ToolRequest("file.write", mapOf("path" to "aquarium/brain.py", "content" to "x = 1"))
+        assertTrue(CollaborationLedger(context).execute(scope(), write, bridge, "write-1") { CollaborationStateCard.observe(bridge, it) }.ok)
+        val read = ToolRequest("file.read", mapOf("path" to "aquarium/brain.py"))
+        assertTrue(CollaborationLedger(context).execute(scope(), read, bridge, "read-1") { CollaborationStateCard.observe(bridge, it) }.ok)
+        val results = CollaborationLedger(context).entries().filter { it.kind == "RESULT" }
+        assertEquals("a".repeat(64), results.first().sourceDigest)
+        assertNull(results.first().sourceGitHead)
+        assertNull(results.last().sourceDigest)
+        assertEquals(listOf("file.write", "project.inspect", "file.read"), tools)
+    }
+    @Test fun failedFingerprintIsUnknownAndNeverLosesTheReceipt() = runBlocking {
+        val executor = Executor()
+        assertTrue(CollaborationLedger(context).execute(scope(), request, executor, "fingerprint-offline") { error("synthetic bridge offline") }.ok)
+        val all = CollaborationLedger(context).entries()
+        assertEquals(listOf("INTENT", "RESULT"), all.map { it.kind })
+        assertNull(all.last().sourceDigest)
+        assertTrue(CollaborationProtocol.unresolved(all).isEmpty())
+        assertEquals(1, executor.calls)
+    }
+    @Test fun killedModelCallDoesNotFreezeProjectWrites() = runBlocking {
+        val killed = Executor(ToolResult(false, outcomeUnknown = true))
+        CollaborationLedger(context).execute(scope(), ToolRequest("ollama.generate", mapOf("model" to "gemma", "prompt" to "hi")), killed, "killed-model")
+        val executor = Executor()
+        assertTrue(CollaborationLedger(context).execute(scope(), request, executor, "after-killed-model").ok)
+        assertEquals(1, executor.calls)
+    }
 }

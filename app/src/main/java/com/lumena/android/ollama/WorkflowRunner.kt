@@ -119,7 +119,8 @@ class WorkflowRunner(
     private val projectContextProvider: suspend (TaskState) -> com.lumena.android.agent.core.ProjectContextCapsule? = { it.projectContext },
     private val onUnknownOutcome: (TaskState, ToolRequest, ToolResult) -> Unit = { _, _, _ -> },
     private val semanticMemoryProvider: suspend (TaskState) -> List<String> = { emptyList() },
-    private val executionAdapter: (TaskState, ToolExecutor) -> ToolExecutor = { _, executor -> executor }
+    private val executionAdapter: (TaskState, ToolExecutor) -> ToolExecutor = { _, executor -> executor },
+    private val collaborationCardProvider: suspend (TaskState) -> String? = { null }
 ) {
     suspend fun run(
         history: List<OllamaMessage>,

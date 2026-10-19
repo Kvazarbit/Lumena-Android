@@ -2,7 +2,7 @@ name: Project memory regression
 
 on:
   push:
-    branches: [ "codex/daily-project-memory", "codex/verified-collaboration-handoff" ]
+    branches: [ "codex/daily-project-memory", "codex/verified-collaboration-handoff", "feature/collaboration-local-state-card" ]
   workflow_dispatch:
 
 permissions:
@@ -53,8 +53,8 @@ jobs:
           expected = {'PhoneReport2296DiagnosticTest': 11, 'EmbeddingLifecycleDiagnosticTest': 5,
                       'SemanticMemoryCoordinatorTest': 5, 'OwnerActionTextTest': 5,
                       'WorkflowRunnerSemanticRecallTest': 2, 'CollaborationProtocolTest': 5,
-                      'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 15,
-                      'WorkflowRunnerCollaborationAdapterTest': 2}
+                      'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 18,
+                      'CollaborationStateCardTest': 11, 'WorkflowRunnerCollaborationAdapterTest': 3}
           for name, minimum in expected.items():
               matches = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.' + name + '.xml'))
               assert len(matches) == 1, name
@@ -70,7 +70,7 @@ jobs:
           path: app/build/test-results/testDebugUnitTest/TEST-*.xml
           if-no-files-found: error
       - name: Kill collaboration semantic mutants with exact-case oracles
-        if: github.ref_name == 'codex/verified-collaboration-handoff'
+        if: github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card'
         run: python scripts/collaboration_probe.py
       - name: Check private journal is excluded from Android backup and transfer
         run: |

@@ -22,8 +22,13 @@ data class CollaborationEntry(
     val deliveryKey: String, val mutating: Boolean,
     val targets: Map<String, String>, val boundInputSha256: String? = null,
     val result: ToolResult? = null, val stdoutUtf8Sha256: String? = null,
-    val stdoutTruncated: Boolean = false, val at: Long
+    val stdoutTruncated: Boolean = false, val at: Long,
+    val sourceDigest: String? = null, val sourceGitHead: String? = null
 )
+
+data class SourceObservation(val digest: String? = null, val gitHead: String? = null) {
+    companion object { val UNKNOWN = SourceObservation() }
+}
 
 object CollaborationProtocol {
     const val MAX_EVENTS = 10_000
@@ -92,7 +97,7 @@ object CollaborationProtocol {
     }
 
     /** Historical fact is distinct from whether it proves the current source/goal. */
-    fun freshness(e: CollaborationEntry, project: WorkspaceProject, appSource: String): String = when {
+    fun freshness(e: CollaborationEntry, project: WorkspaceProject, appSource: String, current: SourceObservation? = null): String = when {
         e.scope.projectId != project.id || e.scope.root != project.root -> "WRONG_SCOPE"
         e.scope.goalRevision != goalRevision(project) -> "STALE_GOAL"
         e.scope.appSource != "UNKNOWN" && appSource != "UNKNOWN" && e.scope.appSource != appSource -> "STALE_BUILD"
@@ -119,6 +124,8 @@ object CollaborationProtocol {
             }
         if (scoped.isEmpty()) appendLine("UNKNOWN: no local receipt in this scope. No legacy receipt was attested.")
     }
+
+    fun writer(tool: String): Boolean = com.lumena.android.agent.core.ToolRegistry.get(tool)?.risk != com.lumena.android.agent.core.ToolRisk.READ_ONLY
 
     fun unresolved(entries: List<CollaborationEntry>, bridgeBinding: String? = null): List<CollaborationEntry> {
         val results = entries.filter { it.kind == "RESULT" }.associateBy { it.intentId }
