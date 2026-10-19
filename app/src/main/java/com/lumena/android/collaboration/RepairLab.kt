@@ -11,13 +11,21 @@ data class RepairLabRow(val episodeId: String, val taskId: String, val exposed: 
 data class RepairLabState(val config: RepairLabConfig, val rows: List<RepairLabRow> = emptyList())
 
 object RepairLabPolicy {
+    /** Streaming sha256 of a model file; memory stays bounded for multi-gigabyte GGUF weights. */
+    fun sha256(input: java.io.InputStream): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(1 shl 20)
+        while (true) { val n = input.read(buffer); if (n < 0) break; digest.update(buffer, 0, n) }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+    /** Cache key of a hashed model file: a different file or size means a fresh hash. */
+    fun modelFileKey(path: String, size: Long): String = CollaborationProtocol.hash("gguf|$size|$path")
     fun arm(experiment: String, episode: String): Boolean =
         CollaborationProtocol.hash("repair-50/50|$experiment|$episode").take(8).toLong(16) % 2L == 0L
 
     fun assign(state: RepairLabState, episode: RepairEpisode): RepairLabState {
         if (!state.config.active || episode.scope != state.config.scope || episode.status != "OPEN") return state
-        val eligible = state.config.library.filter { it.scope == episode.scope && it.check == episode.check && it.signature == episode.signature }
-            .takeLast(2).map { it.id }
+        val eligible = RepairCasePolicy.eligible(state.config.library, episode).map { it.id }
         if (eligible.isEmpty()) return state
         val existing = state.rows.firstOrNull { it.episodeId == episode.id }
         if (existing != null) return state.copy(rows = state.rows.map { if (it == existing && !it.invalidConditions) it.copy(taskId = episode.taskId, ended = false) else it })
@@ -47,7 +55,7 @@ object RepairLabPolicy {
             val costs = solved.map { it.steps }.sorted()
             val median = if (costs.isEmpty()) "?" else if (costs.size % 2 == 1) costs[costs.size / 2].toString()
                 else ((costs[costs.size / 2 - 1] + costs[costs.size / 2]) / 2.0).toString()
-            appendLine("${if (exposed) "З кейсами" else "Без кейсів"}: призначено ${rows.size}; SOLVED ${solved.size}; UNRESOLVED $unresolved; відкрито $pending; змінені умови ${rows.count { it.invalidConditions }}; медіана кроків $median; відхилених DONE ${rows.sumOf { it.rejectedDone }}; прийнятих DONE ${rows.sumOf { it.acceptedDone }}; запитів ${rows.sumOf { it.modelRequests }}, з кейсами ${rows.sumOf { it.requestsWithCases }}.")
+            appendLine("${if (exposed) "З кейсами" else "Без кейсів"}: призначено ${rows.size}; SOLVED ${solved.size}; UNRESOLVED $unresolved; відкрито $pending; змінені умови ${rows.count { it.invalidConditions }}; медіана дієвих кроків (запис/тест) $median; відхилених DONE ${rows.sumOf { it.rejectedDone }}; прийнятих DONE ${rows.sumOf { it.acceptedDone }}; запитів ${rows.sumOf { it.modelRequests }}, з кейсами ${rows.sumOf { it.requestsWithCases }}.")
         }
         val enough = listOf(true, false).all { arm -> state.rows.count {
             it.exposed == arm && (it.ended || it.invalidConditions || episodes[it.episodeId]?.status in setOf("SOLVED", "UNRESOLVED"))

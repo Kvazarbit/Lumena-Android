@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.33
+Lumena Termux Bridge v0.34
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -4011,8 +4011,8 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + alias for alias, root in READONLY_ALIASES.items() if root.exists()) or '(none)'}\n"
                 f"read_roots_config={READ_ROOTS_FILE}\n"
-                f"version=0.33\n"
-                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1,python_clean_env_v1,python_run_sha256_v1,project_workspace_v1,python_fresh_bytecode_v1,file_cas_v1,verification_boundary_v1\n"
+                f"version=0.34\n"
+                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1,python_clean_env_v1,python_run_sha256_v1,project_workspace_v1,python_fresh_bytecode_v1,file_cas_v1,verification_boundary_v1,failed_test_id_v1\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
                 f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
@@ -4371,6 +4371,9 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                     identities = [file + '::' + c.get('classname', '') + '::' + c.get('name', '') for file, c in zip(files, cases)]
                     covered = all(file in before['files'] and file.endswith('.py') for file in files)
                     failures = [node for c in cases for node in c if node.tag in ('failure', 'error')]
+                    # First failing case identity: retrieval key for repair cases (same test failing again).
+                    failed_ids = [ident for ident, c in zip(identities, cases)
+                        if any(node.tag in ('failure', 'error') for node in c)]
                     failure_signature = None
                     failure_summary = None
                     if failures:
@@ -4385,6 +4388,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                         testsCount=len(cases), complete=before['complete'] and after['complete'] and covered and len(set(identities)) == len(identities) and all(c.find('skipped') is None for c in cases),
                         boundaryUnchanged=before['hash'] == after['hash'] and spec_hash == verification_spec(cwd, extra, declared),
                         failureSignature=failure_signature, failureSummary=failure_summary,
+                        failedTestId=failed_ids[0][:300] if failed_ids else None,
                         testFiles=sorted(set(file for file in files if len(file) <= 200))[:16] if covered else [])
                 result['stdout'] = json.dumps({'schema': 'lumena.project.tests.v1', 'cwd': str(args['cwd']),
                     'tests_count': count, 'verified': verified, 'output': result.get('stdout', '')[:10000]}, ensure_ascii=False)
@@ -4525,7 +4529,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     _mark_interrupted_search_from_previous_run()
-    print("Lumena Termux Bridge v0.33")
+    print("Lumena Termux Bridge v0.34")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")

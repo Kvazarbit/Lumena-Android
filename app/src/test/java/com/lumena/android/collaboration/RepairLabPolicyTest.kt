@@ -77,4 +77,22 @@ class RepairLabPolicyTest {
         assertEquals(1, leaked.rows.size)
         assertTrue(leaked.rows.single().invalidConditions)
     }
+
+    @Test fun sameFailedTestIsAssignedAcrossAChangedVerifier() {
+        val named = case.copy(id = "named", project = "proj", testId = "tests/t.py::t::test_a", failure = "AssertionError|x")
+        val state = RepairLabState(cfg.copy(library = listOf(named)))
+        val e = episode().copy(check = "changed", signature = "changed", project = "proj",
+            testId = "tests/t.py::t::test_a", failure = "AssertionError|y")
+        assertEquals(listOf("named"), RepairLabPolicy.assign(state, e).rows.single().cases)
+    }
+
+    // 7.9 fix 4: an embedded GGUF model is identified by a streaming file hash, cached per file and size.
+    @Test fun modelFileIdentityIsAStreamingHashKeyedByFileAndSize() {
+        assertEquals("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", RepairLabPolicy.sha256("abc".byteInputStream()))
+        val big = ByteArray(3 * 1024 * 1024 + 7) { (it % 251).toByte() }
+        val expected = java.security.MessageDigest.getInstance("SHA-256").digest(big).joinToString("") { "%02x".format(it) }
+        assertEquals(expected, RepairLabPolicy.sha256(big.inputStream()))
+        assertNotEquals(RepairLabPolicy.modelFileKey("content://m/gemma.gguf", 10), RepairLabPolicy.modelFileKey("content://m/gemma.gguf", 11))
+        assertNotEquals(RepairLabPolicy.modelFileKey("content://m/a.gguf", 10), RepairLabPolicy.modelFileKey("content://m/b.gguf", 10))
+    }
 }

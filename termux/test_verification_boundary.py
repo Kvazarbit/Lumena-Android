@@ -51,6 +51,11 @@ class VerificationBoundaryTest(unittest.TestCase):
         (self.project/'pytest.ini').write_text('[pytest]\naddopts=-x\n')
         self.assertNotEqual(first['boundaryHash'], self.run_fixture()['verification']['boundaryHash'])
 
+    def test_failed_test_identity_is_reported_only_for_a_failure(self):
+        fail = self.run_fixture(failed=True)['verification']
+        self.assertEqual('tests/test_calc.py::tests.test_calc::test_one', fail['failedTestId'])
+        self.assertIsNone(self.run_fixture()['verification']['failedTestId'], 'PASS_REPORTED_AS_FAILED_TEST')
+
     def test_failed_run_keeps_real_case_identity_and_failure_signature(self):
         fail = self.run_fixture(failed=True)['verification']
         passed = self.run_fixture()['verification']

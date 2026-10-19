@@ -2340,6 +2340,10 @@ fun WorkflowChatScreen(
     if (showProjects) {
         ProjectWorkspacePanel(workspaceState.projects, workspaceProjectId, workspaceError,
             onWorkspaceChanged = { workspaceState = it },
+            onInspectProject = { root ->
+                // Read-only inventory for the owner's boundary suggestion; nothing is saved without the owner.
+                withContext(Dispatchers.IO) { bridgeOrNull()?.execute(ToolRequest("project.inspect", mapOf("cwd" to root))) }
+            },
             onRemoteContext = { projectId, allowed ->
                 uiScope.launch {
                     try {

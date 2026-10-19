@@ -20,7 +20,8 @@ fun ProjectWorkspacePanel(
     onReviewReceipts: (suspend (String, Boolean) -> String)? = null,
     reviewIdentity: String = "",
     onRemoteContext: (String, Boolean) -> Unit = { _, _ -> },
-    onWorkspaceChanged: (ProjectWorkspaceState) -> Unit = {}
+    onWorkspaceChanged: (ProjectWorkspaceState) -> Unit = {},
+    onInspectProject: (suspend (String) -> com.lumena.android.agent.local.ToolResult?)? = null
 ) {
     var adding by remember { mutableStateOf(projects.isEmpty()) }
     var editingId by remember { mutableStateOf<String?>(null) }
@@ -70,7 +71,7 @@ fun ProjectWorkspacePanel(
                 Text(p.name, style = MaterialTheme.typography.titleMedium)
                 if (p.restoredArchive != null) Text("Історію відновлено з архіву. Поточний стан файлів ще потребує перевірки.")
                 CollaborationPanel(p, onReviewReceipts, reviewIdentity)
-                ExperienceLoopPanel(p, reviewIdentity, onWorkspaceChanged)
+                ExperienceLoopPanel(p, reviewIdentity, onWorkspaceChanged, onInspectProject)
                 Text(p.goal)
                 Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     Checkbox(com.lumena.android.collaboration.CollaborationRuntime.remoteAllowed(

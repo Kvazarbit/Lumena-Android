@@ -29,11 +29,14 @@ data class VerificationEvidence(
     val testsCount: Int, val complete: Boolean, val boundaryUnchanged: Boolean,
     val failureSignature: String? = null,
     val schema: String = "lumena.verification.v1", val failureSummary: String? = null,
-    val testFiles: List<String> = emptyList()
+    val testFiles: List<String> = emptyList(),
+    /** First failing JUnit case `file::class::name`; retrieval key for repair cases, never a proof by itself. */
+    val failedTestId: String? = null
 ) {
     fun valid(): Boolean = schema == "lumena.verification.v1" && testsCount in 1..100_000 &&
         listOf(specHash, boundaryHash, selectedTestsHash).all { it.matches(Regex("[a-f0-9]{64}")) } &&
         (failureSignature == null || failureSignature.matches(Regex("[a-f0-9]{64}"))) && (failureSummary?.length ?: 0) <= 240 &&
+        (failedTestId == null || (failedTestId.length in 1..300 && failedTestId.none { it.isISOControl() })) &&
         testFiles.size <= 16 && testFiles.distinct().size == testFiles.size && testFiles.all {
             it.length in 1..200 && !it.startsWith('/') && '\\' !in it && ':' !in it && it.split('/').none { p -> p == ".." } }
 }

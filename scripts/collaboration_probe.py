@@ -10,6 +10,14 @@ BASE = ROOT / "app/src/main/java/com/lumena/android/collaboration"
 REPORTS = ROOT / "app/build/test-results/testDebugUnitTest"
 OUT = ROOT / "app/build/collaboration-probe"
 MUTANTS = [
+    ("generic-message-joins-tests", "RepairCases.kt",
+     '(c.testId.isEmpty() || episode.testId.isEmpty()) -> 2', 'true -> 2',
+     "com.lumena.android.collaboration.RepairCasePolicyTest.aGenericMessageInAnotherTestFileNoLongerJoinsUnrelatedCases", "UNRELATED_TEST_JOINED",
+     "com.lumena.android.collaboration.RepairCasePolicyTest.realObservedRepairRetainsProofAndCausalChange"),
+    ("reads-consume-repair-steps", "RepairCases.kt",
+     'if (e.tool in effectful) o.steps++ else if', 'if (true) o.steps++ else if',
+     "com.lumena.android.collaboration.RepairCasePolicyTest.readsBeforeAPatchDoNotConsumeEffectfulSteps", "CAREFUL_READING_PENALIZED",
+     "com.lumena.android.collaboration.RepairCasePolicyTest.realObservedRepairRetainsProofAndCausalChange"),
     ("invalid-episode-redraw", "RepairCases.kt",
      'if (k in blocked) {', 'if (false) {',
      "com.lumena.android.collaboration.RepairCasePolicyTest.invalidIntervalCannotRedrawAnEpisodeUntilARealPass", "INVALID_INTERVAL_REDRAWN",

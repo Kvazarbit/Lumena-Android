@@ -16,7 +16,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
-fun ExperienceLoopPanel(project: WorkspaceProject, route: String, changed: (ProjectWorkspaceState) -> Unit) {
+fun ExperienceLoopPanel(project: WorkspaceProject, route: String, changed: (ProjectWorkspaceState) -> Unit,
+                        inspect: (suspend (String) -> com.lumena.android.agent.local.ToolResult?)? = null) {
     val context = LocalContext.current.applicationContext
     val scope = rememberCoroutineScope()
     var paths by remember(project.id, project.verificationPaths) { mutableStateOf(project.verificationPaths.joinToString("\n")) }
@@ -34,7 +35,8 @@ fun ExperienceLoopPanel(project: WorkspaceProject, route: String, changed: (Proj
     OutlinedButton(onClick = { visible = !visible }) { Text("Досвід проєкту й лабораторія") }
     if (!visible) return
     Text("Випадки виправлень збираються з журналу: однакова перевірка впала → правка файлу → пройшла. Це історичні приклади, а не правила чи дозволи.")
-    Text("Потрібен bridge 0.33. Вкажи всі тести, допоміжні файли та дані перевірки — по одному шляху від кореня проєкту. Зміна цього списку починає нову версію мети.")
+    Text("Потрібен bridge 0.33 або новіший; з 0.34 випадок шукається за тестом, що впав. Вкажи всі тести, допоміжні файли та дані перевірки — по одному шляху від кореня проєкту. Зміна цього списку починає нову версію мети; старі випадки лишаються з позначкою.")
+    if (project.verificationPaths.isEmpty()) Text("Межу тестів не задано — випадки виправлень зараз не створюються. Натисни «Запропонувати межу» або впиши шляхи вручну.", color = MaterialTheme.colorScheme.error)
     OutlinedTextField(paths, { paths = it.take(4000) }, label = { Text("Наприклад: tests або tests/test_calc.py") },
         minLines = 2, modifier = Modifier.fillMaxWidth())
     OutlinedButton(enabled = !busy, onClick = { action {
@@ -45,7 +47,16 @@ fun ExperienceLoopPanel(project: WorkspaceProject, route: String, changed: (Proj
         } }
         changed(updated); "Межу перевірки збережено. Почни новий запит для зміненої мети."
     } }) { Text("Зберегти межу перевірки") }
-    Text("За замовчуванням неперевірені поради не додаються до проєктного чату. Дослід випадково показує або приховує 1–2 кейси; модель, бібліотека й умови фіксуються. Для цього етапу потрібна підтверджена локальна Ollama з відбитком моделі. Вбудований чат працює без досліду.")
+    if (inspect != null) OutlinedButton(enabled = !busy, onClick = { action {
+        val found = VerificationBoundaryProposal.inventory(inspect(project.root), project.root)
+            ?: error("Bridge не повернув список файлів проєкту. Перевір, що bridge запущено (0.30 або новіший).")
+        val proposal = VerificationBoundaryProposal.propose(found.files)
+        require(proposal.isNotEmpty()) { "Тестів не знайдено (tests/, test_*.py, *_test.py, conftest.py). Впиши шляхи вручну." }
+        paths = proposal.joinToString("\n")
+        "Запропоновано: ${proposal.size}. Перевір список і натисни «Зберегти межу перевірки» — без цього нічого не збережено." +
+            if (found.partial) " Список файлів проєкту неповний: додай пропущені тести вручну." else ""
+    } }) { Text("Запропонувати межу з файлів проєкту") }
+    Text("За замовчуванням неперевірені поради не додаються до проєктного чату. Дослід випадково показує або приховує 1–2 кейси; модель, бібліотека й умови фіксуються. Дослід працює з вбудованою моделлю (на старті Lumena один раз рахує відбиток файлу GGUF — для великої моделі це може тривати до хвилини) або з підтвердженою локальною Ollama.")
     OutlinedButton(enabled = !busy, onClick = { action {
         val current = withContext(Dispatchers.IO) { requireNotNull(ProjectWorkspaceStore.project(context, project.id)) }
         RepairLabStore.start(context, current, route)

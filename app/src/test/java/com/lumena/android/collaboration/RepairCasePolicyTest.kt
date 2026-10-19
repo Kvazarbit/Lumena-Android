@@ -117,4 +117,66 @@ class RepairCasePolicyTest {
         assertEquals("SOLVED_OUTCOME_EVICTED", "SOLVED", retained.episodes.single { it.id == first.intentId }.status)
         assertEquals(RepairCasePolicy.MAX_CASES, retained.cases.size)
     }
+
+    // 7.9 fix 1: retrieval is about the same problem in the same project; creation validity stays strict.
+    private val failedId = "tests/test_calc.py::tests.test_calc::test_one"
+    private val named = stamp.copy(failedTestId = failedId, failureSummary = "AssertionError|assert 2 == 3")
+    private fun namedCase(): RepairCase =
+        RepairCasePolicy.derive(listOf(event("python.tests", false, proof = named), patch(), pass())).cases.single()
+    private fun openEpisode(proof: VerificationEvidence): RepairEpisode =
+        RepairCasePolicy.derive(listOf(event("python.tests", false, 'e', proof))).episodes.single()
+
+    @Test fun sameFailedTestStillFindsItsCaseAfterTheSuiteGrows() {
+        val case = namedCase()
+        assertEquals(failedId, case.testId)
+        val grown = openEpisode(named.copy(boundaryHash = "9".repeat(64), selectedTestsHash = "8".repeat(64),
+            failureSignature = "7".repeat(64)))
+        assertEquals("CASE_LOST_WHEN_SUITE_GREW", listOf(case.id), RepairCasePolicy.eligible(listOf(case), grown).map { it.id })
+        assertTrue(RepairCasePolicy.advice(listOf(case), grown, true).single().contains("changed since: tests"))
+    }
+
+    @Test fun aGenericMessageInAnotherTestFileNoLongerJoinsUnrelatedCases() {
+        val case = namedCase()
+        val other = openEpisode(named.copy(failedTestId = "other/test_io.py::other.test_io::test_read"))
+        assertEquals(case.check, other.check)
+        assertEquals(case.signature, other.signature)
+        assertTrue("UNRELATED_TEST_JOINED", RepairCasePolicy.eligible(listOf(case), other).isEmpty())
+    }
+
+    @Test fun sameTestRanksAboveSameFileAndOtherProjectsNeverMatch() {
+        val exact = namedCase()
+        val sibling = exact.copy(id = "sibling", testId = "tests/test_calc.py::tests.test_calc::test_two", at = exact.at + 100)
+        val episode = openEpisode(named.copy(boundaryHash = "9".repeat(64)))
+        assertEquals(listOf(exact.id, "sibling"), RepairCasePolicy.eligible(listOf(exact, sibling), episode).map { it.id })
+        val foreign = exact.copy(id = "foreign", project = RepairCasePolicy.project("elsewhere", "other"))
+        assertTrue("FOREIGN_PROJECT_CASE", RepairCasePolicy.eligible(listOf(foreign), episode).isEmpty())
+    }
+
+    @Test fun changedGoalKeepsTheCaseWithALabel() {
+        val case = namedCase()
+        val episode = openEpisode(named).copy(goal = "0".repeat(64))
+        assertEquals(1, RepairCasePolicy.eligible(listOf(case), episode).size)
+        assertTrue(RepairCasePolicy.advice(listOf(case), episode, true).single().contains("changed since: goal"))
+    }
+
+    // 7.9 fix 2: reads required by read-before-write do not consume the effectful step budget.
+    @Test fun readsBeforeAPatchDoNotConsumeEffectfulSteps() {
+        val history = listOf(fail()) + (1..10).map { event("file.read", true) } + listOf(patch(), pass())
+        val s = RepairCasePolicy.derive(history)
+        assertEquals("CAREFUL_READING_PENALIZED", "SOLVED", s.episodes.single().status)
+        assertEquals(2, s.episodes.single().steps)
+        assertEquals(10, s.episodes.single().reads)
+        assertEquals(1, s.cases.size)
+    }
+
+    @Test fun ninePatchesWithoutPassHitTheEffectfulStepLimit() {
+        val s = RepairCasePolicy.derive(listOf(fail()) + (1..9).map { patch() })
+        assertEquals("STEP_LIMIT", s.episodes.single().reason)
+    }
+
+    @Test fun endlessReadingIsUnresolvedWithItsOwnReason() {
+        val s = RepairCasePolicy.derive(listOf(fail()) + (1..RepairCasePolicy.MAX_READS + 1).map { event("file.read", true) })
+        assertEquals("UNRESOLVED", s.episodes.single().status)
+        assertEquals("READ_LIMIT", s.episodes.single().reason)
+    }
 }

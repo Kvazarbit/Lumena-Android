@@ -36,9 +36,32 @@ object RepairLabStore {
     fun stop(c: Context, project: String) = synchronized(monitor) {
         load(c, project)?.let { save(c, it.copy(config = it.config.copy(active = false), rows = it.rows.map { r -> r.copy(ended = true) })) }
     }
-    /** No owner text is sent. Digest is fetched from the attested loopback model service. */
-    private fun modelDigest(c: Context, route: String): String? {
+    /**
+     * Embedded model identity: sha256 of the owner's GGUF file. Hashed once per (file, size) and cached on
+     * this device; the experiment start always re-hashes. No model text or owner data leaves the phone.
+     */
+    private fun ggufDigest(c: Context, force: Boolean): String? {
+        val path = com.lumena.android.settings.LumenaPreferences.load(c).ggufPath.trim()
+        if (path.isEmpty()) return null
+        val uri = android.net.Uri.parse(path)
+        val local = uri.scheme == null || uri.scheme == "file"
+        val file = java.io.File(uri.path ?: path)
+        val size = if (local) file.length() else (c.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE),
+            null, null, null)?.use { row -> if (row.moveToFirst() && !row.isNull(0)) row.getLong(0) else null }
+            ?: c.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length })
+        if (size == null || size <= 0L) return null
+        val key = RepairLabPolicy.modelFileKey(path, size)
+        val cached = prefs(c).getString("repair_lab_gguf", null)?.split('=', limit = 2)
+        if (!force && cached != null && cached.size == 2 && cached[0] == key && cached[1].matches(Regex("[a-f0-9]{64}"))) return cached[1]
+        val digest = (if (local) file.inputStream() else requireNotNull(c.contentResolver.openInputStream(uri)))
+            .use(RepairLabPolicy::sha256)
+        check(prefs(c).edit().putString("repair_lab_gguf", "$key=$digest").commit())
+        return digest
+    }
+    /** No owner text is sent. Digest is fetched from the attested loopback model service or the local GGUF file. */
+    private fun modelDigest(c: Context, route: String, force: Boolean = false): String? {
         val parts = route.split('|', limit = 3)
+        if (parts.size == 3 && parts[0] == "embedded") return ggufDigest(c, force)
         if (parts.size != 3 || parts[0] != "ollama" || !CollaborationReview.localRoute(parts[0], parts[1], parts[2],
                 CollaborationRuntime.localAttested(c, route))) return null
         val request = Request.Builder().url(parts[1].trimEnd('/') + "/api/tags").get().build()
@@ -58,9 +81,14 @@ object RepairLabStore {
     suspend fun start(c: Context, project: WorkspaceProject, route: String) = withContext(Dispatchers.IO) {
         require(CollaborationRuntime.enabled(c)) { "Спершу ввімкни локальний журнал" }
         require(project.verificationPaths.isNotEmpty()) { "Спершу задай межу тестів і отримай перевірений випадок виправлення" }
-        val digest = requireNotNull(modelDigest(c, route)) { "Лабораторія потребує підтвердженої локальної Ollama та її реального digest" }
+        val digest = requireNotNull(modelDigest(c, route, force = true)) {
+            "Лабораторія потребує вбудованої моделі з вибраним файлом GGUF або підтвердженої локальної Ollama з її digest"
+        }
         val scope = RepairCasePolicy.scope(project)
-        val library = CollaborationLedger(c).repairSnapshot().cases.filter { it.scope == scope }.takeLast(RepairCasePolicy.MAX_CASES)
+        // Cases from earlier goal versions of the same project stay usable; retrieval labels what changed since.
+        val own = RepairCasePolicy.project(project)
+        val library = CollaborationLedger(c).repairSnapshot().cases
+            .filter { it.scope == scope || (it.project.isNotEmpty() && it.project == own) }.takeLast(RepairCasePolicy.MAX_CASES)
         require(library.isNotEmpty()) { "Немає кейсів з незмінною перевіркою. Спершу виконай FAIL → правка → PASS у проєкті" }
         synchronized(monitor) {
             val old = load(c, project.id)
