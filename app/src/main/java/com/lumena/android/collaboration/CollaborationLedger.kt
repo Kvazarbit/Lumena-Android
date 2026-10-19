@@ -18,6 +18,10 @@ import java.util.UUID
 class CollaborationLedger(context: Context) {
     private val appContext = context.applicationContext
     private fun helper() = Helper(appContext)
+    private inline fun <T> withHelper(block: (Helper) -> T): T {
+        val h = helper()
+        try { return block(h) } finally { h.close() }
+    }
 
     private class Helper(context: Context) : SQLiteOpenHelper(context, DATABASE, null, 1) {
         override fun onConfigure(db: SQLiteDatabase) {
@@ -36,6 +40,11 @@ class CollaborationLedger(context: Context) {
 
     private fun read(db: SQLiteDatabase): List<CollaborationEntry> {
         val out = mutableListOf<CollaborationEntry>()
+        val identities = mutableSetOf<String>()
+        val deliveries = mutableSetOf<String>()
+        val intents = mutableMapOf<String, CollaborationEntry>()
+        val results = mutableMapOf<String, CollaborationEntry>()
+        val acknowledged = mutableSetOf<String>()
         var previous = "GENESIS"
         var bytes = 0
         var seq = 0L
@@ -49,14 +58,21 @@ class CollaborationLedger(context: Context) {
                 val entry = CollaborationProtocol.decode(body)
                 require(entry.id == c.getString(1))
                 if (entry.kind != "INTENT") {
-                    val intent = out.firstOrNull { it.id == entry.intentId && it.kind == "INTENT" }
+                    val intent = intents[entry.intentId]
                     require(intent != null && intent.scope == entry.scope && intent.tool == entry.tool &&
                         intent.requestDigest == entry.requestDigest && intent.deliveryKey == entry.deliveryKey &&
                         intent.targets == entry.targets && intent.mutating == entry.mutating &&
-                        intent.boundInputSha256 == entry.boundInputSha256 && out.none { it.kind == entry.kind && it.intentId == entry.intentId })
-                    if (entry.kind == "OWNER_ACK_UNKNOWN") require(intent in CollaborationProtocol.unresolved(out))
+                        intent.boundInputSha256 == entry.boundInputSha256)
+                    if (entry.kind == "OWNER_ACK_UNKNOWN") {
+                        require(intent.mutating && acknowledged.add(intent.id) &&
+                            (results[intent.id] == null || results[intent.id]?.result?.outcomeUnknown == true))
+                    } else require(results.put(entry.intentId, entry) == null)
                 }
-                require(out.none { it.id == entry.id || (entry.kind == "INTENT" && it.kind == "INTENT" && it.deliveryKey == entry.deliveryKey) })
+                require(identities.add(entry.id))
+                if (entry.kind == "INTENT") {
+                    require(deliveries.add(entry.deliveryKey))
+                    intents[entry.id] = entry
+                }
                 out += entry
                 previous = c.getString(4)
             }
@@ -80,10 +96,10 @@ class CollaborationLedger(context: Context) {
         })
     }
 
-    fun entries(): List<CollaborationEntry> = helper().use { h -> read(h.readableDatabase) }
+    fun entries(): List<CollaborationEntry> = withHelper { h -> read(h.readableDatabase) }
 
     /** Called after ToolGate/owner approval and Python hash binding, immediately before transport. */
-    private fun begin(scope: CollaborationScope, request: ToolRequest, delivery: String): CollaborationEntry = helper().use { h ->
+    private fun begin(scope: CollaborationScope, request: ToolRequest, delivery: String): CollaborationEntry = withHelper { h ->
         val db = h.writableDatabase
         db.beginTransaction()
         try {
@@ -109,7 +125,8 @@ class CollaborationLedger(context: Context) {
                 boundInputSha256 = request.args["approved_sha256"]?.takeIf { request.tool == "python.run" && it.matches(Regex("[a-f0-9]{64}")) },
                 at = System.currentTimeMillis())
             // Reserve room for a result BEFORE authorizing transport. Full journal never discards data.
-            val unfinished = all.count { e -> e.kind == "INTENT" && all.none { it.kind == "RESULT" && it.intentId == e.id } }
+            val completed = all.filter { it.kind == "RESULT" }.map { it.intentId }.toHashSet()
+            val unfinished = all.count { it.kind == "INTENT" && it.id !in completed }
             require(all.size + unfinished + 2 <= CollaborationProtocol.MAX_EVENTS)
             val used = all.sumOf { CollaborationProtocol.encode(it).toByteArray(Charsets.UTF_8).size.toLong() }
             require(used + CollaborationProtocol.encode(e).toByteArray(Charsets.UTF_8).size + (unfinished + 1L) * 32_768 <= CollaborationProtocol.MAX_BYTES)
@@ -120,7 +137,7 @@ class CollaborationLedger(context: Context) {
     }
 
     /** Explicit local owner acknowledgement after inspection, never a successful outcome or automatic retry. */
-    fun acknowledgeUnknownFromOwner(intentId: String) = synchronized(leaseMonitor) { helper().use { h ->
+    fun acknowledgeUnknownFromOwner(intentId: String) = synchronized(leaseMonitor) { withHelper { h ->
         require(intentId !in active) { "Execution still active; stop and inspect the tool first" }
         val db = h.writableDatabase
         db.beginTransaction()
@@ -133,7 +150,7 @@ class CollaborationLedger(context: Context) {
         } finally { db.endTransaction() }
     } }
 
-    private fun finish(intent: CollaborationEntry, result: ToolResult) = helper().use { h ->
+    private fun finish(intent: CollaborationEntry, result: ToolResult) = withHelper { h ->
         val db = h.writableDatabase
         db.beginTransaction()
         try {
