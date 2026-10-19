@@ -76,7 +76,7 @@ Context OS Android
 
 `CollaborationReviewTest`: synthetic private canary не доходить до cloud/remote client; локальна attestation потрібна; reader має лише два повідомлення й не має інструментального інтерфейсу.
 
-`CollaborationLedgerTest` (opt-in Robolectric/SQLite): 10 reopen cycles, duplicate/altered deliveries, wrong-project relabel, UNKNOWN across projects/connection changes, cancellation, concurrent writers, active ACK rejection, explicit ACK з незмінним історичним UNKNOWN, capture-off barrier, corrupted DB, forged stdout, normal disabled fallback, bounded output hash.
+`CollaborationLedgerTest` (opt-in Robolectric/SQLite): 10 reopen cycles, duplicate/altered deliveries, wrong-project relabel, UNKNOWN across projects/connection changes, cancellation, concurrent writers, active ACK rejection, explicit ACK з незмінним історичним UNKNOWN, capture-off barrier, corrupted records та фізично пошкоджений SQLite-файл, forged stdout, normal disabled fallback, bounded output hash. Замість Android DefaultDatabaseErrorHandler використано fail-visible handler без видалення: стандартний handler може видаляти пошкоджену БД, що порушило б збереження доказів.
 
 CI запускає старі phone diagnostics разом із новими тестами, вимагає непорожні JUnit звіти без skipped/failures/errors; окремий probe перевіряє репрезентативні semantic mutants. Повний Android CI зберігає чинні unit/bridge/native/mutation/release gates. Результат конкретного коміту повідомляється після завершення CI, не наперед.
 

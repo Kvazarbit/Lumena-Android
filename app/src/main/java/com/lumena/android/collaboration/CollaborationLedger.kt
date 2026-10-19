@@ -2,7 +2,9 @@ package com.lumena.android.collaboration
 
 import android.content.ContentValues
 import android.content.Context
+import android.database.DatabaseErrorHandler
 import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteException
 import android.database.sqlite.SQLiteOpenHelper
 import com.lumena.android.agent.core.ToolRegistry
 import com.lumena.android.agent.core.ToolRisk
@@ -23,7 +25,8 @@ class CollaborationLedger(context: Context) {
         try { return block(h) } finally { h.close() }
     }
 
-    private class Helper(context: Context) : SQLiteOpenHelper(context, DATABASE, null, 1) {
+    private class Helper(context: Context) : SQLiteOpenHelper(context, DATABASE, null, 1,
+        DatabaseErrorHandler { throw SQLiteException("Collaboration SQLite corruption; original file retained") }) {
         override fun onConfigure(db: SQLiteDatabase) {
             db.disableWriteAheadLogging()
             db.execSQL("PRAGMA synchronous=FULL")

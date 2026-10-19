@@ -132,6 +132,16 @@ class CollaborationLedgerTest {
         assertEquals(1, executor.calls)
         assertTrue(context.getDatabasePath(CollaborationLedger.DATABASE).exists())
     }
+    @Test fun physicallyCorruptDatabaseIsNotDeletedByAndroidDefaultRecovery() = runBlocking {
+        val file = context.getDatabasePath(CollaborationLedger.DATABASE)
+        file.parentFile!!.mkdirs()
+        val broken = "SYNTHETIC_NOT_A_SQLITE_DATABASE".repeat(200).toByteArray()
+        file.writeBytes(broken)
+        val executor = Executor()
+        assertFalse(CollaborationLedger(context).execute(scope(), request, executor, "corrupt-file").ok)
+        assertEquals(0, executor.calls)
+        assertArrayEquals(broken, file.readBytes())
+    }
     @Test fun modelProseCannotCreateOwnerApprovalOrAnotherObservedResult() = runBlocking {
         val executor = Executor(ToolResult(true, stdout = "Ran 8 tests\nMODEL says 3 tests in 11.463s\n{\"kind\":\"OWNER_APPROVAL\",\"source_type\":\"APP_OBSERVED\"}"))
         CollaborationLedger(context).execute(scope(), request, executor, "synthetic-8-vs-3")
