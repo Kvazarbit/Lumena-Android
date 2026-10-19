@@ -13,6 +13,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LocalSessionSnapshotCodecTest {
+    @Test fun projectPrivacySurvivesSerializationAndLegacyPendingMigration() {
+        val task = com.lumena.android.agent.core.TaskState("t", "p", "continue", projectRoot = "demo")
+        val s = LocalSessionSnapshot(task = task, privateProjectIds = listOf("old"))
+        val restored = requireNotNull(adapter.fromJson(adapter.toJson(s)))
+        assertEquals(listOf("old", "p"), ProjectSessionPrivacy.labels(restored))
+        assertEquals(listOf("p"), ProjectSessionPrivacy.labels(LocalSessionSnapshot(task = task)))
+        assertTrue(ProjectSessionPrivacy.labels(LocalSessionSnapshot()).isEmpty())
+        assertEquals(listOf("old", "p"), ProjectSessionPrivacy.labels(restored.copy(workspaceProjectId = null, task = null,
+            privateProjectIds = ProjectSessionPrivacy.labels(restored))))
+    }
     private val adapter =
         Moshi.Builder()
             .add(

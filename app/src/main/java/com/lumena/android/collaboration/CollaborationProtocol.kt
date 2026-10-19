@@ -1,6 +1,7 @@
 package com.lumena.android.collaboration
 
 import com.lumena.android.agent.core.ToolRegistry
+import com.lumena.android.agent.core.ToolRisk
 import com.lumena.android.agent.core.WorkspaceMutationEffect
 import com.lumena.android.agent.core.WorkspaceProject
 import com.lumena.android.agent.local.ToolRequest
@@ -107,9 +108,10 @@ object CollaborationProtocol {
         val now = current?.digest
         return when {
             e.scope.projectId != project.id || e.scope.root != project.root -> "WRONG_SCOPE"
-            // Project content decides first; it needs neither git nor network. The APK commit is only a fallback hint.
-            e.sourceDigest != null && now != null -> if (e.sourceDigest == now) "SAME_SOURCE" else "STALE_SOURCE"
             e.scope.goalRevision != goalRevision(project) -> "STALE_GOAL"
+            // Only the inventory's covered bytes are compared. Dependencies/environment and excluded
+            // files remain unknown; matching bytes cannot override a changed owner goal.
+            e.sourceDigest != null && now != null -> if (e.sourceDigest == now) "SAME_COVERED_SOURCE" else "STALE_SOURCE"
             e.scope.appSource != "UNKNOWN" && appSource != "UNKNOWN" && e.scope.appSource != appSource -> "STALE_BUILD"
             else -> "CURRENT_STATE_UNKNOWN"
         }
@@ -136,8 +138,10 @@ object CollaborationProtocol {
         if (selected.isEmpty()) appendLine("UNKNOWN: no local receipt of a project change in this scope. No legacy receipt was attested.")
     }
 
-    /** Writer barrier: only tools that may change project files. A killed model call or syntax check cannot. */
-    fun writer(tool: String): Boolean = ToolRegistry.get(tool)?.workspaceMutationEffect != WorkspaceMutationEffect.NONE
+    /** Durable effects include Git metadata. WorkspaceMutationEffect alone only describes source bytes. */
+    fun writer(tool: String): Boolean = ToolRegistry.get(tool).let {
+        it == null || it.risk == ToolRisk.MUTATING || it.workspaceMutationEffect != WorkspaceMutationEffect.NONE
+    }
 
     fun unresolved(entries: List<CollaborationEntry>, bridgeBinding: String? = null): List<CollaborationEntry> {
         val results = entries.filter { it.kind == "RESULT" }.associateBy { it.intentId }

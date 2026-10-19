@@ -39,7 +39,9 @@ data class WorkspaceProject(
     val tasks: List<ProjectWorkRecord> = emptyList(),
     val decisions: List<ProjectDecisionRecord> = emptyList(),
     val repository: ProjectRepositoryObservation = ProjectRepositoryObservation(),
-    val updatedAt: Long
+    val updatedAt: Long,
+    /** Only the owner's project settings may enable remote inference for this project's context. */
+    val allowRemoteContext: Boolean = false
 )
 
 data class ProjectWorkspaceState(val version: Int = 1, val projects: List<WorkspaceProject> = emptyList())

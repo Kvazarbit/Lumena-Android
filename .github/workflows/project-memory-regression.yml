@@ -2,7 +2,7 @@ name: Project memory regression
 
 on:
   push:
-    branches: [ "codex/daily-project-memory", "codex/verified-collaboration-handoff", "feature/collaboration-local-state-card" ]
+    branches: [ "codex/daily-project-memory", "codex/verified-collaboration-handoff", "feature/collaboration-local-state-card", "codex/daily-context-os-v1" ]
   workflow_dispatch:
 
 permissions:
@@ -45,6 +45,8 @@ jobs:
           --tests 'com.lumena.android.ollama.WorkflowRunnerSemanticRecallTest'
           --tests 'com.lumena.android.collaboration.*'
           --tests 'com.lumena.android.ollama.WorkflowRunnerCollaborationAdapterTest'
+          --tests 'com.lumena.android.settings.LocalSessionSnapshotCodecTest'
+          --tests 'com.lumena.android.settings.ProjectWorkspacePolicyTest'
       - name: Verify nonempty passing JUnit reports
         run: |
           python - <<'PY'
@@ -54,7 +56,9 @@ jobs:
                       'SemanticMemoryCoordinatorTest': 5, 'OwnerActionTextTest': 5,
                       'WorkflowRunnerSemanticRecallTest': 2, 'CollaborationProtocolTest': 5,
                       'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 18,
-                      'CollaborationStateCardTest': 12, 'WorkflowRunnerCollaborationAdapterTest': 3}
+                      'CollaborationStateCardTest': 14, 'WorkflowRunnerCollaborationAdapterTest': 3,
+                      'ProjectContextClientTest': 3, 'LocalSessionSnapshotCodecTest': 3,
+                      'ProjectWorkspacePolicyTest': 10}
           for name, minimum in expected.items():
               matches = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.' + name + '.xml'))
               assert len(matches) == 1, name

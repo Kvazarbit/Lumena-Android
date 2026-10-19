@@ -88,7 +88,7 @@ class CollaborationStateCardTest {
     @Test fun freshnessComparesProjectContentAndNeverClaimsTheGoal() {
         val receipt = call("python.tests", mapOf("cwd" to "demo"), ToolResult(true, exitCode = 0, stdout = "OK"))[1]
         val otherBuild = "9".repeat(40)
-        assertEquals("SAME_SOURCE", CollaborationProtocol.freshness(receipt, project, otherBuild, SourceObservation(digestA)))
+        assertEquals("SAME_COVERED_SOURCE", CollaborationProtocol.freshness(receipt, project, otherBuild, SourceObservation(digestA)))
         assertEquals("STALE_SOURCE", CollaborationProtocol.freshness(receipt, project, build, SourceObservation(digestB)))
         assertEquals("CURRENT_STATE_UNKNOWN", CollaborationProtocol.freshness(receipt, project, build, SourceObservation.UNKNOWN))
         // The APK commit is only a secondary hint when project content is unknown.
@@ -110,6 +110,23 @@ class CollaborationStateCardTest {
         }
     }
 
+    @Test fun changedOwnerGoalInvalidatesReceiptEvenWhenCoveredBytesMatch() {
+        val receipt = call("python.tests", mapOf("cwd" to "demo"), ToolResult(true, exitCode = 0))[1]
+        assertEquals("STALE_GOAL", CollaborationProtocol.freshness(receipt,
+            project.copy(goal = "A new owner goal"), build, SourceObservation(digestA)))
+        assertEquals("STALE_GOAL", CollaborationProtocol.freshness(receipt,
+            project.copy(constraints = listOf("Preserve the legacy API")), build, SourceObservation(digestA)))
+    }
+
+    @Test fun gitMetadataChangesKeepAnUnknownEffectBarrier() {
+        for (tool in listOf("git.init", "git.add", "git.commit")) {
+            assertTrue("GIT_UNKNOWN_MUST_REMAIN_DURABLE: $tool", CollaborationProtocol.writer(tool))
+            val pending = intent(tool, mapOf("cwd" to "demo"))
+            assertEquals(listOf(pending), CollaborationProtocol.unresolved(listOf(pending)))
+        }
+        assertFalse(CollaborationProtocol.writer("ollama.generate"))
+    }
+
     @Test fun cardPutsUnresolvedWritersFirstThenLatestStatePerTarget() {
         val entries = call("python.tests", mapOf("cwd" to "demo"), ToolResult(false, exitCode = 1, stdout = "FAILED (failures=1)")) +
             call("file.patch", mapOf("path" to "demo/calc.py"), ToolResult(true, exitCode = 0)) +
@@ -124,7 +141,7 @@ class CollaborationStateCardTest {
         assertTrue(text, unknown >= 0 && unknown < test && test < file)
         assertTrue(lines[unknown], lines[unknown].contains("python.run") && lines[unknown].contains("demo/main.py"))
         assertEquals(text, 1, lines.count { it.startsWith("TEST") })
-        assertTrue(lines[test], lines[test].contains(" OK ") && lines[test].contains("SAME_SOURCE") && lines[test].contains("Ran 4 tests"))
+        assertTrue(lines[test], lines[test].contains(" OK ") && lines[test].contains("SAME_COVERED_SOURCE") && lines[test].contains("Ran 4 tests"))
         assertTrue(lines[file], lines[file].contains("demo/calc.py") && lines[file].contains("STALE_SOURCE"))
         assertTrue(text, lines.any { it.startsWith("LAST_FAIL") && it.contains("FAILED (failures=1)") && it.contains("STALE_SOURCE") })
         assertFalse(text.contains("READ_ONLY_CANARY"))
@@ -156,7 +173,7 @@ class CollaborationStateCardTest {
         assertFalse(text.contains("BTC_PRIVATE_CANARY"))
         assertFalse(text.contains("btc/x.py"))
         assertTrue(text, text.lines().any { it.startsWith("BLOCKED") })
-        assertTrue(text, text.lines().any { it.startsWith("FILE") && it.contains("SAME_SOURCE") })
+        assertTrue(text, text.lines().any { it.startsWith("FILE") && it.contains("SAME_COVERED_SOURCE") })
         // Nothing but reads in this project: no card, no tokens spent.
         assertNull(card(call("file.read", mapOf("path" to "demo/a.py"), ToolResult(true, stdout = "x"), null), SourceObservation.UNKNOWN))
     }
@@ -168,7 +185,7 @@ class CollaborationStateCardTest {
         val reloaded = entries.map(CollaborationProtocol::encode).map(CollaborationProtocol::decode)
         val before = card(entries, SourceObservation(digestA))
         assertEquals(before, card(reloaded, SourceObservation(digestA)))
-        assertTrue(before!!.contains("SAME_SOURCE"))
+        assertTrue(before!!.contains("SAME_COVERED_SOURCE"))
     }
 
     @Test fun fullCardFitsDefaultLocalOllamaBudgetInsideProtectedContext() {
@@ -213,7 +230,7 @@ class CollaborationStateCardTest {
         suspend fun cardFor(backend: String, url: String, model: String, attested: Boolean, t: TaskState,
                             p: WorkspaceProject = project) = CollaborationStateCard.forLocalModel(backend, url, model, attested, t,
             { p }, build, { entries }, { SourceObservation(digestA) })
-        assertTrue(cardFor("embedded", "", "embedded-gguf", false, task)!!.contains("SAME_SOURCE"))
+        assertTrue(cardFor("embedded", "", "embedded-gguf", false, task)!!.contains("SAME_COVERED_SOURCE"))
         assertTrue(cardFor("ollama", "http://localhost:11434", "gemma:local", true, task)!!.contains("Ran 4 tests"))
         assertNull(cardFor("embedded", "", "embedded-gguf", false, task.copy(projectRoot = null)))
         assertNull(cardFor("embedded", "", "embedded-gguf", false, task.copy(projectId = "btc")))
