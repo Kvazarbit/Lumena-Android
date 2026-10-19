@@ -57,7 +57,7 @@ object CollaborationStateCard {
 
     /** Open writers first, then the latest test/run per cwd/script, latest write per path, latest failure. */
     internal fun rows(scoped: List<CollaborationEntry>): Pair<List<Row>, Boolean> {
-        val writers = scoped.filter { it.mutating }
+        val writers = scoped.filter(CollaborationProtocol::effectiveWriter)
         val pending = CollaborationProtocol.unresolved(writers).asReversed()
         val open = pending.map { it.id }.toSet()
         val results = writers.filter { it.kind == "RESULT" && it.intentId !in open }.asReversed()
@@ -75,7 +75,7 @@ object CollaborationStateCard {
 
     fun render(entries: List<CollaborationEntry>, project: WorkspaceProject, appSource: String, current: SourceObservation,
                task: TaskState? = null): String? {
-        val scoped = entries.filter { it.scope.projectId == project.id && it.scope.root == project.root && it.mutating }
+        val scoped = entries.filter { it.scope.projectId == project.id && it.scope.root == project.root && CollaborationProtocol.effectiveWriter(it) }
         val elsewhere = CollaborationProtocol.unresolved(entries).count { it.scope.projectId != project.id || it.scope.root != project.root }
         val (selected, capped) = rows(scoped)
         val lines = listOfNotNull(elsewhere.takeIf { it > 0 }?.let {

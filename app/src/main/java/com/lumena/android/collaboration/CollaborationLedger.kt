@@ -69,7 +69,7 @@ class CollaborationLedger(context: Context) {
                         intent.targets == entry.targets && intent.mutating == entry.mutating &&
                         intent.boundInputSha256 == entry.boundInputSha256)
                     if (entry.kind == "OWNER_ACK_UNKNOWN") {
-                        require(intent.mutating && acknowledged.add(intent.id) &&
+                        require(CollaborationProtocol.effectiveWriter(intent) && acknowledged.add(intent.id) &&
                             (results[intent.id] == null || results[intent.id]?.result?.outcomeUnknown == true))
                     } else require(results.put(entry.intentId, entry) == null)
                 }
@@ -245,6 +245,8 @@ class CollaborationLedger(context: Context) {
 
     companion object {
         const val DATABASE = "lumena_collaboration_v1.db"
+        fun exists(c: Context): Boolean = c.getDatabasePath(DATABASE).exists() ||
+            c.applicationContext.noBackupFilesDir.resolve("collaboration-segments-v1").exists()
         private val leaseMonitor = Any()
         private val active = mutableSetOf<String>()
         fun blocked(message: String, unknown: Boolean) = ToolResult(false, error = message,

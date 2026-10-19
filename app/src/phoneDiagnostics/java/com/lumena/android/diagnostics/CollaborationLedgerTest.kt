@@ -103,6 +103,31 @@ class CollaborationLedgerTest {
         }
         assertEquals(10, executor.calls)
     }
+    @Test fun legacyUnknownGitClassificationCannotBypassTheNewWriterBarrier() = runBlocking {
+        val executor = Executor(ToolResult(false, outcomeUnknown = true))
+        val ledger = CollaborationLedger(context)
+        val git = ToolRequest("git.commit", mapOf("cwd" to "aquarium", "message" to "owner change"))
+        ledger.execute(scope(), git, executor, "git-unknown")
+        val original = ledger.entries().first()
+        // Recreate the old schema's classifier without changing identity, request, or event order.
+        val db = SQLiteDatabase.openDatabase(context.getDatabasePath(CollaborationLedger.DATABASE).path, null, SQLiteDatabase.OPEN_READWRITE)
+        try {
+            db.execSQL("DROP TRIGGER immutable_update")
+            val all = ledger.entries()
+            var previous = "GENESIS"
+            for (e in all) {
+                val body = CollaborationProtocol.encode(e.copy(mutating = false))
+                val digest = CollaborationProtocol.hash(previous + "\n" + body)
+                db.execSQL("UPDATE events SET body=?,previous=?,digest=? WHERE id=?", arrayOf(body, previous, digest, e.id))
+                previous = digest
+            }
+        } finally { db.close() }
+        assertEquals(original.id, CollaborationProtocol.unresolved(ledger.entries()).single().id)
+        assertFalse(ledger.execute(scope(), request, executor, "next-writer").ok)
+        ledger.acknowledgeUnknownFromOwner(original.id)
+        assertTrue(CollaborationProtocol.unresolved(ledger.entries()).isEmpty())
+        assertFalse(ledger.entries().first().mutating)
+    }
     @Test fun redeliveryDoesNotExecuteOrInventANewReceipt() = runBlocking {
         val executor = Executor()
         val read = ToolRequest("file.read", mapOf("path" to "aquarium/test.py"))

@@ -41,7 +41,7 @@ object CollaborationRuntime {
             project = { withContext(Dispatchers.IO) { ProjectWorkspaceStore.project(c, task.projectId) } },
             appSource = BuildConfig.SOURCE_COMMIT,
             entries = { withContext(Dispatchers.IO) {
-                if (c.getDatabasePath(CollaborationLedger.DATABASE).exists()) CollaborationLedger(c).entries() else emptyList()
+                if (CollaborationLedger.exists(c)) CollaborationLedger(c).entries() else emptyList()
             } },
             observe = { root -> bridge?.let { CollaborationStateCard.observe(it, root) } ?: SourceObservation.UNKNOWN })
 
@@ -57,7 +57,7 @@ object CollaborationRuntime {
     fun forTask(c: Context, task: TaskState, model: String, url: String, token: String, delegate: ToolExecutor): ToolExecutor {
         val project = runCatching { ProjectWorkspaceStore.project(c, task.projectId) }.getOrNull()
             ?.takeIf { it.root == task.projectRoot }
-        val journal = if (!enabled(c) && !c.getDatabasePath(CollaborationLedger.DATABASE).exists()) delegate
+        val journal = if (!enabled(c) && !CollaborationLedger.exists(c)) delegate
             else executor(c, scope(project, task.id, "local", model, "LOCAL", url, token), delegate)
         return com.lumena.android.agent.local.ProjectFilePreconditions.wrap(task, journal, delegate)
     }
@@ -67,7 +67,7 @@ object CollaborationRuntime {
             if (toolRequest.tool in setOf("health", "process.status", "python.preview")) return delegate.execute(toolRequest)
             if (!enabled(c)) {
                 // Disabling capture cannot clear a previously recorded UNKNOWN writer barrier.
-                if (c.getDatabasePath(CollaborationLedger.DATABASE).exists() &&
+                if (CollaborationLedger.exists(c) &&
                     CollaborationProtocol.writer(toolRequest.tool)) {
                     val safe = try { withContext(Dispatchers.IO) {
                         val all = CollaborationLedger(c).entries()

@@ -152,11 +152,12 @@ object CollaborationProtocol {
     fun writer(tool: String): Boolean = ToolRegistry.get(tool).let {
         it == null || it.risk == ToolRisk.MUTATING || it.workspaceMutationEffect != WorkspaceMutationEffect.NONE
     }
+    fun effectiveWriter(e: CollaborationEntry): Boolean = e.mutating || writer(e.tool)
 
     fun unresolved(entries: List<CollaborationEntry>, bridgeBinding: String? = null): List<CollaborationEntry> {
         val results = entries.filter { it.kind == "RESULT" }.associateBy { it.intentId }
         val acknowledged = entries.filter { it.kind == "OWNER_ACK_UNKNOWN" }.map { it.intentId }.toSet()
-        return entries.filter { it.kind == "INTENT" && it.mutating && it.id !in acknowledged &&
+        return entries.filter { it.kind == "INTENT" && effectiveWriter(it) && it.id !in acknowledged &&
             (bridgeBinding == null || it.scope.bridgeBinding == bridgeBinding) &&
             (results[it.id] == null || results[it.id]?.result?.outcomeUnknown == true) }
     }

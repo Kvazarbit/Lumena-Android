@@ -57,8 +57,8 @@ jobs:
           expected = {'PhoneReport2296DiagnosticTest': 11, 'EmbeddingLifecycleDiagnosticTest': 5,
                       'SemanticMemoryCoordinatorTest': 5, 'OwnerActionTextTest': 5,
                       'WorkflowRunnerSemanticRecallTest': 2, 'CollaborationProtocolTest': 5,
-                      'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 22,
-                      'CollaborationStateCardTest': 14, 'WorkflowRunnerCollaborationAdapterTest': 4,
+                      'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 23,
+                      'CollaborationStateCardTest': 15, 'WorkflowRunnerCollaborationAdapterTest': 4,
                       'ProjectContextClientTest': 3, 'LocalSessionSnapshotCodecTest': 3,
                       'ProjectWorkspacePolicyTest': 10, 'ProjectContinuationPolicyTest': 3,
                       'ProjectFilePreconditionsTest': 3, 'ProjectWorkspaceHistoryTest': 3}
