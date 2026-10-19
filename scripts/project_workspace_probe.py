@@ -66,7 +66,7 @@ KOTLIN_MUTANTS = (
      'com.lumena.android.settings.ProjectWorkspacePolicyTest',
      'continuationPreservesTheSelectedModelsReportAndReceiptsBeforeNewCheckpoints'),
     ('dropped-working-memory', CORE / 'ContextBuilder.kt',
-     'task.projectRoot != null && protectedAdvice.isNotEmpty()', 'false && protectedAdvice.isNotEmpty()',
+     'task.projectRoot != null && items.isNotEmpty()', 'false && items.isNotEmpty()',
      'com.lumena.android.agent.core.ProjectContextBudgetTest',
      'selectedProjectAdviceSurvivesActualBackendCompaction'),
     ('project-capsule-untainted', Path('app/src/main/java/com/lumena/android/ollama/WorkflowRunner.kt'),
