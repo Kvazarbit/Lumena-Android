@@ -94,6 +94,8 @@ object CollaborationProtocol {
         else {
             require(e.result != null && e.stdoutUtf8Sha256?.matches(Regex("[a-f0-9]{64}")) == true)
             require(e.result.tool == null || e.result.tool == e.tool)
+            require(e.result.sourceSha256 == null || e.result.sourceSha256.matches(Regex("[a-f0-9]{64}")))
+            require(!e.result.sourceComplete || e.result.sourceSha256 != null)
             require(e.sourceDigest == null || e.sourceDigest.matches(Regex("[a-f0-9]{64}")))
             require(e.sourceGitHead == null || e.sourceGitHead.matches(Regex("[a-f0-9]{40,64}")))
             require(e.result.stdout.length <= 4096 && e.result.stderr.length <= 512 &&

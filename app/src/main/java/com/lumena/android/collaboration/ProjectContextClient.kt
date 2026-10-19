@@ -14,8 +14,8 @@ class ProjectContextClient(
     private val ownerAllowsRemote: (String) -> Boolean
 ) : ChatModelClient {
     private fun refusal(model: String): String? {
-        if (CollaborationReview.localRoute(backend, url, model, localAttested(model))) return null
         return try {
+            if (CollaborationReview.localRoute(backend, url, model, localAttested(model))) return null
             if (privateProjects().all(ownerAllowsRemote)) null else
                 "PROJECT_CONTEXT_PRIVATE: контекст цього сеансу локальний. Обери вбудовану модель, " +
                     "підтвердь локальну Ollama або явно дозволь зовнішню передачу в параметрах кожного проєкту цього сеансу."

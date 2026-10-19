@@ -1,6 +1,8 @@
 package com.lumena.android.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -26,8 +28,25 @@ fun CollaborationPanel(project: WorkspaceProject, review: (suspend (String, Bool
     var busy by remember(project.id) { mutableStateOf(false) }
     var localAttestation by remember(project.id, reviewIdentity) { mutableStateOf(CollaborationRuntime.localAttested(context, reviewIdentity)) }
     var acknowledge by remember(project.id) { mutableStateOf<String?>(null) }
+    var archived by remember { mutableStateOf(0) }
+    val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri != null) scope.launch {
+            busy = true
+            try {
+                withContext(Dispatchers.IO) {
+                    requireNotNull(context.contentResolver.openOutputStream(uri)).use { CollaborationLedger(context).exportArchive(it) }
+                }
+                status = "Приватний архів збережено. Він містить історію результатів; бережи його як дані проєктів."
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { status = "Експорт не завершено. Локальна історія збережена." }
+            finally { busy = false }
+        }
+    }
     fun refresh() { scope.launch {
-        try { entries = withContext(Dispatchers.IO) { CollaborationLedger(context).entries() }; status = "" }
+        try {
+            val state = withContext(Dispatchers.IO) { CollaborationLedger(context).let { it.entries() to it.archivedSegments() } }
+            entries = state.first; archived = state.second; status = ""
+        }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { status = "Журнал недоступний або пошкоджений. Дані збережено; нові дії журналу блокуються." }
     } }
@@ -37,7 +56,20 @@ fun CollaborationPanel(project: WorkspaceProject, review: (suspend (String, Bool
         Switch(enabled, { CollaborationRuntime.enable(context, it); enabled = it })
         Text("Зберігати нові виклики локально")
     }
-    Text("Старі результати не переатестовуються. Успіх інструмента не підтверджує всю мету. Журнал не передається у звичайний чат або хмару.", style = MaterialTheme.typography.bodySmall)
+    Text("Старі результати не переатестовуються. Успіх інструмента не підтверджує всю мету. Локальна модель отримує коротку картку; зовнішня передача потребує дозволу в параметрах проєкту.", style = MaterialTheme.typography.bodySmall)
+    Text("Архівних сегментів: $archived. Панель показує поточні й останні архівні квитанції; повна історія є в експорті.", style = MaterialTheme.typography.bodySmall)
+    Row {
+        OutlinedButton(enabled = !busy, onClick = {
+            busy = true
+            scope.launch {
+                try { withContext(Dispatchers.IO) { CollaborationLedger(context).archiveClosedSegment() }; refresh() }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { status = "Архівування не виконано: заверши активні дії та перевір UNKNOWN. Дані збережено." }
+                finally { busy = false }
+            }
+        }) { Text("Архівувати завершене") }
+        OutlinedButton(enabled = !busy, onClick = { export.launch("Lumena-private-receipts.zip") }) { Text("Зберегти копію") }
+    }
     OutlinedButton(onClick = { visible = !visible; refresh() }) { Text(if (visible) "Згорнути квитанції" else "Переглянути квитанції") }
     if (status.isNotBlank()) Text(status, color = MaterialTheme.colorScheme.error)
     if (visible && status.isBlank()) {

@@ -175,7 +175,9 @@ class CollaborationStateCardTest {
         assertTrue(text, text.lines().any { it.startsWith("BLOCKED") })
         assertTrue(text, text.lines().any { it.startsWith("FILE") && it.contains("SAME_COVERED_SOURCE") })
         // Nothing but reads in this project: no card, no tokens spent.
-        assertNull(card(call("file.read", mapOf("path" to "demo/a.py"), ToolResult(true, stdout = "x"), null), SourceObservation.UNKNOWN))
+        val readOnly = card(call("file.read", mapOf("path" to "demo/a.py"), ToolResult(true, stdout = "x"), null), SourceObservation.UNKNOWN)!!
+        assertTrue(readOnly.contains("CONTINUE owner_goal="))
+        assertFalse(readOnly.lines().any { it.startsWith("FILE ") })
     }
 
     @Test fun cardIsRebuiltFromStoredRowsAfterRestart() {

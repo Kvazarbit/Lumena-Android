@@ -140,7 +140,7 @@ class WorkflowRunner(
         var protocolTurns = 0
         var semanticMemory: List<String>? = null
         var collaborationCard: String? = null
-        var collaborationCardRead = false
+        var collaborationCardRevision: Int? = null
         publish(state, onState)
 
         // A question about an earlier operation has an app-owned local
@@ -449,9 +449,9 @@ class WorkflowRunner(
             } catch (_: Exception) {
                 emptyList<String>().also { semanticMemory = it }
             }
-            if (!collaborationCardRead && state.task.projectRoot != null) {
-                // Read once per run from the local journal; a cloud route's provider returns null.
-                collaborationCardRead = true
+            if (collaborationCardRevision != state.task.kernel.observed && state.task.projectRoot != null) {
+                // Refresh after every observed action. The old SAME status must not survive a new write.
+                collaborationCardRevision = state.task.kernel.observed
                 collaborationCard = try {
                     collaborationCardProvider(state.task)?.takeIf { it.isNotBlank() }
                 } catch (cancelled: CancellationException) {
@@ -1253,8 +1253,9 @@ class WorkflowRunner(
             output = output,
             step = state.task.step
         )
-        return if (taint == kernel.taint) state
-        else state.copy(task = state.task.copy(kernel = kernel.copy(taint = taint)))
+        val hashes = com.lumena.android.agent.local.ProjectFilePreconditions.observe(kernel.observedFileHashes, request, result)
+        val updated = kernel.copy(taint = taint, observedFileHashes = hashes)
+        return if (updated == kernel) state else state.copy(task = state.task.copy(kernel = updated))
     }
 
     private fun markInFlight(state: AgentControlState, request: ToolRequest): AgentControlState = state.copy(

@@ -29,8 +29,68 @@ class CollaborationLedgerTest {
     }
     @Before fun prepare() {
         context.deleteDatabase(CollaborationLedger.DATABASE)
+        val fixtureArchive = context.noBackupFilesDir.resolve("collaboration-segments-v1")
+        require(fixtureArchive.canonicalFile.parentFile == context.noBackupFilesDir.canonicalFile)
+        fixtureArchive.deleteRecursively()
         CompanionTaskGrantStore.clear(context)
         context.getSharedPreferences("lumena_collaboration", Context.MODE_PRIVATE).edit().clear().commit()
+    }
+    @Test fun archivedReceiptsKeepChainAndDeliveryIdentityAcrossColdOpen() = runBlocking {
+        val executor = Executor()
+        val ledger = CollaborationLedger(context)
+        assertTrue(ledger.execute(scope(), request, executor, "archived-delivery").ok)
+        val before = ledger.entries()
+        ledger.archiveClosedSegment()
+        assertEquals(1, CollaborationLedger(context).archivedSegments())
+        assertEquals(before, CollaborationLedger(context).entries())
+        assertFalse("ARCHIVED_REPLAY_EXECUTED", CollaborationLedger(context).execute(scope(), request, executor, "archived-delivery").ok)
+        assertEquals(1, executor.calls)
+        assertTrue(CollaborationLedger(context).execute(scope(), request, executor, "new-delivery").ok)
+        assertEquals(before + CollaborationLedger(context).entries().takeLast(2), CollaborationLedger(context).entries())
+        CollaborationLedger(context).archiveClosedSegment()
+        assertEquals(2, CollaborationLedger(context).archivedSegments())
+        assertEquals(4, CollaborationLedger(context).entries().size)
+    }
+    @Test fun preparedArchiveRecoversAfterProcessInterruptionWithoutRepeatingTransport() = runBlocking {
+        val executor = Executor()
+        val ledger = CollaborationLedger(context)
+        ledger.execute(scope(), request, executor, "before-crash")
+        val before = ledger.entries()
+        assertThrows(IllegalStateException::class.java) {
+            ledger.archiveClosedSegmentAfterPrepare { error("simulated process interruption") }
+        }
+        assertEquals(before, CollaborationLedger(context).entries())
+        assertEquals(1, CollaborationLedger(context).archivedSegments())
+        assertFalse(CollaborationLedger(context).execute(scope(), request, executor, "before-crash").ok)
+        assertEquals(1, executor.calls)
+    }
+    @Test fun unresolvedWriterCannotBeArchivedAndExportPreservesUnknown() = runBlocking {
+        val executor = Executor(ToolResult(false, outcomeUnknown = true))
+        val ledger = CollaborationLedger(context)
+        ledger.execute(scope(), request, executor, "unknown")
+        assertThrows(IllegalArgumentException::class.java) { ledger.archiveClosedSegment() }
+        assertEquals(1, CollaborationProtocol.unresolved(ledger.entries()).size)
+        val bytes = java.io.ByteArrayOutputStream()
+        ledger.exportArchive(bytes)
+        val names = mutableListOf<String>()
+        java.util.zip.ZipInputStream(bytes.toByteArray().inputStream()).use { zip ->
+            while (true) { val entry = zip.nextEntry ?: break; names += entry.name; zip.closeEntry() }
+        }
+        assertTrue(names.contains("active/" + CollaborationLedger.DATABASE))
+        assertEquals(1, CollaborationProtocol.unresolved(CollaborationLedger(context).entries()).size)
+    }
+    @Test fun corruptArchivedSegmentBlocksTransportAndKeepsOriginalBytes() = runBlocking {
+        val executor = Executor()
+        val ledger = CollaborationLedger(context)
+        ledger.execute(scope(), request, executor, "one")
+        ledger.archiveClosedSegment()
+        val segment = context.noBackupFilesDir.resolve("collaboration-segments-v1").listFiles()!!.single { it.extension == "db" }
+        segment.appendBytes(byteArrayOf(42))
+        val damaged = segment.readBytes()
+        assertThrows(IllegalArgumentException::class.java) { CollaborationLedger(context).entries() }
+        assertFalse("CORRUPT_ARCHIVE_EXECUTED", CollaborationLedger(context).execute(scope(), request, executor, "two").ok)
+        assertArrayEquals(damaged, segment.readBytes())
+        assertEquals(1, executor.calls)
     }
     @Test fun tenColdStartsRetainImmutableReceiptsAndExactDecodedOutputDigest() = runBlocking {
         val executor = Executor()

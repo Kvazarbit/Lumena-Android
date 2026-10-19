@@ -18,7 +18,7 @@ android {
         applicationId = "com.lumena.android"
         minSdk = 28
         targetSdk = 35
-        versionCode = 65
+        versionCode = 66
         val sourceCommit = providers.environmentVariable("GITHUB_SHA").orNull
             ?.takeIf { it.matches(Regex("[0-9a-f]{40}")) } ?: "UNKNOWN"
         buildConfigField("String", "SOURCE_COMMIT", "\"$sourceCommit\"")

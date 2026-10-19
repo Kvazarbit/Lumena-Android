@@ -3703,6 +3703,51 @@ PROJECT_SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", ".g
 PROJECT_TEXT_SUFFIXES = {".py", ".kt", ".kts", ".java", ".js", ".ts", ".tsx", ".jsx", ".html", ".css", ".md", ".txt", ".json", ".toml", ".yaml", ".yml", ".sh"}
 PROJECT_SECRET_NAMES = {".env", ".env.local", ".env.production", "credentials.json", "id_rsa", "id_ed25519"}
 PROJECT_SECRET_SUFFIXES = {".pem", ".key", ".keystore", ".jks", ".p12", ".pfx", ".db", ".sqlite", ".log"}
+# Cooperative serialization for bridge file writers; external processes still require rediscovery.
+FILE_MUTATION_LOCK = threading.RLock()
+
+
+def require_file_precondition(path: Path, args: dict[str, Any]) -> None:
+    expected = args.get('expected_sha256')
+    if expected is None:
+        return  # Legacy callers retain their existing contract.
+    if expected == 'ABSENT':
+        if path.exists() or path.is_symlink():
+            raise ValueError('FILE_PRECONDITION_CHANGED: target exists; read it before writing')
+        return
+    if not isinstance(expected, str) or not re.fullmatch(r'[a-f0-9]{64}', expected):
+        raise ValueError('FILE_PRECONDITION_INVALID')
+    if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+        raise ValueError('FILE_PRECONDITION_CHANGED: read the current file before writing')
+
+
+def atomic_project_write(path: Path, content: str) -> None:
+    # The destination is already checked by safe_path. Never truncate the live file.
+    staged = None
+    mode = (path.stat().st_mode & 0o777) if path.exists() else None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix='.lumena-write-', delete=False) as stream:
+            staged = Path(stream.name)
+            stream.write(content.encode('utf-8'))
+            stream.flush()
+            os.fsync(stream.fileno())
+        if mode is not None:
+            os.chmod(staged, mode)
+        os.replace(staged, path)
+        staged = None
+        try:
+            fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        except OSError:
+            pass  # Windows does not support directory fsync.
+    finally:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+
+
 PROJECT_MAX_FILES = 1500
 PROJECT_MAX_BYTES = 8 * 1024 * 1024
 PROJECT_MAX_FILE_BYTES = 512 * 1024
@@ -3893,7 +3938,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"read_only_roots={','.join('@' + alias for alias, root in READONLY_ALIASES.items() if root.exists()) or '(none)'}\n"
                 f"read_roots_config={READ_ROOTS_FILE}\n"
                 f"version=0.31\n"
-                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1,python_clean_env_v1,python_run_sha256_v1,project_workspace_v1,python_fresh_bytecode_v1\n"
+                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1,python_clean_env_v1,python_run_sha256_v1,project_workspace_v1,python_fresh_bytecode_v1,file_cas_v1\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
                 f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
@@ -3989,7 +4034,9 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         path = safe_read_path(str(args.get("path", "")), must_exist=True)
         if not path.is_file():
             raise ValueError("Requested path is not a file")
-        data = path.read_text(encoding="utf-8", errors="replace")
+        source_bytes = path.read_bytes()
+        data = source_bytes.decode("utf-8", errors="replace").replace('\r\n', '\n').replace('\r', '\n')
+        full_data = data
 
         start_raw = args.get("start_line")
         end_raw = args.get("end_line")
@@ -4009,7 +4056,9 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
             selected_end = len(lines) if end_line is None else min(end_line, len(lines))
             data = "".join(lines[start_line - 1:selected_end]) if start_line <= len(lines) else ""
 
-        return {"ok": True, "exitCode": 0, "stdout": clamp(data), "stderr": "", "error": None}
+        return {"ok": True, "exitCode": 0, "stdout": clamp(data), "stderr": "", "error": None,
+                "sourceSha256": hashlib.sha256(source_bytes).hexdigest(),
+                "sourceComplete": start_raw is None and end_raw is None and clamp(data) == full_data}
 
     if tool == "project.create":
         name = str(args.get("name", "")).strip()
@@ -4029,53 +4078,58 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         return {"ok": True, "exitCode": 0, "stdout": f"created={path.relative_to(WORKSPACE)}\n", "stderr": "", "error": None}
 
     if tool == "file.write":
-        path = safe_path(str(args.get("path", "")).strip())
-        content = str(args.get("content", ""))
-        if len(content.encode("utf-8")) > 256 * 1024:
-            raise ValueError("file.write content exceeds 256 KiB")
-        overwrite = str(args.get("overwrite", "true")).lower() in {"1", "true", "yes"}
-        if path.exists() and not overwrite:
-            raise FileExistsError(str(path))
-        backup = backup_file(path) if path.exists() and path.is_file() else None
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-        backup_line = f"backup={backup.relative_to(WORKSPACE)}\n" if backup else ""
-        return {
-            "ok": True,
-            "exitCode": 0,
-            "stdout": f"wrote={path.relative_to(WORKSPACE)}\n{backup_line}bytes={len(content.encode('utf-8'))}\n",
-            "stderr": "",
-            "error": None,
-        }
+        with FILE_MUTATION_LOCK:
+            path = safe_path(str(args.get("path", "")).strip())
+            require_file_precondition(path, args)
+            content = str(args.get("content", ""))
+            if len(content.encode("utf-8")) > 256 * 1024:
+                raise ValueError("file.write content exceeds 256 KiB")
+            overwrite = str(args.get("overwrite", "true")).lower() in {"1", "true", "yes"}
+            if path.exists() and not overwrite:
+                raise FileExistsError(str(path))
+            backup = backup_file(path) if path.exists() and path.is_file() else None
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_project_write(path, content)
+            backup_line = f"backup={backup.relative_to(WORKSPACE)}\n" if backup else ""
+            return {
+                "ok": True,
+                "exitCode": 0,
+                "stdout": f"wrote={path.relative_to(WORKSPACE)}\n{backup_line}bytes={len(content.encode('utf-8'))}\n",
+                "stderr": "",
+                "error": None,
+            }
 
     if tool == "file.patch":
-        path = safe_path(str(args.get("path", "")).strip(), must_exist=True)
-        if not path.is_file():
-            raise ValueError("file.patch requires a file")
-        old = str(args.get("old", ""))
-        new = str(args.get("new", ""))
-        if not old:
-            raise ValueError("file.patch requires non-empty old text")
-        text = path.read_text(encoding="utf-8", errors="strict")
-        count = text.count(old)
-        if count != 1:
-            raise ValueError(f"file.patch expected exactly one match, found {count}")
-        updated = text.replace(old, new, 1)
-        if len(updated.encode("utf-8")) > 2 * 1024 * 1024:
-            raise ValueError("patched text file exceeds 2 MiB safety limit")
-        backup = backup_file(path)
-        path.write_text(updated, encoding="utf-8")
-        return {
-            "ok": True,
-            "exitCode": 0,
-            "stdout": (
-                f"patched={path.relative_to(WORKSPACE)}\n"
-                f"backup={backup.relative_to(WORKSPACE)}\n"
-                "matches=1\n"
-            ),
-            "stderr": "",
-            "error": None,
-        }
+        with FILE_MUTATION_LOCK:
+            path = safe_path(str(args.get("path", "")).strip(), must_exist=True)
+            if not path.is_file():
+                raise ValueError("file.patch requires a file")
+            require_file_precondition(path, args)
+            old = str(args.get("old", ""))
+            new = str(args.get("new", ""))
+            if not old:
+                raise ValueError("file.patch requires non-empty old text")
+            text = path.read_text(encoding="utf-8", errors="strict")
+            count = text.count(old)
+            if count != 1:
+                raise ValueError(f"file.patch expected exactly one match, found {count}")
+            updated = text.replace(old, new, 1)
+            if len(updated.encode("utf-8")) > 2 * 1024 * 1024:
+                raise ValueError("patched text file exceeds 2 MiB safety limit")
+            backup = backup_file(path)
+            atomic_project_write(path, updated)
+            return {
+                "ok": True,
+                "exitCode": 0,
+                "stdout": (
+                    f"patched={path.relative_to(WORKSPACE)}\n"
+                    f"backup={backup.relative_to(WORKSPACE)}\n"
+                    "matches=1\n"
+                ),
+                "stderr": "",
+                "error": None,
+            }
+
 
     if tool in {"git.status", "git.diff", "git.log"}:
         cwd = safe_read_path(str(args.get("cwd", "")), must_exist=True)

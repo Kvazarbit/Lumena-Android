@@ -49,10 +49,11 @@ object CollaborationRuntime {
         BuildConfig.VERSION_NAME, BuildConfig.SOURCE_COMMIT)
 
     fun forTask(c: Context, task: TaskState, model: String, url: String, token: String, delegate: ToolExecutor): ToolExecutor {
-        if (!enabled(c) && !c.getDatabasePath(CollaborationLedger.DATABASE).exists()) return delegate
         val project = runCatching { ProjectWorkspaceStore.project(c, task.projectId) }.getOrNull()
             ?.takeIf { it.root == task.projectRoot }
-        return executor(c, scope(project, task.id, "local", model, "LOCAL", url, token), delegate)
+        val journal = if (!enabled(c) && !c.getDatabasePath(CollaborationLedger.DATABASE).exists()) delegate
+            else executor(c, scope(project, task.id, "local", model, "LOCAL", url, token), delegate)
+        return com.lumena.android.agent.local.ProjectFilePreconditions.wrap(task, journal, delegate)
     }
 
     fun executor(c: Context, scope: CollaborationScope, delegate: ToolExecutor, delivery: String? = null): ToolExecutor = object : ToolExecutor {

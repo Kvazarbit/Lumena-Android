@@ -47,6 +47,8 @@ jobs:
           --tests 'com.lumena.android.ollama.WorkflowRunnerCollaborationAdapterTest'
           --tests 'com.lumena.android.settings.LocalSessionSnapshotCodecTest'
           --tests 'com.lumena.android.settings.ProjectWorkspacePolicyTest'
+          --tests 'com.lumena.android.settings.ProjectContinuationPolicyTest'
+          --tests 'com.lumena.android.ollama.ProjectFilePreconditionsTest'
       - name: Verify nonempty passing JUnit reports
         run: |
           python - <<'PY'
@@ -55,10 +57,11 @@ jobs:
           expected = {'PhoneReport2296DiagnosticTest': 11, 'EmbeddingLifecycleDiagnosticTest': 5,
                       'SemanticMemoryCoordinatorTest': 5, 'OwnerActionTextTest': 5,
                       'WorkflowRunnerSemanticRecallTest': 2, 'CollaborationProtocolTest': 5,
-                      'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 18,
-                      'CollaborationStateCardTest': 14, 'WorkflowRunnerCollaborationAdapterTest': 3,
+                      'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 22,
+                      'CollaborationStateCardTest': 14, 'WorkflowRunnerCollaborationAdapterTest': 4,
                       'ProjectContextClientTest': 3, 'LocalSessionSnapshotCodecTest': 3,
-                      'ProjectWorkspacePolicyTest': 10}
+                      'ProjectWorkspacePolicyTest': 10, 'ProjectContinuationPolicyTest': 2,
+                      'ProjectFilePreconditionsTest': 3}
           for name, minimum in expected.items():
               matches = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.' + name + '.xml'))
               assert len(matches) == 1, name

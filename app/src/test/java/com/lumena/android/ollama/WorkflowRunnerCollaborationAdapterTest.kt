@@ -10,6 +10,30 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WorkflowRunnerCollaborationAdapterTest {
+    @Test fun continuationCardRefreshesAfterAnObservedTool() = runBlocking {
+        val revisions = mutableListOf<Int>()
+        val seen = mutableListOf<String>()
+        var turns = 0
+        val model = object : ChatModelClient {
+            override suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String> {
+                seen += messages.first().content
+                return Result.success(if (turns++ == 0)
+                    """{"tool":"file.read","args":{"path":"notes.txt"},"reason":"inspect"}"""
+                    else """{"partial":true,"summary":"checked"}""")
+            }
+        }
+        val bridge = object : ToolExecutor {
+            override suspend fun execute(toolRequest: ToolRequest) = ToolResult(true, toolRequest.tool, 0, "source")
+        }
+        val p = WorkspaceProject("p", "Demo", "demo", "Read project notes", updatedAt = 1)
+        val task = TaskState("refresh", "p", "Прочитай notes.txt", projectRoot = "demo", projectContext = ProjectWorkspacePolicy.capsule(p))
+        WorkflowRunner(model, bridge, "fixture", collaborationCardProvider = {
+            revisions += it.kernel.observed; "LUMENA STATE CARD v1 REVISION_${it.kernel.observed}"
+        }).run(listOf(OllamaMessage("user", task.goal)), task)
+        assertTrue(revisions.toString(), revisions.distinct().size >= 2)
+        assertTrue(seen.first().contains("REVISION_${revisions.first()}"))
+        assertTrue(seen.last().contains("REVISION_${revisions.last()}"))
+    }
     @Test fun ordinaryReadReachesAdapterAfterOwnerTaskBinding() = runBlocking {
         var turns = 0
         val model = object : ChatModelClient {

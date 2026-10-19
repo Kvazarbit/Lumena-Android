@@ -17,7 +17,9 @@ data class ToolResult(
     val errorCode: String? = null,
     val failureClass: String? = null,
     val retryable: Boolean? = null,
-    val dependency: String? = null
+    val dependency: String? = null,
+    val sourceSha256: String? = null,
+    val sourceComplete: Boolean = false
 )
 
 interface ToolExecutor {
