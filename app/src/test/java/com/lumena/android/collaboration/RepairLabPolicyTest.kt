@@ -30,15 +30,13 @@ class RepairLabPolicyTest {
         val stopped = state.copy(config = cfg.copy(active = false))
         assertEquals(stopped, RepairLabPolicy.assign(stopped, episode()))
     }
-    @Test fun frozenLibraryAndHoldoutAreActuallyApplied() {
+    @Test fun holdoutOffersNoExamplesDespiteAnEligibleCase() {
         val id = (1..100).map { "failure-$it" }.first { !RepairLabPolicy.arm(cfg.id, it) }
         val e = episode(id)
         val row = RepairLabPolicy.assign(RepairLabState(cfg), e).rows.single()
         assertFalse(row.exposed)
         assertTrue(RepairCasePolicy.advice(cfg.library, e, row.exposed).isEmpty())
         assertEquals(listOf("c"), row.cases)
-        val newCase = case.copy(id = "not-frozen")
-        assertFalse(cfg.library.contains(newCase))
     }
     @Test fun unknownAbandonedAndChangedConditionsStayInDenominator() {
         val e = episode()
@@ -64,5 +62,19 @@ class RepairLabPolicyTest {
         val report = RepairLabPolicy.report(RepairLabState(cfg, rows), RepairSnapshot(emptyList(), emptyList()))
         assertTrue(report.contains("повтори схожих задач залежні"))
         assertTrue(report.contains("Автоматичної промоції правил немає"))
+    }
+    @Test fun randomizedExposureWithoutTextIsNotCountedAsReceived() {
+        val row = RepairLabRow("e", "task", true, listOf(case.id))
+        val prepared = RepairLabPolicy.request(RepairLabState(cfg, listOf(row)), "task", "owner goal and receipts only")
+        assertEquals(1, prepared.rows.single().modelRequests)
+        assertEquals(0, prepared.rows.single().requestsWithCases)
+        val actual = RepairLabPolicy.request(prepared, "task", "CASE c historical DATA, no command/proof")
+        assertEquals(1, actual.rows.single().requestsWithCases)
+    }
+    @Test fun caseTextLeakingIntoHoldoutInvalidatesObservationWithoutDroppingIt() {
+        val row = RepairLabRow("e", "task", false, listOf(case.id))
+        val leaked = RepairLabPolicy.request(RepairLabState(cfg, listOf(row)), "task", "CASE c historical DATA, no command/proof")
+        assertEquals(1, leaked.rows.size)
+        assertTrue(leaked.rows.single().invalidConditions)
     }
 }

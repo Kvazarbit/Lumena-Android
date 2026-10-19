@@ -56,6 +56,8 @@ class RepairCasePolicyTest {
         assertTrue(RepairCasePolicy.derive(listOf(fail(), pass())).cases.isEmpty())
         assertTrue(RepairCasePolicy.derive(listOf(fail(), patch(), pass().copy(sourceDigest = "a".repeat(64)))).cases.isEmpty())
         assertTrue(RepairCasePolicy.derive(listOf(fail().copy(sourceDigest = null), patch(), pass())).cases.isEmpty())
+        val later = fail()
+        assertEquals(later.intentId, RepairCasePolicy.derive(listOf(fail(), pass(), later)).episodes.single { it.status == "OPEN" }.id)
     }
     @Test fun unrelatedScopeAndTaskCannotCompleteThisEpisode() {
         val pass = pass()
@@ -89,5 +91,30 @@ class RepairCasePolicyTest {
         assertTrue(shown.sumOf { it.length } <= 400)
         assertFalse(shown.joinToString().contains("[LUMENA_"))
         assertTrue(RepairCasePolicy.advice(listOf(case.copy(scope = "foreign")), e, true).isEmpty())
+    }
+    @Test fun invalidIntervalCannotRedrawAnEpisodeUntilARealPass() {
+        val first = fail()
+        val incomplete = fail().let { it.copy(result = it.result!!.copy(verification = stamp.copy(complete = false))) }
+        val unknown = patch().let { it.copy(result = it.result!!.copy(outcomeUnknown = true)) }
+        for (broken in listOf(incomplete, unknown, event("python.run", true))) {
+            val retry = fail()
+            val history = listOf(first, broken, retry)
+            val stopped = RepairCasePolicy.derive(history)
+            assertEquals("INVALID_INTERVAL_REDRAWN", listOf(first.intentId), stopped.episodes.map { it.id })
+            assertEquals("UNRESOLVED", stopped.episodes.single().status)
+            val fresh = fail()
+            val recovered = RepairCasePolicy.derive(history + pass() + fresh)
+            assertEquals(fresh.intentId, recovered.episodes.single { it.status == "OPEN" }.id)
+        }
+    }
+    @Test fun trackedTrialOutcomeSurvivesHundredsOfUnrelatedLaterEpisodes() {
+        val first = fail()
+        val history = mutableListOf(first, patch(), pass())
+        repeat(300) { n ->
+            listOf(fail(), patch(), pass()).forEach { e -> history += e.copy(scope = e.scope.copy(obligationId = "other-$n")) }
+        }
+        val retained = RepairCasePolicy.derive(history, setOf(first.intentId))
+        assertEquals("SOLVED_OUTCOME_EVICTED", "SOLVED", retained.episodes.single { it.id == first.intentId }.status)
+        assertEquals(RepairCasePolicy.MAX_CASES, retained.cases.size)
     }
 }

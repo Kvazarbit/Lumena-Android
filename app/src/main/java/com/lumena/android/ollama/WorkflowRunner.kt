@@ -124,7 +124,8 @@ class WorkflowRunner(
     private val experienceIsolation: (TaskState) -> Boolean = { it.projectRoot != null },
     private val projectObservation: (TaskState, ToolRequest, ToolResult) -> Unit = { _, _, _ -> },
     private val completionClaimReview: suspend (TaskState, String) -> String? = { _, _ -> null },
-    private val onDoneProposal: (TaskState, Boolean) -> Unit = { _, _ -> }
+    private val onDoneProposal: (TaskState, Boolean) -> Unit = { _, _ -> },
+    private val onModelContextPrepared: suspend (TaskState, List<OllamaMessage>) -> Unit = { _, _ -> }
 ) {
     suspend fun run(
         history: List<OllamaMessage>,
@@ -465,7 +466,9 @@ class WorkflowRunner(
                 }
                 collaborationCard?.let { onProgress("COLLABORATION STATE CARD\n" + it.take(1_600)) }
             }
-            val relevantMemory = (semantic.filter { it.startsWith("SEMANTIC MEMORY") } +
+            val relevantMemory = (if (state.task.projectRoot != null)
+                ordinaryMemory.take(3) + semantic.take(1) + ordinaryMemory.drop(3) + semantic.drop(1)
+            else semantic.filter { it.startsWith("SEMANTIC MEMORY") } +
                 ordinaryMemory.take(2) + semantic.filterNot { it.startsWith("SEMANTIC MEMORY") } +
                 ordinaryMemory.drop(2)).distinct().take(10)
             if (capsule != null || relevantMemory.isNotEmpty() || webStrategyAdvice.isNotEmpty() || evidenceContext.isNotEmpty() ||
@@ -491,6 +494,7 @@ class WorkflowRunner(
                 evidenceContext.take(6),
                 collaborationCard
             )
+            onModelContextPrepared(state.task, modelMessages)
             val replyResult = chatWithContextTelemetry(
                 messages = modelMessages,
                 onModelText = onModelText,

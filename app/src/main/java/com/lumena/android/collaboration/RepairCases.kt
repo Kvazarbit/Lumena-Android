@@ -31,18 +31,27 @@ object RepairCasePolicy {
     }
 
     /** Ordered streaming fold: memory is bounded independently of archive length. */
-    class Scanner {
+    class Scanner(private val trackedEpisodes: Set<String> = emptySet()) {
         private data class Open(val fail: CollaborationEntry, val check: String, val signature: String,
             var steps: Int = 0, var taskId: String = fail.scope.taskId, val changes: MutableList<CollaborationEntry> = mutableListOf())
         private val open = linkedMapOf<String, Open>()
         private val cases = ArrayDeque<RepairCase>()
         private val closed = ArrayDeque<RepairEpisode>()
-        private fun key(e: CollaborationEntry) = scope(e) + "|" + (e.scope.obligationId ?: e.scope.taskId)
+        private val retained = linkedMapOf<String, RepairEpisode>()
+        private val blocked = hashSetOf<String>()
+        init { require(trackedEpisodes.size <= 256) }
+        private fun key(e: CollaborationEntry) = CollaborationProtocol.hash(scope(e) + "|" + (e.scope.obligationId ?: e.scope.taskId))
         private fun episode(o: Open, status: String, reason: String) = RepairEpisode(o.fail.intentId,
             scope(o.fail), o.taskId, o.check, o.signature, o.steps, status, reason, o.fail.scope.modelId)
         private fun close(k: String, status: String, reason: String) {
             val o = open.remove(k) ?: return
-            closed.addLast(episode(o, status, reason))
+            val result = episode(o, status, reason)
+            closed.addLast(result)
+            if (result.id in trackedEpisodes) retained[result.id] = result
+            if (status == "UNRESOLVED") {
+                blocked += k
+                require(blocked.size <= CollaborationArchive.MAX_DELIVERIES)
+            }
             while (closed.size > 256) closed.removeFirst()
         }
         fun accept(e: CollaborationEntry) {
@@ -75,6 +84,12 @@ object RepairCasePolicy {
             if (check == null) { close(k, "UNRESOLVED", "INCOMPLETE_VERIFICATION"); return }
             if (open[k]?.check?.let { it != check } == true) close(k, "UNRESOLVED", "VERIFIER_CHANGED")
             val ok = e.result.ok && e.result.exitCode == 0
+            if (k in blocked) {
+                // An invalid/retried failure cannot buy another random draw.
+                // A real PASS closes that unresolved interval before a later new failure.
+                if (ok) blocked.remove(k)
+                return
+            }
             if (!ok) {
                 if (e.result.exitCode == null || e.result.exitCode == 0) { close(k, "UNRESOLVED", "NO_KNOWN_FAILURE"); return }
                 val signature = e.result.verification?.failureSignature ?: return
@@ -98,10 +113,13 @@ object RepairCasePolicy {
                 while (cases.size > MAX_CASES) cases.removeFirst()
             }
             close(k, if (valid) "SOLVED" else "UNRESOLVED", if (valid) "OBSERVED_REPAIR" else "NO_TRACKED_CHANGE")
+            blocked.remove(k) // This receipt is nevertheless a real PASS ending the interval.
         }
-        fun snapshot(): RepairSnapshot = RepairSnapshot(cases.toList(), closed.toList() + open.values.map { episode(it, "OPEN", "PENDING") })
+        fun snapshot(): RepairSnapshot = RepairSnapshot(cases.toList(),
+            (retained.values + closed.toList() + open.values.map { episode(it, "OPEN", "PENDING") }).distinctBy { it.id })
     }
-    fun derive(entries: List<CollaborationEntry>): RepairSnapshot = Scanner().also { s -> entries.forEach(s::accept) }.snapshot()
+    fun derive(entries: List<CollaborationEntry>, trackedEpisodes: Set<String> = emptySet()): RepairSnapshot =
+        Scanner(trackedEpisodes).also { s -> entries.forEach(s::accept) }.snapshot()
 
     fun advice(library: List<RepairCase>, episode: RepairEpisode, exposed: Boolean): List<String> {
         if (!exposed) return emptyList()

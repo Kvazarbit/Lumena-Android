@@ -108,8 +108,8 @@ class CollaborationLedger(context: Context) {
     }
     fun archivedSegments(): Int = withHelper { archiveIndex().segments }
     /** Complete historical fold without retaining the complete archive in RAM. */
-    fun repairSnapshot(): RepairSnapshot = withHelper { h ->
-        val scanner = RepairCasePolicy.Scanner()
+    fun repairSnapshot(trackedEpisodes: Set<String> = emptySet()): RepairSnapshot = withHelper { h ->
+        val scanner = RepairCasePolicy.Scanner(trackedEpisodes)
         archive.visitSegments({ db, base -> read(db, base) }, scanner::accept)
         read(h.readableDatabase, archiveIndex().tail).forEach(scanner::accept)
         scanner.snapshot()

@@ -52,6 +52,7 @@ object ImportedContextArchive {
             SQLiteDatabase.OPEN_READONLY, DatabaseErrorHandler { error("Imported SQLite corruption") })
         try {
             db.rawQuery("PRAGMA quick_check(1)", null).use { require(it.moveToFirst() && it.getString(0) == "ok") }
+            require(db.rawQuery("SELECT COUNT(*) FROM sqlite_master WHERE type='view'", null).use { it.moveToFirst(); it.getInt(0) } == 0)
             return db
         } catch (failure: Exception) { db.close(); throw failure }
     }
@@ -71,6 +72,16 @@ object ImportedContextArchive {
             require(file.isFile && file.length() <= 64L * 1024 * 1024)
             val db = database(file)
             try {
+                require(db.rawQuery("SELECT type,sql FROM sqlite_master WHERE name='events'", null).use {
+                    it.moveToFirst() && it.getString(0) == "table" && it.getString(1).trimStart().startsWith("CREATE TABLE", ignoreCase = true)
+                })
+                val columns = mutableListOf<String>()
+                db.rawQuery("PRAGMA table_info(events)", null).use { while (it.moveToNext()) columns += it.getString(1) }
+                require(columns == listOf("seq", "id", "body", "previous", "digest"))
+                db.rawQuery("SELECT COUNT(*),COALESCE(MAX(length(CAST(body AS BLOB))),0),COALESCE(SUM(length(CAST(body AS BLOB))),0) FROM events", null).use {
+                    require(it.moveToFirst() && it.getInt(0) <= CollaborationProtocol.MAX_EVENTS && it.getLong(1) <= 32_768 &&
+                        it.getLong(2) <= CollaborationProtocol.MAX_BYTES) { "Imported receipt bounds exceeded" }
+                }
                 val entries = ledger.validateImportedDatabase(db, base)
                 entries.filter { it.kind == "INTENT" }.forEach { require(deliveries.add(it.deliveryKey)) }
                 require(deliveries.size <= CollaborationArchive.MAX_DELIVERIES)

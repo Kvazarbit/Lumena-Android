@@ -101,6 +101,19 @@ class ExperienceLoopStorageTest {
         assertEquals(2, info.receipts)
         assertEquals("ARCHIVED_NOT_VERIFIED", info.provenance)
     }
+    @Test fun oversizedSqliteReceiptIsRejectedBeforeDecodingEvenInLegacyZip() = runBlocking {
+        val files = unzip(export()).toMutableMap(); files.remove("integrity.json"); clearLive()
+        val fixture = c.cacheDir.resolve("oversized-import-fixture.db")
+        android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(fixture, null).use { db ->
+            db.execSQL("CREATE TABLE events (seq INTEGER PRIMARY KEY,id TEXT,body TEXT,previous TEXT,digest TEXT)")
+            db.execSQL("INSERT INTO events VALUES(1,'id',?,'GENESIS','digest')", arrayOf("x".repeat(40_000)))
+        }
+        files["active/${CollaborationLedger.DATABASE}"] = fixture.readBytes()
+        val failure = assertThrows(IllegalArgumentException::class.java) { ImportedContextArchive.importArchive(c, zip(files).inputStream()) }
+        assertTrue(failure.message.orEmpty().contains("receipt bounds"))
+        assertTrue(ImportedContextArchive.infos(c).isEmpty())
+        assertFalse(CollaborationLedger.exists(c))
+    }
     @Test fun importedUnknownBlocksWritersWithCaptureOffAndOwnerAckNeverChangesHistory() = runBlocking {
         val bytes = export(unknown = true); clearLive()
         val info = ImportedContextArchive.importArchive(c, bytes.inputStream())
@@ -189,5 +202,55 @@ class ExperienceLoopStorageTest {
         ImportedContextArchive.importArchive(c, bytes.inputStream())
         assertNull(RepairLabStore.load(c, p.id))
         assertFalse(CollaborationRuntime.enabled(c))
+    }
+    @Test fun localDigestFrozenLibraryAndLiveAssignmentWorkTogetherAndChangedModelStopsTrial() = runBlocking {
+        repairCaseSpansArchivedSegmentAndKeepsStructuredProofAfterColdOpen()
+        CollaborationRuntime.enable(c, true)
+        val digest = java.util.concurrent.atomic.AtomicReference("a".repeat(64))
+        val server = java.net.ServerSocket(0, 4, java.net.InetAddress.getByName("127.0.0.1"))
+        val worker = kotlin.concurrent.thread(isDaemon = true) {
+            while (!server.isClosed) try { server.accept().use { socket ->
+                val input = socket.getInputStream().bufferedReader()
+                while (true) { val line = input.readLine() ?: break; if (line.isEmpty()) break }
+                val body = """{"models":[{"name":"fixture:latest","digest":"${digest.get()}"}]}""".toByteArray()
+                socket.getOutputStream().apply {
+                    write("HTTP/1.1 200 OK\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray()); write(body); flush()
+                }
+            } } catch (failure: java.net.SocketException) { if (!server.isClosed) throw failure }
+        }
+        try {
+            val route = CollaborationRuntime.route("ollama", "http://127.0.0.1:${server.localPort}", "fixture")
+            CollaborationRuntime.attestLocal(c, route, true)
+            RepairLabStore.start(c, p, route)
+            assertEquals(1, RepairLabStore.load(c, p.id)!!.config.library.size)
+            val proof = VerificationEvidence("a".repeat(64), "b".repeat(64), "c".repeat(64), 1, true, true, "d".repeat(64))
+            CollaborationLedger(c).execute(scope().copy(taskId = "retry", obligationId = "next"), ToolRequest("python.tests", mapOf("cwd" to "demo")),
+                executor(ToolResult(false, exitCode = 1, stdout = "fail", verification = proof)), "new-failure") { SourceObservation("a".repeat(64)) }
+            val task = TaskState("retry", p.id, "Fix", projectRoot = "demo")
+            val advice = RepairLabStore.advice(c, task, route)
+            val assigned = RepairLabStore.load(c, p.id)!!.rows.single()
+            assertEquals(assigned.exposed, advice.isNotEmpty())
+            RepairLabStore.modelRequest(c, task, advice.joinToString("\n"))
+            assertEquals(if (assigned.exposed) 1 else 0, RepairLabStore.load(c, p.id)!!.rows.single().requestsWithCases)
+            val ledger = CollaborationLedger(c)
+            val next = scope().copy(taskId = "retry", obligationId = "next")
+            ledger.execute(next, ToolRequest("file.patch", mapOf("path" to "demo/calc.py", "old" to "x - 1", "new" to "x + 1")),
+                executor(ToolResult(true, exitCode = 0)), "next-patch") { SourceObservation("e".repeat(64)) }
+            ledger.execute(next, ToolRequest("python.tests", mapOf("cwd" to "demo")),
+                executor(ToolResult(true, exitCode = 0, verification = proof.copy(failureSignature = null))), "next-pass") { SourceObservation("e".repeat(64)) }
+            assertEquals(2, ledger.repairSnapshot().cases.size)
+            ledger.execute(next, ToolRequest("python.tests", mapOf("cwd" to "demo")),
+                executor(ToolResult(false, exitCode = 1, verification = proof)), "third-failure") { SourceObservation("a".repeat(64)) }
+            RepairLabStore.advice(c, task, route)
+            assertEquals("FROZEN_LIBRARY_CHANGED", 1, RepairLabStore.load(c, p.id)!!.config.library.size)
+            digest.set("e".repeat(64))
+            assertTrue(RepairLabStore.advice(c, task, route).isEmpty())
+            val stopped = RepairLabStore.load(c, p.id)!!
+            assertFalse(stopped.config.active)
+            assertEquals(2, stopped.rows.size)
+            assertFalse(stopped.rows.first().invalidConditions)
+            assertTrue(stopped.rows.last().invalidConditions)
+            assertEquals(assigned.exposed, stopped.rows.first().exposed)
+        } finally { server.close(); worker.join(1000) }
     }
 }

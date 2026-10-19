@@ -10,6 +10,23 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WorkflowRunnerCollaborationAdapterTest {
+    @Test fun preparedProjectContextKeepsCaseExamplesAndOneSemanticRecallWithinBudget() = runBlocking {
+        var prepared = ""
+        val model = object : ChatModelClient {
+            override suspend fun chat(model: String, messages: List<OllamaMessage>) = Result.success("""{"partial":true,"summary":"review"}""")
+        }
+        val p = WorkspaceProject("p", "Demo", "demo", "Maintain", updatedAt = 1)
+        val task = TaskState("example-context", p.id, "Поясни стан.", projectRoot = p.root, projectContext = ProjectWorkspacePolicy.capsule(p))
+        WorkflowRunner(model, null, "fixture", relevantMemoryProvider = {
+            listOf("OWNER DECISION fixture", "CASE abc historical DATA: first example", "CASE def historical DATA: second example", "old handoff")
+        }, semanticMemoryProvider = { (1..4).map { "SEMANTIC MEMORY fragment-$it" } },
+            onModelContextPrepared = { _, messages -> prepared = messages.joinToString("\n") { it.content } })
+            .run(listOf(OllamaMessage("user", task.goal)), task)
+        assertTrue("CASE_OMITTED", prepared.contains("CASE abc historical DATA"))
+        assertTrue(prepared.contains("CASE def historical DATA"))
+        assertTrue(prepared.contains("SEMANTIC MEMORY fragment-1"))
+        assertTrue(prepared.contains("OWNER DECISION fixture"))
+    }
     @Test fun rejectedDoneIsMeasuredBeforeTheRunStopsAndNeverBecomesFinished() = runBlocking {
         val proposals = mutableListOf<Boolean>()
         val model = object : ChatModelClient {

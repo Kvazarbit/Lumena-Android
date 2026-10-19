@@ -58,12 +58,12 @@ jobs:
                       'SemanticMemoryCoordinatorTest': 7, 'OwnerActionTextTest': 5,
                       'WorkflowRunnerSemanticRecallTest': 2, 'CollaborationProtocolTest': 5,
                       'CollaborationReviewTest': 3, 'CollaborationLedgerTest': 23,
-                      'CollaborationStateCardTest': 15, 'WorkflowRunnerCollaborationAdapterTest': 6,
+                      'CollaborationStateCardTest': 15, 'WorkflowRunnerCollaborationAdapterTest': 8,
                       'ProjectContextClientTest': 4, 'LocalSessionSnapshotCodecTest': 3,
                       'ProjectWorkspacePolicyTest': 10, 'ProjectContinuationPolicyTest': 4,
                       'ProjectFilePreconditionsTest': 3, 'ProjectWorkspaceHistoryTest': 6,
-                      'ClaimCheckTest': 17, 'RepairCasePolicyTest': 8, 'RepairLabPolicyTest': 8,
-                      'CompletionClaimReviewTest': 3, 'ExperienceLoopStorageTest': 11}
+                      'ClaimCheckTest': 17, 'RepairCasePolicyTest': 10, 'RepairLabPolicyTest': 10,
+                      'CompletionClaimReviewTest': 3, 'ExperienceLoopStorageTest': 13}
           for name, minimum in expected.items():
               matches = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.' + name + '.xml'))
               assert len(matches) == 1, name

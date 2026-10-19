@@ -1001,6 +1001,11 @@ fun WorkflowChatScreen(
             onDoneProposal = { task, accepted ->
                 runCatching { com.lumena.android.collaboration.RepairLabStore.doneProposal(context, task, accepted) }
             },
+            onModelContextPrepared = { task, messages ->
+                withContext(Dispatchers.IO) { runCatching {
+                    com.lumena.android.collaboration.RepairLabStore.modelRequest(context, task, messages.joinToString("\n") { it.content })
+                } }
+            },
             projectObservation = { task, request, result ->
                 // Only explicitly scoped records can learn from a project. Never
                 // publish its text into the global memory/landscape/constitution.
@@ -1035,7 +1040,7 @@ fun WorkflowChatScreen(
                     }.orEmpty()
                     val scoped = com.lumena.android.collaboration.RepairLabStore.advice(context, task,
                         com.lumena.android.collaboration.CollaborationRuntime.route(cardBackend, cardUrl, cardModel))
-                    return@memory ProjectWorkspacePolicy.combineAdvice(own, scoped, emptyList(), emptyList())
+                    return@memory (own.take(1) + scoped + own.drop(1)).distinct().take(6)
                 }
                 val advice = try {
                     governed(task, AdvisoryLayer.LANDSCAPE,

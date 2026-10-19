@@ -10,6 +10,10 @@ BASE = ROOT / "app/src/main/java/com/lumena/android/collaboration"
 REPORTS = ROOT / "app/build/test-results/testDebugUnitTest"
 OUT = ROOT / "app/build/collaboration-probe"
 MUTANTS = [
+    ("invalid-episode-redraw", "RepairCases.kt",
+     'if (k in blocked) {', 'if (false) {',
+     "com.lumena.android.collaboration.RepairCasePolicyTest.invalidIntervalCannotRedrawAnEpisodeUntilARealPass", "INVALID_INTERVAL_REDRAWN",
+     "com.lumena.android.collaboration.RepairCasePolicyTest.realObservedRepairRetainsProofAndCausalChange"),
     ("changed-verifier-learned", "RepairCases.kt",
      '!it.complete || !it.boundaryUnchanged || e.sourceDigest == null', '!it.complete || e.sourceDigest == null',
      "com.lumena.android.collaboration.RepairCasePolicyTest.changedVerifierCannotBecomeALearnedRepair", "CHANGED_VERIFIER_LEARNED",

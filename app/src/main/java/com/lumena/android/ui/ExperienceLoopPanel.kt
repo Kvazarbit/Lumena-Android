@@ -95,6 +95,11 @@ fun ContextArchiveRestorePanel(changed: (ProjectWorkspaceState) -> Unit) {
     if (visible) infos.forEach { info ->
         Text("З архіву, не перевірено цим встановленням · ${info.id.take(12)}")
         Text("Проєкти: ${info.projects.projects.joinToString { it.name }} · квитанцій ${info.receipts}")
+        info.projects.projects.forEach { p ->
+            Text("${p.name} · каталог ${p.root}\nМета з архіву: ${p.goal}")
+            p.constraints.forEach { Text("Обмеження з архіву: $it", style = MaterialTheme.typography.bodySmall) }
+            Text("Рішень: ${p.decisions.size}; записів задач: ${p.tasks.size}. Межа тестів: ${p.verificationPaths.joinToString().ifBlank { "не задана" }}.", style = MaterialTheme.typography.bodySmall)
+        }
         Text("Копія містить історію й рішення. Файли проєкту, моделі, ключі та дозволи потрібно налаштувати окремо.", style = MaterialTheme.typography.bodySmall)
         TextButton(enabled = !busy, onClick = { action {
             changed(withContext(Dispatchers.IO) { ImportedContextArchive.restoreProjects(context, info.id) })
@@ -102,6 +107,7 @@ fun ContextArchiveRestorePanel(changed: (ProjectWorkspaceState) -> Unit) {
         } }) { Text("Відновити історію проєктів") }
         info.unresolved.forEach { e ->
             Text("Архівний UNKNOWN: ${e.tool} · ${e.scope.projectId} · ${e.intentId.take(12)}. Спершу перевір фактичний стан читанням.")
+            Text("Файл / каталог: ${e.targets.entries.joinToString { "${it.key}=${it.value}" }}", style = MaterialTheme.typography.bodySmall)
             TextButton(enabled = !busy, onClick = { inspect = info.id to e.intentId }) { Text("Підтвердити огляд наслідків…") }
         }
     }

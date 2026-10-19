@@ -7,7 +7,7 @@ data class RepairLabConfig(
 )
 data class RepairLabRow(val episodeId: String, val taskId: String, val exposed: Boolean,
     val cases: List<String>, val ended: Boolean = false, val rejectedDone: Int = 0, val acceptedDone: Int = 0,
-    val invalidConditions: Boolean = false)
+    val invalidConditions: Boolean = false, val modelRequests: Int = 0, val requestsWithCases: Int = 0)
 data class RepairLabState(val config: RepairLabConfig, val rows: List<RepairLabRow> = emptyList())
 
 object RepairLabPolicy {
@@ -25,6 +25,16 @@ object RepairLabPolicy {
         return state.copy(rows = state.rows + RepairLabRow(episode.id, episode.taskId,
             arm(state.config.id, episode.id), eligible))
     }
+    /** Record the prepared model request, not just the randomized intention to show advice. */
+    fun request(state: RepairLabState, taskId: String, text: String): RepairLabState {
+        if (!state.config.active) return state
+        val row = state.rows.lastOrNull { it.taskId == taskId && !it.ended && !it.invalidConditions } ?: return state
+        val present = state.config.library.any { text.contains("CASE ${it.id.take(8)} historical DATA") }
+        return state.copy(rows = state.rows.map { if (it != row) it else it.copy(
+            modelRequests = (it.modelRequests + 1).coerceAtMost(100_000),
+            requestsWithCases = (it.requestsWithCases + if (present) 1 else 0).coerceAtMost(100_000),
+            invalidConditions = !it.exposed && present) })
+    }
     fun report(state: RepairLabState, snapshot: RepairSnapshot): String = buildString {
         appendLine("Лабораторія проєктного досвіду · ${state.config.id.take(8)} · модель ${state.config.modelDigest.take(12)}")
         appendLine("Призначення 50/50; бібліотека зафіксована: ${state.config.library.size}. Нові кейси не підмішуються.")
@@ -37,7 +47,7 @@ object RepairLabPolicy {
             val costs = solved.map { it.steps }.sorted()
             val median = if (costs.isEmpty()) "?" else if (costs.size % 2 == 1) costs[costs.size / 2].toString()
                 else ((costs[costs.size / 2 - 1] + costs[costs.size / 2]) / 2.0).toString()
-            appendLine("${if (exposed) "З кейсами" else "Без кейсів"}: призначено ${rows.size}; SOLVED ${solved.size}; UNRESOLVED $unresolved; відкрито $pending; змінені умови ${rows.count { it.invalidConditions }}; медіана кроків $median; відхилених DONE ${rows.sumOf { it.rejectedDone }}; прийнятих DONE ${rows.sumOf { it.acceptedDone }}.")
+            appendLine("${if (exposed) "З кейсами" else "Без кейсів"}: призначено ${rows.size}; SOLVED ${solved.size}; UNRESOLVED $unresolved; відкрито $pending; змінені умови ${rows.count { it.invalidConditions }}; медіана кроків $median; відхилених DONE ${rows.sumOf { it.rejectedDone }}; прийнятих DONE ${rows.sumOf { it.acceptedDone }}; запитів ${rows.sumOf { it.modelRequests }}, з кейсами ${rows.sumOf { it.requestsWithCases }}.")
         }
         val enough = listOf(true, false).all { arm -> state.rows.count {
             it.exposed == arm && (it.ended || it.invalidConditions || episodes[it.episodeId]?.status in setOf("SOLVED", "UNRESOLVED"))

@@ -87,9 +87,11 @@ object RepairLabStore {
             val state = load(c, id) ?: return@withContext emptyList()
             if (!state.config.active) return@withContext emptyList()
             fun invalid(): List<String> {
+                val closed = runCatching { CollaborationLedger(c).repairSnapshot(state.rows.map { it.episodeId }.toSet()).episodes.filter { it.status != "OPEN" }.map { it.id }.toSet() }
+                    .getOrDefault(emptySet())
                 synchronized(monitor) { load(c, id)?.let { latest ->
                     save(c, latest.copy(config = latest.config.copy(active = false),
-                        rows = latest.rows.map { if (!it.ended) it.copy(invalidConditions = true, ended = true) else it }))
+                        rows = latest.rows.map { if (!it.ended) it.copy(invalidConditions = it.invalidConditions || it.episodeId !in closed, ended = true) else it }))
                 } }
                 return emptyList()
             }
@@ -98,7 +100,7 @@ object RepairLabStore {
             val project = com.lumena.android.settings.ProjectWorkspaceStore.project(c, id) ?: return@withContext emptyList()
             if (RepairCasePolicy.scope(project) != state.config.scope || modelDigest(c, route) != state.config.modelDigest)
                 return@withContext invalid()
-            val snapshot = RepairCasePolicy.derive(CollaborationLedger(c).entries())
+            val snapshot = CollaborationLedger(c).repairSnapshot()
             val episode = snapshot.episodes.lastOrNull { it.status == "OPEN" && it.scope == state.config.scope && it.taskId == task.id }
                 ?: return@withContext emptyList()
             val row = synchronized(monitor) {
@@ -121,6 +123,11 @@ object RepairLabStore {
             rejectedDone = (it.rejectedDone + if (accepted) 0 else 1).coerceAtMost(100_000),
             acceptedDone = (it.acceptedDone + if (accepted) 1 else 0).coerceAtMost(100_000)) }))
     }
+    fun modelRequest(c: Context, task: TaskState, text: String) = synchronized(monitor) {
+        val state = task.projectId?.let { load(c, it) } ?: return@synchronized
+        val next = RepairLabPolicy.request(state, task.id, text)
+        if (next != state) save(c, next)
+    }
     fun terminal(c: Context, task: TaskState) = synchronized(monitor) {
         val state = task.projectId?.let { load(c, it) } ?: return@synchronized
         if (!state.config.active) return@synchronized
@@ -135,6 +142,6 @@ object RepairLabStore {
     }
     fun report(c: Context, project: String): String {
         val state = load(c, project) ?: return "Лабораторний дослід ще не починався."
-        return RepairLabPolicy.report(state, CollaborationLedger(c).repairSnapshot())
+        return RepairLabPolicy.report(state, CollaborationLedger(c).repairSnapshot(state.rows.map { it.episodeId }.toSet()))
     }
 }
