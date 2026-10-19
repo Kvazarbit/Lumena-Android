@@ -55,10 +55,12 @@ object ClaimCheck {
             val sentence = raw.trim().take(400)
             val s = sentence.lowercase()
             if (s.length < 3 || s.endsWith('?') || s.startsWith("чи ") || hypothetical.any { it.containsMatchIn(s) }) continue
-            val py = pyTarget.findAll(s).map { it.value.trim('.', '/') }.toList()
-            val target = py.firstOrNull { "test" in it.substringAfterLast('/') } ?: py.firstOrNull()?.takeIf { runVerb.containsMatchIn(s) }
+            // Preserve case: Termux paths are case sensitive. The surrounding
+            // prose may be folded, but file identity must not be folded.
+            val py = Regex(pyTarget.pattern, RegexOption.IGNORE_CASE).findAll(sentence).map { it.value.removePrefix("./").trim('/') }.toList()
+            val target = py.firstOrNull { "test" in it.substringAfterLast('/').lowercase() } ?: py.firstOrNull()?.takeIf { runVerb.containsMatchIn(s) }
             if (notRun.any { it in s }) { out += Claim(sentence, Kind.NOT_RUN, target, null); continue }
-            val file = fileTarget.find(s)?.value?.trim('.', '/')
+            val file = Regex(fileTarget.pattern, RegexOption.IGNORE_CASE).find(sentence)?.value?.removePrefix("./")?.trim('/')
             if (file != null && wrote.any { it.containsMatchIn(s) }) out += Claim(sentence, Kind.WROTE, file, null)
             val count = claimedCount(s)
             if (!testWord.containsMatchIn(s) && count == null && target == null) continue
@@ -84,9 +86,11 @@ object ClaimCheck {
     private fun verdict(c: Claim, scoped: List<CollaborationEntry>, unassigned: List<CollaborationEntry>,
                         project: WorkspaceProject, appSource: String, current: SourceObservation?): Finding {
         val tools = if (c.kind == Kind.WROTE) writes else checks
-        fun relevant(e: CollaborationEntry) = e.tool in tools && e.result?.outcomeUnknown != true && (c.target == null || matches(e, c.target))
+        fun relevant(e: CollaborationEntry) = e.tool in tools && (c.target == null || matches(e, c.target))
         val candidates = scoped.filter(::relevant)
         val latest = candidates.firstOrNull()
+        if (latest?.result?.outcomeUnknown == true) return Finding(c, Verdict.UNVERIFIABLE, latest.id,
+            "Останній результат невідомий. Старий успіх не підтверджує цю заяву; автоматично повторювати дію не можна.")
         if (c.kind == Kind.NOT_RUN) {
             return if (latest == null) Finding(c, Verdict.UNVERIFIABLE, null,
                 "Квитанцій запуску в цьому проєкті немає, але це не доводить, що нічого не запускали.")
@@ -115,9 +119,11 @@ object ClaimCheck {
                 else "остання квитанція: ${describe(latest)}"
             return Finding(c, Verdict.CONTRADICTED, latest.id, "Не збігається: $why.")
         }
+        if (c.kind == Kind.PASS && c.count != null && receiptCount(latest) == null)
+            return Finding(c, Verdict.UNVERIFIABLE, latest.id, "Є результат запуску, але заявлена кількість тестів не підтверджена.")
         val fresh = CollaborationProtocol.freshness(latest, project, appSource, current)
         val countNote = if (c.count != null && receiptCount(latest) == null) " Кількість тестів у квитанції не видно." else ""
-        val verdict = if (fresh == "STALE_SOURCE" || fresh == "STALE_GOAL") Verdict.STALE else Verdict.SUPPORTED
+        val verdict = if (fresh in setOf("STALE_SOURCE", "STALE_GOAL", "STALE_BUILD", "LEGACY_GOAL_REVISION")) Verdict.STALE else Verdict.SUPPORTED
         return Finding(c, verdict, latest.id, "${describe(latest)} · ${human(fresh)}.$countNote")
     }
 
@@ -153,12 +159,15 @@ object ClaimCheck {
     }
 
     private fun matches(e: CollaborationEntry, target: String): Boolean {
-        val t = target.removePrefix("./").trim('/')
-        val base = t.substringAfterLast('/')
+        val root = e.scope.root.takeUnless { it == "." }?.plus("/").orEmpty()
+        val t = target.removePrefix("./").trim('/').removePrefix(root)
+        if (e.tool == "python.tests" && e.result?.verification?.let {
+                it.valid() && it.complete && it.boundaryUnchanged && t in it.testFiles
+            } == true) return true
         return e.targets.values.any { raw ->
-            val n = raw.lowercase().removePrefix("./").trim('/')
-            n == t || n.endsWith("/$t") || n.substringAfterLast('/') == base
-        } || (e.tool == "python.tests" && e.result?.stdout?.lowercase()?.contains(base) == true)
+            val n = raw.removePrefix("./").trim('/').removePrefix(root)
+            n == t
+        }
     }
 
     private fun observed(e: CollaborationEntry): Kind? {

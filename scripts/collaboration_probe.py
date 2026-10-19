@@ -10,6 +10,14 @@ BASE = ROOT / "app/src/main/java/com/lumena/android/collaboration"
 REPORTS = ROOT / "app/build/test-results/testDebugUnitTest"
 OUT = ROOT / "app/build/collaboration-probe"
 MUTANTS = [
+    ("changed-verifier-learned", "RepairCases.kt",
+     '!it.complete || !it.boundaryUnchanged || e.sourceDigest == null', '!it.complete || e.sourceDigest == null',
+     "com.lumena.android.collaboration.RepairCasePolicyTest.changedVerifierCannotBecomeALearnedRepair", "CHANGED_VERIFIER_LEARNED",
+     "com.lumena.android.collaboration.RepairCasePolicyTest.realObservedRepairRetainsProofAndCausalChange"),
+    ("imported-unknown-barrier", "ImportedContextArchive.kt",
+     'if (!CollaborationProtocol.writer(request.tool)) return@synchronized false', 'return@synchronized false',
+     "com.lumena.android.diagnostics.ExperienceLoopStorageTest.importedUnknownBlocksWritersWithCaptureOffAndOwnerAckNeverChangesHistory", "IMPORTED_UNKNOWN_EXECUTED",
+     "com.lumena.android.diagnostics.CollaborationLedgerTest.disabledLayerKeepsOriginalSingleModelTransportAndCreatesNoDatabase"),
     ("private-project-learning", "../ollama/WorkflowRunner.kt",
      "if (experienceIsolation(task)) return", "if (false) return",
      "com.lumena.android.ollama.WorkflowRunnerCollaborationAdapterTest.isolatedProjectObservationNeverPublishesIntoGlobalLearning", "PRIVATE_LEARNING_EGRESS",

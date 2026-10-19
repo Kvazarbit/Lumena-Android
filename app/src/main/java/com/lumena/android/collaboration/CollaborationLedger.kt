@@ -67,7 +67,7 @@ class CollaborationLedger(context: Context) {
                     require(intent != null && intent.scope == entry.scope && intent.tool == entry.tool &&
                         intent.requestDigest == entry.requestDigest && intent.deliveryKey == entry.deliveryKey &&
                         intent.targets == entry.targets && intent.mutating == entry.mutating &&
-                        intent.boundInputSha256 == entry.boundInputSha256)
+                        intent.boundInputSha256 == entry.boundInputSha256 && intent.patchSummary == entry.patchSummary)
                     if (entry.kind == "OWNER_ACK_UNKNOWN") {
                         require(CollaborationProtocol.effectiveWriter(intent) && acknowledged.add(intent.id) &&
                             (results[intent.id] == null || results[intent.id]?.result?.outcomeUnknown == true))
@@ -107,14 +107,24 @@ class CollaborationLedger(context: Context) {
         old.recent + read(h.readableDatabase, old.tail)
     }
     fun archivedSegments(): Int = withHelper { archiveIndex().segments }
+    /** Complete historical fold without retaining the complete archive in RAM. */
+    fun repairSnapshot(): RepairSnapshot = withHelper { h ->
+        val scanner = RepairCasePolicy.Scanner()
+        archive.visitSegments({ db, base -> read(db, base) }, scanner::accept)
+        read(h.readableDatabase, archiveIndex().tail).forEach(scanner::accept)
+        scanner.snapshot()
+    }
+    internal fun validateImportedDatabase(db: SQLiteDatabase, base: String): List<CollaborationEntry> = read(db, base)
     fun exportArchive(output: java.io.OutputStream) = synchronized(leaseMonitor) {
         require(active.isEmpty()) { "Stop active operations before exporting" }
         withHelper { h -> read(h.readableDatabase, archiveIndex().tail) }
+        val imported = ImportedContextArchive.exportFiles(appContext)
+        val lab = RepairLabStore.snapshots(appContext)
         synchronized(com.lumena.android.settings.StateVaultLock.monitor) {
             val projects = com.lumena.android.settings.ProjectWorkspaceCodec.encode(
                 com.lumena.android.settings.ProjectWorkspaceStore.load(appContext))
             val history = com.lumena.android.settings.ProjectWorkspaceHistoryArchive.validatedFile(appContext)
-            archive.export(output, projects, history)
+            archive.export(output, projects, history, imported, lab)
         }
     }
 
@@ -173,7 +183,8 @@ class CollaborationLedger(context: Context) {
                 boundInputSha256 = (if (request.tool == "python.run") request.args["approved_sha256"]
                     else if (request.tool in setOf("file.write", "file.patch")) request.args["expected_sha256"] else null)
                     ?.takeIf { it.matches(Regex("[a-f0-9]{64}")) },
-                at = System.currentTimeMillis())
+                at = System.currentTimeMillis(), patchSummary = if (request.tool == "file.patch")
+                    (request.args["old"].orEmpty().take(280) + " → " + request.args["new"].orEmpty().take(280)) else null)
             // Reserve room for a result BEFORE authorizing transport. Full journal never discards data.
             val completed = all.filter { it.kind == "RESULT" }.map { it.intentId }.toHashSet()
             val unfinished = all.count { it.kind == "INTENT" && it.id !in completed }
@@ -230,7 +241,7 @@ class CollaborationLedger(context: Context) {
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { blocked("Transport failed after intent; effect UNKNOWN", true) }
             // Project fingerprint right after a writer. Failure leaves it UNKNOWN; the receipt itself is never lost.
-            val source = if (observe == null || !intent.mutating || intent.scope.projectId == "UNASSIGNED" || result.outcomeUnknown) {
+            val source = if (observe == null || (!intent.mutating && request.tool != "python.tests") || intent.scope.projectId == "UNASSIGNED" || result.outcomeUnknown) {
                 SourceObservation.UNKNOWN
             } else try { observe(intent.scope.root) }
             catch (cancelled: CancellationException) {

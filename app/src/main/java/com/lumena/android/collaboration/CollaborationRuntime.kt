@@ -59,6 +59,19 @@ object CollaborationRuntime {
         CollaborationProtocol.hash("installation-local-bridge"),
         BuildConfig.VERSION_NAME, BuildConfig.SOURCE_COMMIT)
 
+    suspend fun completionProblem(c: Context, task: TaskState, text: String, bridge: ToolExecutor?): String? {
+        if (task.projectId == null || !enabled(c)) return null
+        if (ClaimCheck.extract(text).none { it.kind == ClaimCheck.Kind.PASS }) return null
+        return try {
+            val project = withContext(Dispatchers.IO) { ProjectWorkspaceStore.project(c, task.projectId) }
+                ?: return "DONE відхилено: проєкт недоступний."
+            val current = bridge?.let { CollaborationStateCard.observe(it, project.root) } ?: SourceObservation.UNKNOWN
+            val entries = withContext(Dispatchers.IO) { CollaborationLedger(c).entries().filter { it.scope.taskId == task.id } }
+            CompletionClaimReview.problem(text, entries, project, BuildConfig.SOURCE_COMMIT, current)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (_: Exception) { "DONE відхилено: журнал перевірки недоступний. Зобов'язання залишається відкритим." }
+    }
+
     fun forTask(c: Context, task: TaskState, model: String, url: String, token: String, delegate: ToolExecutor,
                 privateProjectIds: List<String> = emptyList()): ToolExecutor {
         val project = runCatching { ProjectWorkspaceStore.project(c, task.projectId) }.getOrNull()
@@ -70,14 +83,28 @@ object CollaborationRuntime {
             }
         }
         // The same inference boundary also applies with journal capture disabled.
-        val guarded = executor(c, scope(project, task.id, "local", model, "LOCAL", url, token), delegate,
+        val guarded = executor(c, scope(project, task.id, "local", model, "LOCAL", url, token)
+            .copy(obligationId = task.projectObligationId ?: task.id), delegate,
             transportUrl = url, privateProjectIds = privateProjectIds)
         return com.lumena.android.agent.local.ProjectFilePreconditions.wrap(task, guarded, delegate)
     }
 
     fun executor(c: Context, scope: CollaborationScope, delegate: ToolExecutor, delivery: String? = null,
                  transportUrl: String = "", privateProjectIds: List<String> = emptyList()): ToolExecutor = object : ToolExecutor {
-        override suspend fun execute(toolRequest: ToolRequest): ToolResult {
+        override suspend fun execute(incoming: ToolRequest): ToolResult {
+            // The model cannot choose which tests/helpers are considered immutable.
+            val toolRequest = if (incoming.tool == "python.tests") {
+                val boundary = withContext(Dispatchers.IO) {
+                    ProjectWorkspaceStore.project(c, scope.projectId)?.verificationPaths.orEmpty()
+                }
+                incoming.copy(args = incoming.args + ("verification_paths" to org.json.JSONArray(boundary).toString()))
+            } else incoming
+            if (CollaborationProtocol.writer(toolRequest.tool)) {
+                val blocked = try { withContext(Dispatchers.IO) { ImportedContextArchive.blocked(c, toolRequest) } }
+                    catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                    catch (_: Exception) { true }
+                if (blocked) return CollaborationLedger.blocked("ARCHIVED_UNKNOWN: перевір невідомі наслідки в імпортованому архіві й підтвердь огляд у Проєктах. Читання доступне.", false)
+            }
             val privateIds = (privateProjectIds + scope.projectId).filter { it != "UNASSIGNED" }.distinct()
             if (toolRequest.tool == "ollama.generate" && privateIds.isNotEmpty()) {
                 val remote = try { withContext(Dispatchers.IO) { privateIds.all { id ->

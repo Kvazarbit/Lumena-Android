@@ -10,6 +10,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WorkflowRunnerCollaborationAdapterTest {
+    @Test fun rejectedDoneIsMeasuredBeforeTheRunStopsAndNeverBecomesFinished() = runBlocking {
+        val proposals = mutableListOf<Boolean>()
+        val model = object : ChatModelClient {
+            override suspend fun chat(model: String, messages: List<OllamaMessage>) = Result.success("""{"done":true,"summary":"8 tests passed."}""")
+        }
+        val result = WorkflowRunner(model, null, "fixture", completionClaimReview = { _, _ -> "missing current receipt" },
+            onDoneProposal = { _, accepted -> proposals += accepted })
+            .run(listOf(OllamaMessage("user", "Поясни стан.")), TaskState("done-attempt", null, "Поясни стан."))
+        assertEquals(listOf(false), proposals)
+        assertTrue(result is WorkflowOutcome.Failed)
+        assertEquals(com.lumena.android.agent.core.TaskStatus.PARTIAL, (result as WorkflowOutcome.Failed).control.task.status)
+    }
     private suspend fun observeLearning(root: String?, derivedPrivate: Boolean = false, unknown: Boolean = false): Pair<List<String>, List<String>> {
         val scoped = mutableListOf<String>()
         val global = mutableListOf<String>()

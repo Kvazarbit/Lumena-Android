@@ -19,8 +19,24 @@ data class ToolResult(
     val retryable: Boolean? = null,
     val dependency: String? = null,
     val sourceSha256: String? = null,
-    val sourceComplete: Boolean = false
+    val sourceComplete: Boolean = false,
+    val verification: VerificationEvidence? = null
 )
+
+/** Bridge-authored bounded test evidence, never parsed from model/program prose. */
+data class VerificationEvidence(
+    val specHash: String, val boundaryHash: String, val selectedTestsHash: String,
+    val testsCount: Int, val complete: Boolean, val boundaryUnchanged: Boolean,
+    val failureSignature: String? = null,
+    val schema: String = "lumena.verification.v1", val failureSummary: String? = null,
+    val testFiles: List<String> = emptyList()
+) {
+    fun valid(): Boolean = schema == "lumena.verification.v1" && testsCount in 1..100_000 &&
+        listOf(specHash, boundaryHash, selectedTestsHash).all { it.matches(Regex("[a-f0-9]{64}")) } &&
+        (failureSignature == null || failureSignature.matches(Regex("[a-f0-9]{64}"))) && (failureSummary?.length ?: 0) <= 240 &&
+        testFiles.size <= 16 && testFiles.distinct().size == testFiles.size && testFiles.all {
+            it.length in 1..200 && !it.startsWith('/') && '\\' !in it && ':' !in it && it.split('/').none { p -> p == ".." } }
+}
 
 interface ToolExecutor {
     suspend fun execute(toolRequest: ToolRequest): ToolResult

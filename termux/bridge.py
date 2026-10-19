@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.32
+Lumena Termux Bridge v0.33
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -3923,6 +3923,80 @@ def _validate_project_scope(tool: str, args: dict[str, Any]) -> None:
             raise ValueError('PROJECT_SCOPE: resolved path escapes project')
 
 
+def verification_boundary(cwd: Path, declared: str) -> dict[str, Any] | None:
+    """Owner-declared verification bytes. Bounded; no inference from program prose.
+
+    This detects lasting changes, not an adversarial same-UID process that changes
+    and restores bytes during execution. It is not OS process isolation.
+    """
+    roots = json.loads(declared or '[]')
+    if not roots:
+        return None
+    if not isinstance(roots, list) or len(roots) > 16 or any(not isinstance(p, str) for p in roots):
+        raise ValueError('Invalid owner verification boundary')
+    config_names = ('pyproject.toml', 'pytest.ini', 'setup.cfg', 'tox.ini', 'conftest.py',
+                    'requirements.txt', 'requirements-dev.txt', 'poetry.lock', 'uv.lock')
+    paths: dict[str, Path] = {}
+    complete = True
+    for name in roots:
+        rel = Path(name)
+        if rel.is_absolute() or '..' in rel.parts or name in ('', '.') or '\\' in name:
+            raise ValueError('Verification boundary escapes project')
+        path = cwd / rel
+        if path.is_symlink() or not path.resolve().is_relative_to(cwd.resolve()):
+            raise ValueError('Verification boundary symlink/escape')
+        if path.is_dir():
+            visited = 0
+            for directory, dirs, files in os.walk(path, followlinks=False):
+                dirs[:] = sorted(d for d in dirs if d not in ('__pycache__', '.pytest_cache', '.git'))
+                if any((Path(directory) / d).is_symlink() for d in dirs):
+                    complete = False
+                for item in sorted(files):
+                    visited += 1
+                    if visited > 1024:
+                        complete = False
+                        break
+                    f = Path(directory) / item
+                    paths[f.relative_to(cwd).as_posix()] = f
+                if not complete:
+                    break
+        else:
+            paths[name] = path
+    for name in config_names:
+        paths[name] = cwd / name
+    items, used = [], 0
+    for name, path in sorted(paths.items()):
+        if len(items) >= 1024 or path.is_symlink():
+            complete = False
+            break
+        if not path.exists():
+            items.append((name, 'ABSENT'))
+            continue
+        if not path.is_file() or path.stat().st_size > 2 * 1024 * 1024:
+            complete = False
+            break
+        data = path.read_bytes()
+        used += len(data)
+        if used > 8 * 1024 * 1024:
+            complete = False
+            break
+        items.append((name, hashlib.sha256(data).hexdigest()))
+    digest = hashlib.sha256(json.dumps(items, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+    return {'hash': digest, 'complete': complete, 'files': sorted(paths)}
+
+
+def verification_spec(cwd: Path, extra: list[str], declared: str) -> str:
+    import importlib.metadata
+    # Versions/selected environment are hashed, never disclosed to a model.
+    packages = sorted((d.metadata.get('Name', ''), d.version) for d in importlib.metadata.distributions())
+    env = python_child_env()
+    value = ['pytest-junit-v1', str(cwd.resolve()), extra, json.loads(declared),
+             platform.python_version(), packages,
+             {k: v for k, v in env.items() if k != 'PYTHONPYCACHEPREFIX'},
+             hashlib.sha256(Path(__file__).read_bytes()).hexdigest()]
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
 def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None) -> dict[str, Any]:
     _validate_project_scope(tool, args)
     if tool in {'project.inspect', 'project.search'}:
@@ -3937,8 +4011,8 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + alias for alias, root in READONLY_ALIASES.items() if root.exists()) or '(none)'}\n"
                 f"read_roots_config={READ_ROOTS_FILE}\n"
-                f"version=0.32\n"
-                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1,python_clean_env_v1,python_run_sha256_v1,project_workspace_v1,python_fresh_bytecode_v1,file_cas_v1\n"
+                f"version=0.33\n"
+                f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1,python_clean_env_v1,python_run_sha256_v1,project_workspace_v1,python_fresh_bytecode_v1,file_cas_v1,verification_boundary_v1\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
                 f"last_web_search_stage={search_diag.get('stage') or '(none)'}\n"
@@ -4271,22 +4345,47 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
         argv_text = str(args.get("argv", "-q")).strip()
         extra = shlex.split(argv_text) if argv_text else ["-q"]
         if str(args.get('project_receipt', '')).lower() == 'true':
+            declared = str(args.get('verification_paths', '[]'))
+            before = verification_boundary(cwd, declared)
+            spec_hash = verification_spec(cwd, extra, declared) if before is not None else None
             STATE_DIR.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix='project-tests-', dir=STATE_DIR) as report_dir:
                 report = Path(report_dir) / 'junit.xml'
-                result = run_process(["python", "-m", "pytest", *extra, "--junitxml=" + str(report)],
+                result = run_process(["python", "-m", "pytest", *extra, "-o", "junit_family=xunit1", "--junitxml=" + str(report)],
                     cwd, _execution_timeout(args.get("timeout"), 300), request_id=request_id, env=python_child_env())
                 count = 0
                 verified = False
-                if result.get('ok') and report.is_file() and report.stat().st_size <= 2 * 1024 * 1024:
+                cases = []
+                if report.is_file() and report.stat().st_size <= 2 * 1024 * 1024:
                     raw = report.read_bytes()
                     if b'<!DOCTYPE' not in raw.upper() and b'<!ENTITY' not in raw.upper():
                         try:
                             cases = list(ET.fromstring(raw).iter('testcase'))
                             count = sum(not any(case.find(tag) is not None for tag in ('failure', 'error', 'skipped')) for case in cases)
-                            verified = count > 0 and all(case.find('failure') is None and case.find('error') is None for case in cases)
+                            verified = bool(result.get('ok')) and count > 0 and all(case.find('failure') is None and case.find('error') is None for case in cases)
                         except ET.ParseError:
                             pass
+                if before is not None and cases and len(cases) <= 100_000:
+                    after = verification_boundary(cwd, declared)
+                    files = [c.get('file', '').replace('\\', '/') for c in cases]
+                    identities = [file + '::' + c.get('classname', '') + '::' + c.get('name', '') for file, c in zip(files, cases)]
+                    covered = all(file in before['files'] and file.endswith('.py') for file in files)
+                    failures = [node for c in cases for node in c if node.tag in ('failure', 'error')]
+                    failure_signature = None
+                    failure_summary = None
+                    if failures:
+                        types = re.findall(r'\b([A-Za-z_]\w*(?:Error|Exception))\b', failures[0].text or '')
+                        kind = failures[0].get('type') or (types[-1] if types else failures[0].tag)
+                        message = (kind + '|' + failures[0].get('message', ''))[:200]
+                        failure_summary = message
+                        message = re.sub(r'\d+', '#', message)
+                        failure_signature = hashlib.sha256(message.encode()).hexdigest()
+                    result['verification'] = dict(schema='lumena.verification.v1', specHash=spec_hash,
+                        boundaryHash=before['hash'], selectedTestsHash=hashlib.sha256(json.dumps(sorted(identities)).encode()).hexdigest(),
+                        testsCount=len(cases), complete=before['complete'] and after['complete'] and covered and len(set(identities)) == len(identities) and all(c.find('skipped') is None for c in cases),
+                        boundaryUnchanged=before['hash'] == after['hash'] and spec_hash == verification_spec(cwd, extra, declared),
+                        failureSignature=failure_signature, failureSummary=failure_summary,
+                        testFiles=sorted(set(file for file in files if len(file) <= 200))[:16] if covered else [])
                 result['stdout'] = json.dumps({'schema': 'lumena.project.tests.v1', 'cwd': str(args['cwd']),
                     'tests_count': count, 'verified': verified, 'output': result.get('stdout', '')[:10000]}, ensure_ascii=False)
                 if result.get('ok') and not verified:
@@ -4426,7 +4525,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     _mark_interrupted_search_from_previous_run()
-    print("Lumena Termux Bridge v0.32")
+    print("Lumena Termux Bridge v0.33")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")

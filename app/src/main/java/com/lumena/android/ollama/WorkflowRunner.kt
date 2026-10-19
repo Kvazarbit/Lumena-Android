@@ -77,7 +77,7 @@ class WorkflowRunner(
     private val bridge: ToolExecutor?,
     private val model: String,
     private val controller: AgentController = AgentController(),
-    private val relevantMemoryProvider: (TaskState) -> List<String> = { emptyList() },
+    private val relevantMemoryProvider: suspend (TaskState) -> List<String> = { emptyList() },
     private val webStrategyAdviceProvider: (
         TaskState,
         List<OllamaMessage>
@@ -122,7 +122,9 @@ class WorkflowRunner(
     private val executionAdapter: (TaskState, ToolExecutor) -> ToolExecutor = { _, executor -> executor },
     private val collaborationCardProvider: suspend (TaskState) -> String? = { null },
     private val experienceIsolation: (TaskState) -> Boolean = { it.projectRoot != null },
-    private val projectObservation: (TaskState, ToolRequest, ToolResult) -> Unit = { _, _, _ -> }
+    private val projectObservation: (TaskState, ToolRequest, ToolResult) -> Unit = { _, _, _ -> },
+    private val completionClaimReview: suspend (TaskState, String) -> String? = { _, _ -> null },
+    private val onDoneProposal: (TaskState, Boolean) -> Unit = { _, _ -> }
 ) {
     suspend fun run(
         history: List<OllamaMessage>,
@@ -530,7 +532,17 @@ class WorkflowRunner(
             val reply = replyResult.getOrThrow()
             onProgress("MODEL REPLY\n${reply.take(6_000)}")
 
-            when (val instruction = controller.interpret(reply, state)) {
+            val instruction = controller.interpret(reply, state)
+            val done = com.lumena.android.agent.core.AgentResponseParser().parse(reply) as? com.lumena.android.agent.core.AgentDecision.Done
+            val claimProblem = if (done != null) completionClaimReview(state.task, done.summary) else null
+            if (done != null) onDoneProposal(state.task, claimProblem == null &&
+                instruction is ControllerInstruction.Finish && instruction.state.task.status == TaskStatus.DONE)
+            if (claimProblem != null) {
+                state = state.copy(task = state.task.copy(status = TaskStatus.PARTIAL, lastResult = claimProblem))
+                publish(state, onState)
+                return WorkflowOutcome.Failed(claimProblem, current, state)
+            }
+            when (instruction) {
                 is ControllerInstruction.Execute -> {
                     state = instruction.state
                     publish(state, onState)

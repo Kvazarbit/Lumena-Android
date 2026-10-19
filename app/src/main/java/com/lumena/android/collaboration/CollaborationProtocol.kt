@@ -15,7 +15,7 @@ data class CollaborationScope(
     val projectId: String, val root: String, val goalRevision: String,
     val taskId: String, val sessionId: String, val modelId: String,
     val channel: String, val bridgeBinding: String,
-    val appVersion: String, val appSource: String
+    val appVersion: String, val appSource: String, val obligationId: String? = null
 )
 
 data class CollaborationEntry(
@@ -27,7 +27,8 @@ data class CollaborationEntry(
     val result: ToolResult? = null, val stdoutUtf8Sha256: String? = null,
     val stdoutTruncated: Boolean = false, val at: Long,
     // Project content right after a writer: bridge source_digest; git head only when present. Null = UNKNOWN.
-    val sourceDigest: String? = null, val sourceGitHead: String? = null
+    val sourceDigest: String? = null, val sourceGitHead: String? = null,
+    val patchSummary: String? = null
 )
 
 /** Bridge file-inventory fingerprint of a project root. A null digest means UNKNOWN (failed or truncated). */
@@ -46,6 +47,7 @@ object CollaborationProtocol {
     fun goalRevision(p: WorkspaceProject): String = hash(
         // Length framing prevents ambiguous separators in owner text.
         listOf(p.id, p.root, p.goal, p.verification.name, p.goalEpoch.toString()).plus(p.constraints)
+            .plus(if (p.verificationPaths.isEmpty()) emptyList() else listOf("verification-boundary-v1") + p.verificationPaths)
             .joinToString("") { "${it.length}:$it" })
     private fun legacyGoalRevision(p: WorkspaceProject): String = hash(
         listOf(p.id, p.root, p.goal, p.verification.name).plus(p.constraints).joinToString("") { "${it.length}:$it" })
@@ -84,6 +86,7 @@ object CollaborationProtocol {
         require(e.scope.projectId.matches(Regex("[a-zA-Z0-9-]{1,80}")))
         require(e.scope.root.length in 1..360 && e.scope.goalRevision.matches(Regex("[a-f0-9]{64}")))
         require(e.scope.taskId.length in 1..240 && e.scope.sessionId.length in 1..240)
+        require(e.scope.obligationId == null || e.scope.obligationId.length in 1..240)
         require(e.scope.modelId.length <= 160 && e.scope.channel in setOf("LOCAL", "COMPANION"))
         require(e.scope.bridgeBinding.matches(Regex("[a-f0-9]{64}")))
         require(e.scope.appVersion.length in 1..100 &&
@@ -94,6 +97,7 @@ object CollaborationProtocol {
             e.targets.values.all { it.length <= 360 })
         require(e.boundInputSha256 == null || e.boundInputSha256.matches(Regex("[a-f0-9]{64}")))
         require(e.at > 0)
+        require(e.patchSummary == null || (e.tool == "file.patch" && e.patchSummary.length <= 600))
         if (e.kind == "INTENT" || e.kind == "OWNER_ACK_UNKNOWN") {
             require(e.result == null && e.stdoutUtf8Sha256 == null && e.sourceDigest == null && e.sourceGitHead == null)
             if (e.kind == "INTENT") require(e.id == e.intentId)
@@ -103,6 +107,7 @@ object CollaborationProtocol {
             require(e.result.tool == null || e.result.tool == e.tool)
             require(e.result.sourceSha256 == null || e.result.sourceSha256.matches(Regex("[a-f0-9]{64}")))
             require(!e.result.sourceComplete || e.result.sourceSha256 != null)
+            require(e.result.verification == null || (e.tool == "python.tests" && e.result.verification.valid()))
             require(e.sourceDigest == null || e.sourceDigest.matches(Regex("[a-f0-9]{64}")))
             require(e.sourceGitHead == null || e.sourceGitHead.matches(Regex("[a-f0-9]{40,64}")))
             require(e.result.stdout.length <= 4096 && e.result.stderr.length <= 512 &&

@@ -29,6 +29,24 @@ class ClaimCheckTest {
                     digest: String? = null) =
         receipt("python.run", mapOf("script" to target), ToolResult(ok, exitCode = if (ok) 0 else 1, stdout = stdout), digest = digest)
     private val aquarium = listOf(pyRun())
+    @Test fun differentDirectoriesAndPathCaseCannotBorrowAReceipt() {
+        val other = listOf(pyRun(target = "aquarium/b/test_calc.py"))
+        assertEquals("CLAIM_PATH_ALIAS", Verdict.NO_RECEIPT, only("a/test_calc.py passed 8 tests.", other).verdict)
+        assertEquals("CLAIM_PATH_CASE", Verdict.NO_RECEIPT,
+            only("Test_Calc.py passed 8 tests.", listOf(pyRun(target = "aquarium/test_calc.py"))).verdict)
+    }
+    @Test fun stdoutMentionIsNotProofThatNamedTestRan() {
+        val r = receipt("python.tests", mapOf("cwd" to "aquarium"), ToolResult(true, exitCode = 0,
+            stdout = "8 passed; unrelated log mentions test_secret.py"))
+        assertEquals(Verdict.NO_RECEIPT, only("test_secret.py passed 8 tests.", listOf(r)).verdict)
+    }
+    @Test fun unknownCountAndNewerUnknownResultCannotBecomeSupported() {
+        assertEquals("CLAIM_UNKNOWN_COUNT", Verdict.UNVERIFIABLE,
+            only("8 tests passed.", listOf(pyRun(stdout = "OK"))).verdict)
+        val unknown = pyRun().let { it.copy(result = it.result!!.copy(ok = false, outcomeUnknown = true)) }
+        assertEquals("CLAIM_UNKNOWN_RESULT", Verdict.UNVERIFIABLE,
+            only("8 tests passed.", aquarium + unknown).verdict)
+    }
     private fun check(text: String, entries: List<CollaborationEntry> = aquarium, current: SourceObservation? = null) =
         ClaimCheck.check(text, entries, project, build, current)
     private fun only(text: String, entries: List<CollaborationEntry> = aquarium, current: SourceObservation? = null) =

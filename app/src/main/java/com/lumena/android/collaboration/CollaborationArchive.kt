@@ -97,6 +97,15 @@ internal class CollaborationArchive(context: Context) {
         return CollaborationArchiveIndex(tail, deliveries, recent, state.segments.size)
             .also { cache[directory.absolutePath] = stamp to it }
     }
+    fun visitSegments(reader: (SQLiteDatabase, String) -> List<CollaborationEntry>, consume: (CollaborationEntry) -> Unit) {
+        index(reader) // Validate manifest, immutable file hashes and chains before exposing records.
+        read().segments.forEach { segment ->
+            val file = File(directory, segment.name)
+            val db = SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY,
+                DatabaseErrorHandler { throw SQLiteException("Archived SQLite corruption; file retained") })
+            try { reader(db, segment.previous).forEach(consume) } finally { db.close() }
+        }
+    }
     fun rotate(tail: String, events: Int, afterPrepare: () -> Unit = {}) {
         val state = read()
         require(state.pending == null && events > 0 && state.segments.size < MAX_SEGMENTS)
@@ -109,26 +118,45 @@ internal class CollaborationArchive(context: Context) {
         afterPrepare()
         recover()
     }
-    fun export(output: java.io.OutputStream, projects: String, history: File?) {
+    fun export(output: java.io.OutputStream, projects: String, history: File?,
+               imported: Map<String, File> = emptyMap(), lab: Map<String, String> = emptyMap()) {
         recover()
         val state = read()
+        require(state.segments.size + imported.size + lab.size + 6 <= 400) { "Archive file limit reached; original data retained" }
+        require(state.segments.sumOf { it.bytes } + database.length() + projects.toByteArray().size +
+            (history?.length() ?: 0) + imported.values.sumOf { it.length() } + lab.values.sumOf { it.toByteArray().size.toLong() } <= 510L * 1024 * 1024) {
+            "Archive size limit reached; original data retained"
+        }
         java.util.zip.ZipOutputStream(output).use { zip ->
+            val hashes = linkedMapOf<String, String>()
+            fun text(name: String, body: String) {
+                val bytes = body.toByteArray(Charsets.UTF_8)
+                zip.putNextEntry(java.util.zip.ZipEntry(name)); zip.write(bytes); zip.closeEntry()
+                hashes[name] = CollaborationProtocol.hash(body)
+            }
             fun add(file: File, name: String) {
                 if (!file.exists()) return
                 zip.putNextEntry(java.util.zip.ZipEntry(name))
-                file.inputStream().use { it.copyTo(zip) }
+                val digest = MessageDigest.getInstance("SHA-256")
+                file.inputStream().use { input ->
+                    val buffer = ByteArray(8192)
+                    while (true) { val n = input.read(buffer); if (n < 0) break; digest.update(buffer, 0, n); zip.write(buffer, 0, n) }
+                }
                 zip.closeEntry()
+                hashes[name] = digest.digest().joinToString("") { "%02x".format(it) }
             }
             add(manifest.baseFile, "archive/manifest.json")
             state.segments.forEach { add(File(directory, it.name), "archive/" + it.name) }
             add(database, "active/" + CollaborationLedger.DATABASE)
-            zip.putNextEntry(java.util.zip.ZipEntry("workspace/lumena_projects_v1.json"))
-            zip.write(projects.toByteArray(Charsets.UTF_8)); zip.closeEntry()
+            text("workspace/lumena_projects_v1.json", projects)
             history?.let { add(it, "workspace/" + it.name) }
-            zip.putNextEntry(java.util.zip.ZipEntry("READ-ME.txt"))
-            zip.write(("Private historical Lumena receipts. Export is not approval, current goal proof, or imported app-observed provenance. " +
-                "No automatic restore/import. Keep this file private.\n").toByteArray(Charsets.UTF_8))
-            zip.closeEntry()
+            imported.forEach { (name, file) -> add(file, name) }
+            lab.forEach { (name, body) -> text(name, body) }
+            text("READ-ME.txt", "Private historical Lumena context. ARCHIVED_NOT_VERIFIED after import. " +
+                "Not approvals, current goal proof, executable code or model weights. Inspect actual project files after restoring.\n")
+            val type = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, String::class.java)
+            val integrity = Moshi.Builder().build().adapter<Map<String, String>>(type).toJson(hashes)
+            text("integrity.json", integrity)
         }
     }
     private fun hash(file: File): String {

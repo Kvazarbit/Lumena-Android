@@ -19,7 +19,8 @@ fun ProjectWorkspacePanel(
     onContinue: (String, ProjectWorkRecord) -> Unit, onCloseWork: (String, String, Boolean) -> Unit,
     onReviewReceipts: (suspend (String, Boolean) -> String)? = null,
     reviewIdentity: String = "",
-    onRemoteContext: (String, Boolean) -> Unit = { _, _ -> }
+    onRemoteContext: (String, Boolean) -> Unit = { _, _ -> },
+    onWorkspaceChanged: (ProjectWorkspaceState) -> Unit = {}
 ) {
     var adding by remember { mutableStateOf(projects.isEmpty()) }
     var editingId by remember { mutableStateOf<String?>(null) }
@@ -39,6 +40,7 @@ fun ProjectWorkspacePanel(
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Проєкти · локальний контекст", style = MaterialTheme.typography.titleLarge)
+            ContextArchiveRestorePanel(onWorkspaceChanged)
             Text("Каталог має бути доступний bridge у Termux. Для індексу потрібен bridge 0.30. Windows-папки самі на телефон не копіюються.")
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             OutlinedButton(onClick = { onSelect(null) }) { Text("Звичайний чат") }
@@ -66,7 +68,9 @@ fun ProjectWorkspacePanel(
             project?.let { p ->
                 HorizontalDivider()
                 Text(p.name, style = MaterialTheme.typography.titleMedium)
+                if (p.restoredArchive != null) Text("Історію відновлено з архіву. Поточний стан файлів ще потребує перевірки.")
                 CollaborationPanel(p, onReviewReceipts, reviewIdentity)
+                ExperienceLoopPanel(p, reviewIdentity, onWorkspaceChanged)
                 Text(p.goal)
                 Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                     Checkbox(com.lumena.android.collaboration.CollaborationRuntime.remoteAllowed(

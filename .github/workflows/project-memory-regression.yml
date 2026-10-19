@@ -2,7 +2,7 @@ name: Project memory regression
 
 on:
   push:
-    branches: [ "codex/daily-project-memory", "codex/verified-collaboration-handoff", "feature/collaboration-local-state-card", "codex/daily-context-os-v1" ]
+    branches: [ "codex/daily-project-memory", "codex/verified-collaboration-handoff", "feature/collaboration-local-state-card", "codex/daily-context-os-v1", "codex/verified-experience-loop" ]
   workflow_dispatch:
 
 permissions:
@@ -61,7 +61,9 @@ jobs:
                       'CollaborationStateCardTest': 15, 'WorkflowRunnerCollaborationAdapterTest': 6,
                       'ProjectContextClientTest': 4, 'LocalSessionSnapshotCodecTest': 3,
                       'ProjectWorkspacePolicyTest': 10, 'ProjectContinuationPolicyTest': 4,
-                      'ProjectFilePreconditionsTest': 3, 'ProjectWorkspaceHistoryTest': 6}
+                      'ProjectFilePreconditionsTest': 3, 'ProjectWorkspaceHistoryTest': 6,
+                      'ClaimCheckTest': 17, 'RepairCasePolicyTest': 8, 'RepairLabPolicyTest': 8,
+                      'CompletionClaimReviewTest': 3, 'ExperienceLoopStorageTest': 11}
           for name, minimum in expected.items():
               matches = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.' + name + '.xml'))
               assert len(matches) == 1, name
@@ -77,7 +79,7 @@ jobs:
           path: app/build/test-results/testDebugUnitTest/TEST-*.xml
           if-no-files-found: error
       - name: Kill collaboration semantic mutants with exact-case oracles
-        if: github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card' || github.ref_name == 'codex/daily-context-os-v1'
+        if: github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card' || github.ref_name == 'codex/daily-context-os-v1' || github.ref_name == 'codex/verified-experience-loop'
         run: python scripts/collaboration_probe.py
       - name: Kill file-CAS semantic mutant with an unrelated passing control
         run: python scripts/daily_context_file_probe.py
@@ -106,7 +108,7 @@ jobs:
           print('VERIFIED backup privacy boundaries')
           PY
       - uses: actions/upload-artifact@v4
-        if: always() && (github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card' || github.ref_name == 'codex/daily-context-os-v1')
+        if: always() && (github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card' || github.ref_name == 'codex/daily-context-os-v1' || github.ref_name == 'codex/verified-experience-loop')
         with:
           name: collaboration-semantic-probe
           path: app/build/collaboration-probe/

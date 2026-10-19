@@ -995,6 +995,12 @@ fun WorkflowChatScreen(
         }
         return WorkflowRunner(modelClient(), runnerBridge, cardModel,
             experienceIsolation = ::isolated,
+            completionClaimReview = { task, text ->
+                com.lumena.android.collaboration.CollaborationRuntime.completionProblem(context, task, text, runnerBridge)
+            },
+            onDoneProposal = { task, accepted ->
+                runCatching { com.lumena.android.collaboration.RepairLabStore.doneProposal(context, task, accepted) }
+            },
             projectObservation = { task, request, result ->
                 // Only explicitly scoped records can learn from a project. Never
                 // publish its text into the global memory/landscape/constitution.
@@ -1027,8 +1033,8 @@ fun WorkflowChatScreen(
                     val own = ProjectWorkspaceStore.project(context, task.projectId)?.let {
                         ProjectWorkspacePolicy.advice(it, task.goal, task.id, task.projectObligationId)
                     }.orEmpty()
-                    val scoped = runCatching { FractalExperienceCanvasStore.relevant(context, task.goal, task.projectId, 4) }
-                        .getOrDefault(emptyList())
+                    val scoped = com.lumena.android.collaboration.RepairLabStore.advice(context, task,
+                        com.lumena.android.collaboration.CollaborationRuntime.route(cardBackend, cardUrl, cardModel))
                     return@memory ProjectWorkspacePolicy.combineAdvice(own, scoped, emptyList(), emptyList())
                 }
                 val advice = try {
@@ -1634,6 +1640,12 @@ fun WorkflowChatScreen(
             is WorkflowOutcome.NeedsConfirmation -> null
         }
         if (terminalStatus != null) {
+            val endedTask = when (outcome) {
+                is WorkflowOutcome.Finished -> outcome.control.task
+                is WorkflowOutcome.Failed -> outcome.control.task
+                is WorkflowOutcome.NeedsConfirmation -> null
+            }
+            endedTask?.let { runCatching { com.lumena.android.collaboration.RepairLabStore.terminal(context, it) } }
             val steps = when (outcome) {
                 is WorkflowOutcome.Finished -> outcome.control.task.step
                 is WorkflowOutcome.Failed -> outcome.control.task.step
@@ -2322,6 +2334,7 @@ fun WorkflowChatScreen(
 
     if (showProjects) {
         ProjectWorkspacePanel(workspaceState.projects, workspaceProjectId, workspaceError,
+            onWorkspaceChanged = { workspaceState = it },
             onRemoteContext = { projectId, allowed ->
                 uiScope.launch {
                     try {
