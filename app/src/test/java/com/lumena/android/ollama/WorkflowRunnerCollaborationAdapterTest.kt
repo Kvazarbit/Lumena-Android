@@ -69,8 +69,7 @@ class WorkflowRunnerCollaborationAdapterTest {
         val task = TaskState("t", "p", "Продовж роботу", currentInstruction = "Продовж роботу", projectRoot = "demo",
             projectContext = ProjectWorkspacePolicy.capsule(p))
         var asked = 0
-        WorkflowRunner(model, bridge, "fixture", collaborationCardProvider = { asked++; "LUMENA STATE CARD v1
-CARD_RECEIPT_CANARY" })
+        WorkflowRunner(model, bridge, "fixture", collaborationCardProvider = { asked++; "LUMENA STATE CARD v1\nCARD_RECEIPT_CANARY" })
             .run(listOf(OllamaMessage("user", task.goal)), task)
         assertEquals(1, asked)
         assertTrue(seen.isNotEmpty())
