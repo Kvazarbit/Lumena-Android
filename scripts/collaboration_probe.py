@@ -15,7 +15,7 @@ MUTANTS = [
      "com.lumena.android.collaboration.ProjectContextClientTest.derivedPrivateHistoryCannotLeaveOnRouteChangeOrDeselection", "PRIVATE_HISTORY_EGRESS",
      "com.lumena.android.collaboration.CollaborationReviewTest.embeddedWorksOfflineWithoutOllamaAttestation"),
     ("stale-owner-goal", "CollaborationProtocol.kt",
-     'e.scope.goalRevision != goalRevision(project) -> "STALE_GOAL"', 'false -> "STALE_GOAL"',
+     'e.scope.goalRevision != goalRevision(project)', 'false',
      "com.lumena.android.collaboration.CollaborationStateCardTest.changedOwnerGoalInvalidatesReceiptEvenWhenCoveredBytesMatch", "STALE_GOAL",
      "com.lumena.android.collaboration.CollaborationProtocolTest.sameProjectNameCannotBindOtherRootAndRevisionUsesUnambiguousFraming"),
     ("archived-delivery-replay", "CollaborationLedger.kt",

@@ -117,6 +117,15 @@ class CollaborationStateCardTest {
         assertEquals("STALE_GOAL", CollaborationProtocol.freshness(receipt,
             project.copy(constraints = listOf("Preserve the legacy API")), build, SourceObservation(digestA)))
     }
+    @Test fun legacyGoalDigestStaysHistoricalAndBuildStatusIsIndependentOfCoveredSource() {
+        val receipt = call("python.tests", mapOf("cwd" to "demo"), ToolResult(true, exitCode = 0))[1]
+        val legacy = CollaborationProtocol.hash(listOf(project.id, project.root, project.goal, project.verification.name)
+            .plus(project.constraints).joinToString("") { "${it.length}:$it" })
+        assertEquals("LEGACY_GOAL_REVISION", CollaborationProtocol.freshness(receipt.copy(scope = receipt.scope.copy(goalRevision = legacy)),
+            project, build, SourceObservation(digestA)))
+        assertEquals("STALE_BUILD", CollaborationProtocol.buildStatus(receipt, "f".repeat(40)))
+        assertEquals("SAME_COVERED_SOURCE", CollaborationProtocol.freshness(receipt, project, "f".repeat(40), SourceObservation(digestA)))
+    }
 
     @Test fun gitMetadataChangesKeepAnUnknownEffectBarrier() {
         for (tool in listOf("git.init", "git.add", "git.commit")) {

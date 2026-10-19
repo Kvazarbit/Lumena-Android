@@ -47,6 +47,13 @@ object CollaborationProtocol {
         // Length framing prevents ambiguous separators in owner text.
         listOf(p.id, p.root, p.goal, p.verification.name, p.goalEpoch.toString()).plus(p.constraints)
             .joinToString("") { "${it.length}:$it" })
+    private fun legacyGoalRevision(p: WorkspaceProject): String = hash(
+        listOf(p.id, p.root, p.goal, p.verification.name).plus(p.constraints).joinToString("") { "${it.length}:$it" })
+    fun buildStatus(e: CollaborationEntry, appSource: String): String = when {
+        e.scope.appSource == "UNKNOWN" || appSource == "UNKNOWN" -> "BUILD_UNKNOWN"
+        e.scope.appSource == appSource -> "SAME_BUILD"
+        else -> "STALE_BUILD"
+    }
     fun requestDigest(request: ToolRequest): String = hash(requestAdapter.toJson(
         request.copy(args = request.args.toSortedMap())))
     /** Owner project selection is necessary, but never relabel an unrelated requested target. */
@@ -110,7 +117,8 @@ object CollaborationProtocol {
         val now = current?.digest
         return when {
             e.scope.projectId != project.id || e.scope.root != project.root -> "WRONG_SCOPE"
-            e.scope.goalRevision != goalRevision(project) -> "STALE_GOAL"
+            e.scope.goalRevision != goalRevision(project) ->
+                if (project.goalEpoch == 1L && e.scope.goalRevision == legacyGoalRevision(project)) "LEGACY_GOAL_REVISION" else "STALE_GOAL"
             // Only the inventory's covered bytes are compared. Dependencies/environment and excluded
             // files remain unknown; matching bytes cannot override a changed owner goal.
             e.sourceDigest != null && now != null -> if (e.sourceDigest == now) "SAME_COVERED_SOURCE" else "STALE_SOURCE"

@@ -116,7 +116,8 @@ object CollaborationStateCard {
         val status = when { r == null || r.outcomeUnknown -> "UNKNOWN"; r.ok -> "OK"; else -> "FAIL" }
         val exit = r?.exitCode?.let { " exit=$it" }.orEmpty()
         val output = if (row.label == "FILE" && r?.ok == true) "" else detail(e)?.let { " out=$it" }.orEmpty()
-        return "${row.label} ${e.tool} $target $status$exit ${CollaborationProtocol.freshness(e, project, appSource, current)} $id$output"
+        return "${row.label} ${e.tool} $target $status$exit ${CollaborationProtocol.freshness(e, project, appSource, current)} " +
+            "${CollaborationProtocol.buildStatus(e, appSource)} $id$output"
     }
 
     private fun detail(e: CollaborationEntry): String? {

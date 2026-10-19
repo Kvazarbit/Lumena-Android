@@ -685,7 +685,7 @@ fun WorkflowChatScreen(
         currentTask = null
         history = listOf(systemMessage)
         privateProjectIds = emptyList()
-        workThreads = WorkThreadState()
+        workThreads = com.lumena.android.agent.core.WorkThreadState()
         contextUsage = null
         researchThread = null
         codeGoal = null
