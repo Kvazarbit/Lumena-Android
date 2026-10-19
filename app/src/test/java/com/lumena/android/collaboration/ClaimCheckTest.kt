@@ -25,10 +25,10 @@ class ClaimCheckTest {
             mutating = CollaborationProtocol.writer(tool), targets = targets, result = r,
             stdoutUtf8Sha256 = CollaborationProtocol.hash(r.stdout), at = ++clock, sourceDigest = digest)
     }
-    private fun run(ok: Boolean = true, stdout: String = "Ran 8 tests in 0.009s\nOK", target: String = script,
+    private fun pyRun(ok: Boolean = true, stdout: String = "Ran 8 tests in 0.009s\nOK", target: String = script,
                     digest: String? = null) =
         receipt("python.run", mapOf("script" to target), ToolResult(ok, exitCode = if (ok) 0 else 1, stdout = stdout), digest = digest)
-    private val aquarium = listOf(run())
+    private val aquarium = listOf(pyRun())
     private fun check(text: String, entries: List<CollaborationEntry> = aquarium, current: SourceObservation? = null) =
         ClaimCheck.check(text, entries, project, build, current)
     private fun only(text: String, entries: List<CollaborationEntry> = aquarium, current: SourceObservation? = null) =
@@ -66,14 +66,14 @@ class ClaimCheckTest {
     }
 
     @Test fun passAfterSourceChangeIsStale() {
-        val entries = listOf(run(digest = "a".repeat(64)))
+        val entries = listOf(pyRun(digest = "a".repeat(64)))
         val f = only("Усі тести пройшли.", entries, SourceObservation("e".repeat(64)))
         assertEquals(Verdict.STALE, f.verdict)
         assertEquals(Verdict.SUPPORTED, only("Усі тести пройшли.", entries, SourceObservation("a".repeat(64))).verdict)
     }
 
     @Test fun earlierFailureThenFixedPassIsHistoryNotALie() {
-        val entries = listOf(run(ok = false, stdout = "Ran 8 tests\nFAILED (failures=1)"), run())
+        val entries = listOf(pyRun(ok = false, stdout = "Ran 8 tests\nFAILED (failures=1)"), pyRun())
         val (first, second) = check("Спершу тест test_aquarium_brain_baseline_v1.py впав. Після виправлення тести пройшли.", entries)
         assertEquals(Kind.FAIL, first.claim.kind)
         assertEquals(Verdict.STALE, first.verdict)

@@ -24,19 +24,19 @@ object ClaimCheck {
     private val runVerb = Regex("запуст|викона|выполн|\\bran\\b|\\brun\\b|\\bexecuted\\b")
     // Cyrillic stems are plain substrings: Java's \b is not reliable around Cyrillic letters.
     private val hypothetical = listOf("якщо", "мають пройти", "має пройти", "повинн", "запущу", "запустимо", "спробуй", "буде ",
-        "если", "должн", "\\bif\\b", "\\bshould\\b", "\\bwill\\b", "\\bwould\\b", "\\btry\\b").map(::Regex)
+        "если", "должн", "\\bif\\b", "\\bshould\\b", "\\bwill\\b", "\\bwould\\b", "\\btry\\b").map { Regex(it) }
     private val notRun = listOf("нічого не викон", "нічого не запуск", "не запускав", "не запускала", "не виконував", "не виконувала",
         "не було виконано", "не було запущено", "ничего не выполн", "ничего не запуск", "не запускал",
         "nothing was run", "nothing was executed", "did not run", "didn't run", "not executed", "never ran")
     private val notFail = Regex("\\b0\\s+(?:failures?|errors?|failed)|\\bno\\s+(?:failures?|errors?)|failures=0|errors=0|без\\s+помил|без\\s+ошиб")
     private val fixedBug = Regex("(?:виправ|исправ)\\S*\\s+(?:\\S+\\s+)?(?:помилк|ошибк|баг)\\S*|\\bfix(?:ed)?\\s+(?:the\\s+|an?\\s+)?(?:bug|error|issue)s?")
     private val fail = listOf("\\bfail", "неуспіш", "неуспеш", "\\bunsuccess", "не\\s+пройш", "не\\s+прох", "не\\s+прошл", "впав", "впал",
-        "упал", "провал", "помилк", "ошибк", "не\\s+працю", "[1-9]\\d*\\s+errors?").map(::Regex)
+        "упал", "провал", "помилк", "ошибк", "не\\s+працю", "[1-9]\\d*\\s+errors?").map { Regex(it) }
     private val pass = listOf("\\bok\\b", "(?<![а-яіїєґa-z])ок(?![а-яіїєґa-z])", "\\bpass(?:ed|es|ing)?\\b", "пройш", "проход",
-        "успішн", "успешн", "прошл", "зелен", "\\bgreen\\b", "\\bsucce").map(::Regex)
+        "успішн", "успешн", "прошл", "зелен", "\\bgreen\\b", "\\bsucce").map { Regex(it) }
     private val wrote = listOf("виправ", "змінив", "змінила", "створив", "створила", "записав", "записала", "додав", "додала",
         "оновив", "оновила", "исправ", "создал", "изменил", "обновил",
-        "\\b(?:fixed|updated|created|wrote|patched|modified|edited)\\b").map(::Regex)
+        "\\b(?:fixed|updated|created|wrote|patched|modified|edited)\\b").map { Regex(it) }
     private val digitCounts = listOf(Regex("\\bran\\s+(\\d{1,5})\\s+tests?"), Regex("(\\d{1,5})\\s+(?:tests?|тест)"),
         Regex("(\\d{1,5})\\s+passed"))
     private val receiptCounts = listOf(Regex("\"tests_count\":\\s*(\\d{1,5})"), Regex("\\bran\\s+(\\d{1,5})\\s+tests?"),
@@ -60,7 +60,7 @@ object ClaimCheck {
             if (notRun.any { it in s }) { out += Claim(sentence, Kind.NOT_RUN, target, null); continue }
             val file = fileTarget.find(s)?.value?.trim('.', '/')
             if (file != null && wrote.any { it.containsMatchIn(s) }) out += Claim(sentence, Kind.WROTE, file, null)
-            val count = count(s)
+            val count = claimedCount(s)
             if (!testWord.containsMatchIn(s) && count == null && target == null) continue
             val cleaned = notFail.replace(fixedBug.replace(s, " "), " ")
             val kind = when {
@@ -173,7 +173,7 @@ object ClaimCheck {
         return receiptCounts.firstNotNullOfOrNull { it.find(text)?.groupValues?.get(1)?.toIntOrNull() }
     }
 
-    private fun count(s: String): Int? =
+    private fun claimedCount(s: String): Int? =
         digitCounts.firstNotNullOfOrNull { it.find(s)?.groupValues?.get(1)?.toIntOrNull() }
             ?: wordCount.find(s)?.groupValues?.get(1)?.let(words::get)
 
