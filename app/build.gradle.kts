@@ -18,11 +18,11 @@ android {
         applicationId = "com.lumena.android"
         minSdk = 28
         targetSdk = 35
-        versionCode = 66
+        versionCode = 67
         val sourceCommit = providers.environmentVariable("GITHUB_SHA").orNull
             ?.takeIf { it.matches(Regex("[0-9a-f]{40}")) } ?: "UNKNOWN"
         buildConfigField("String", "SOURCE_COMMIT", "\"$sourceCommit\"")
-        versionName = "0.12.31" + providers.environmentVariable("GITHUB_RUN_NUMBER")
+        versionName = "0.12.32" + providers.environmentVariable("GITHUB_RUN_NUMBER")
             .orNull?.let { "-ci$it" }.orEmpty()
         ndk { abiFilters += listOf("arm64-v8a") }
         externalNativeBuild {

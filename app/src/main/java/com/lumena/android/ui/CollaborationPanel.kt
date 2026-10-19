@@ -29,6 +29,8 @@ fun CollaborationPanel(project: WorkspaceProject, review: (suspend (String, Bool
     var localAttestation by remember(project.id, reviewIdentity) { mutableStateOf(CollaborationRuntime.localAttested(context, reviewIdentity)) }
     var acknowledge by remember(project.id) { mutableStateOf<String?>(null) }
     var archived by remember { mutableStateOf(0) }
+    var claimText by remember(project.id) { mutableStateOf("") }
+    var claimReport by remember(project.id) { mutableStateOf("") }
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri != null) scope.launch {
             busy = true
@@ -99,6 +101,24 @@ fun CollaborationPanel(project: WorkspaceProject, review: (suspend (String, Bool
             if (answer.isNotBlank()) Text("Порада моделі — не квитанція й не дозвіл:\n$answer")
         }
     }
+    Text("Перевірити заяву моделі", style = MaterialTheme.typography.titleSmall)
+    Text("Встав відповідь ChatGPT або іншої моделі. Lumena звірить заяви про запуск, тести й зміну файлів із квитанціями цього проєкту — без моделі й без мережі.",
+        style = MaterialTheme.typography.bodySmall)
+    OutlinedTextField(value = claimText, onValueChange = { claimText = it.take(ClaimCheck.MAX_INPUT) },
+        placeholder = { Text("Наприклад: «8 тестів пройшли, я виправив brain.py»") },
+        minLines = 3, maxLines = 8, modifier = Modifier.fillMaxWidth())
+    OutlinedButton(enabled = claimText.isNotBlank(), onClick = {
+        val text = claimText
+        scope.launch {
+            claimReport = try {
+                val all = withContext(Dispatchers.IO) { CollaborationLedger(context).entries() }
+                entries = all
+                ClaimCheck.report(ClaimCheck.check(text, all, project, BuildConfig.SOURCE_COMMIT))
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { "Журнал недоступний: заяви не перевірено. Це не означає, що вони правдиві." }
+        }
+    }) { Text("Перевірити заяву") }
+    if (claimReport.isNotBlank()) Text(claimReport, style = MaterialTheme.typography.bodySmall)
     acknowledge?.let { id ->
         AlertDialog(onDismissRequest = { acknowledge = null }, title = { Text("Невідомий результат лишиться невідомим") },
             text = { Text("Підтвердь, що перевірив наслідки та береш під контроль наступні дії. Це зніме блокування нових дій; старий виклик не повториться й не стане успішним. Активний виклик розблокувати не можна.") },
