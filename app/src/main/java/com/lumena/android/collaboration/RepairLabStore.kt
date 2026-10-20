@@ -22,6 +22,8 @@ object RepairLabStore {
     private val adapter = Moshi.Builder().add(KotlinJsonAdapterFactory()).build().adapter(RepairLabState::class.java).failOnUnknown()
     private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).callTimeout(8, TimeUnit.SECONDS).build()
     private const val GGUF_CACHE_KEY = "gguf_digest_cache_v1"
+    // Project IDs are alphanumeric/hyphenated, unlike other preference keys.
+    private val LAB_STATE_KEY = Regex("repair_lab_[A-Za-z0-9-]{1,80}")
     private fun prefs(c: Context) = c.applicationContext.getSharedPreferences("lumena_collaboration", Context.MODE_PRIVATE)
     private fun key(project: String) = "repair_lab_$project"
     fun load(c: Context, project: String): RepairLabState? = synchronized(monitor) {
@@ -164,7 +166,7 @@ object RepairLabStore {
         save(c, state.copy(rows = state.rows.map { if (it.taskId == task.id) it.copy(ended = true) else it }))
     }
     fun snapshots(c: Context): Map<String, String> = synchronized(monitor) {
-        val current = prefs(c).all.filterKeys { it.startsWith("repair_lab_") && it != "repair_lab_gguf" }
+        val current = prefs(c).all.filterKeys { it != "repair_lab_gguf" && LAB_STATE_KEY.matches(it) }
             .values.filterIsInstance<String>()
             .mapNotNull { adapter.fromJson(it) }.associate { "lab/current-${it.config.id}.json" to adapter.toJson(it) }
         val past = c.noBackupFilesDir.resolve("repair-lab-history").listFiles().orEmpty().filter { it.extension == "json" }

@@ -2,7 +2,7 @@ name: Project memory regression
 
 on:
   push:
-    branches: [ "codex/daily-project-memory", "codex/verified-collaboration-handoff", "feature/collaboration-local-state-card", "codex/daily-context-os-v1", "codex/verified-experience-loop", "feature/experience-loop-fixes-v1", "feature/ci2333-phone-stability-fixes-v1" ]
+    branches: [ "codex/daily-project-memory", "codex/verified-collaboration-handoff", "feature/collaboration-local-state-card", "codex/daily-context-os-v1", "codex/verified-experience-loop", "feature/experience-loop-fixes-v1", "feature/ci2333-phone-stability-fixes-v1", "fix/ci2337-repair-relevance-image-previews-ux-v1" ]
   workflow_dispatch:
 
 permissions:
@@ -71,6 +71,10 @@ jobs:
               assert int(root.get('tests', 0)) >= minimum, name
               assert all(int(root.get(k, 0)) == 0 for k in ('failures', 'errors', 'skipped')), name
               print('VERIFIED', name, root.get('tests'))
+          repair_files = list(Path('app/build/test-results/testDebugUnitTest').glob('TEST-*.RepairCasePolicyTest.xml'))
+          assert len(repair_files) == 1
+          assert any(case.get('name') == 'siblingFailedTestNeedsMeaningfulFailureOverlap'
+                     for case in E.parse(repair_files[0]).getroot().iter('testcase')), 'SIBLING_TEST_NOT_RUN'
           PY
       - uses: actions/upload-artifact@v4
         if: always()
@@ -79,9 +83,9 @@ jobs:
           path: app/build/test-results/testDebugUnitTest/TEST-*.xml
           if-no-files-found: error
       - name: Kill collaboration semantic mutants with exact-case oracles
-        if: github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card' || github.ref_name == 'codex/daily-context-os-v1' || github.ref_name == 'codex/verified-experience-loop' || github.ref_name == 'feature/ci2333-phone-stability-fixes-v1'
+        if: github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card' || github.ref_name == 'codex/daily-context-os-v1' || github.ref_name == 'codex/verified-experience-loop' || github.ref_name == 'feature/ci2333-phone-stability-fixes-v1' || github.ref_name == 'fix/ci2337-repair-relevance-image-previews-ux-v1'
         env:
-          LUMENA_MUTANT_ONLY: ${{ github.ref_name == 'feature/ci2333-phone-stability-fixes-v1' && 'generic-message-joins-tests,reads-consume-repair-steps' || '' }}
+          LUMENA_MUTANT_ONLY: ${{ github.ref_name == 'fix/ci2337-repair-relevance-image-previews-ux-v1' && 'same-file-unrelated-message' || (github.ref_name == 'feature/ci2333-phone-stability-fixes-v1' && 'generic-message-joins-tests,reads-consume-repair-steps' || '') }}
         run: python scripts/collaboration_probe.py
       - name: Kill file-CAS semantic mutant with an unrelated passing control
         run: python scripts/daily_context_file_probe.py
@@ -110,7 +114,7 @@ jobs:
           print('VERIFIED backup privacy boundaries')
           PY
       - uses: actions/upload-artifact@v4
-        if: always() && (github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card' || github.ref_name == 'codex/daily-context-os-v1' || github.ref_name == 'codex/verified-experience-loop' || github.ref_name == 'feature/ci2333-phone-stability-fixes-v1')
+        if: always() && (github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card' || github.ref_name == 'codex/daily-context-os-v1' || github.ref_name == 'codex/verified-experience-loop' || github.ref_name == 'feature/ci2333-phone-stability-fixes-v1' || github.ref_name == 'fix/ci2337-repair-relevance-image-previews-ux-v1')
         with:
           name: collaboration-semantic-probe
           path: app/build/collaboration-probe/

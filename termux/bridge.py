@@ -2572,6 +2572,30 @@ def _read_json_response(
     return payload
 
 
+# Search-result media is untrusted. Accept established public HTTPS image CDNs
+# only, without credentials, nonstandard ports, fragments or private-IP hosts.
+_IMAGE_PREVIEW_CDNS = frozenset({
+    "api.openverse.org", "openverse.org", "images.unsplash.com",
+    "live.staticflickr.com", "images.pexels.com", "cdn.pixabay.com",
+    "upload.wikimedia.org",
+})
+
+
+def _trusted_image_preview(url: str, *, wikimedia: bool = False) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        host = (parsed.hostname or "").lower()
+        if (parsed.scheme != "https" or not host or parsed.username is not None
+                or parsed.password is not None or parsed.port not in (None, 443)
+                or parsed.fragment):
+            return False
+        if wikimedia:
+            return host == "wikimedia.org" or host.endswith(".wikimedia.org")
+        return host in _IMAGE_PREVIEW_CDNS or host.endswith(".openverse.org")
+    except ValueError:
+        return False
+
+
 def _wikimedia_image_search(
     query: str,
     limit: int,
@@ -2619,21 +2643,13 @@ def _wikimedia_image_search(
         source_page = str(info.get("descriptionurl") or "").strip()
         mime = str(info.get("mime") or "").strip().lower()
 
-        parsed_thumb = urllib.parse.urlsplit(thumbnail)
-        if (
-            parsed_thumb.scheme != "https" or
-            not (parsed_thumb.hostname or "").lower().endswith("wikimedia.org")
-        ):
+        if not _trusted_image_preview(thumbnail, wikimedia=True):
             continue
         if mime and not mime.startswith("image/"):
             continue
 
         if source_page:
-            parsed_source = urllib.parse.urlsplit(source_page)
-            if (
-                parsed_source.scheme != "https" or
-                not (parsed_source.hostname or "").lower().endswith("wikimedia.org")
-            ):
+            if not _trusted_image_preview(source_page, wikimedia=True):
                 source_page = ""
 
         images.append({
@@ -2686,13 +2702,7 @@ def _openverse_image_search(
         title = str(item.get("title") or "").strip()
         mime = str(item.get("filetype") or "").strip().lower()
 
-        parsed_thumb = urllib.parse.urlsplit(thumbnail)
-        thumb_host = (parsed_thumb.hostname or "").lower()
-        if (
-            parsed_thumb.scheme != "https" or
-            thumb_host not in {"api.openverse.org", "openverse.org"} and
-            not thumb_host.endswith(".openverse.org")
-        ):
+        if not _trusted_image_preview(thumbnail):
             continue
 
         source_page = (

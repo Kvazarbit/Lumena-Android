@@ -191,7 +191,8 @@ class ExperienceLoopStorageTest {
     @Test fun ggufDigestCacheCannotBreakProjectArchiveExport() = runBlocking {
         c.getSharedPreferences("lumena_collaboration", Context.MODE_PRIVATE).edit()
             .putString("repair_lab_gguf", "legacy-key=not-json")
-            .putString("gguf_digest_cache_v1", "new-key=not-json").commit()
+            .putString("gguf_digest_cache_v1", "new-key=not-json")
+            .putString("repair_lab_unrelated_pref", "not-json").commit()
         val exported = export()
         assertTrue(unzip(exported).containsKey("integrity.json"))
         assertFalse(unzip(exported).keys.any { it.contains("gguf") })

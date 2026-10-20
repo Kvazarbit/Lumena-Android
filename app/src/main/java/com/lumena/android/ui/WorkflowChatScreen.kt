@@ -2291,8 +2291,15 @@ fun WorkflowChatScreen(
                 showProjects = true
             }
         }) {
-            Text(workspaceState.projects.firstOrNull { it.id == workspaceProjectId }?.let { "Проєкт: ${it.name} · задачі й контекст" }
-                ?: "Проєкти · локальна ОС контексту")
+            Column {
+                Text("📁 ПРОЄКТИ · папки Termux", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    workspaceState.projects.firstOrNull { it.id == workspaceProjectId }?.let {
+                        "Активний: ${it.name} · ${it.root}"
+                    } ?: "Проєкт не вибрано — натисни, щоб додати або відкрити",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
 
         LazyColumn(

@@ -146,6 +146,24 @@ object RepairCasePolicy {
         if (x.isEmpty() || y.isEmpty()) return 0.0
         return x.intersect(y).size.toDouble() / x.union(y).size
     }
+    // Same-file fallback cannot trust generic exception boilerplate alone.
+    private val genericDiagnostics = setOf(
+        "assert", "assertionerror", "error", "exception", "failure", "failed",
+        "expected", "actual", "got", "true", "false", "none", "null"
+    )
+    private fun diagnosticTerms(text: String): Set<String> =
+        tokens(text.substringAfter('|', "")).filter { term ->
+            term.length >= 3 && term.any { ch -> ch.isLetter() } &&
+                term !in genericDiagnostics
+        }.toSet()
+
+    private fun meaningfulOverlap(a: String, b: String): Double {
+        val x = diagnosticTerms(a)
+        val y = diagnosticTerms(b)
+        if (x.isEmpty() || y.isEmpty()) return 0.0
+        return x.intersect(y).size.toDouble() / x.union(y).size
+    }
+
     private fun kind(failure: String) = failure.substringBefore('|')
     private fun testFile(testId: String) = testId.substringBefore("::")
 
@@ -163,7 +181,8 @@ object RepairCasePolicy {
             val rank = when {
                 c.testId.isNotEmpty() && c.testId == episode.testId -> 0
                 c.testId.isNotEmpty() && episode.testId.isNotEmpty() && testFile(c.testId) == testFile(episode.testId) &&
-                    kind(c.failure).isNotEmpty() && kind(c.failure) == kind(episode.failure) -> 1
+                    kind(c.failure).isNotEmpty() && kind(c.failure) == kind(episode.failure) &&
+                    meaningfulOverlap(c.failure, episode.failure) >= 0.35 -> 1
                 // Legacy exact match only without test identities: a generic message must not join different tests.
                 c.scope == episode.scope && c.check == episode.check && c.signature == episode.signature &&
                     (c.testId.isEmpty() || episode.testId.isEmpty()) -> 2

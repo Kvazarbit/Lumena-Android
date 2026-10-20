@@ -145,8 +145,10 @@ class RepairCasePolicyTest {
 
     @Test fun sameTestRanksAboveSameFileAndOtherProjectsNeverMatch() {
         val exact = namedCase()
-        val sibling = exact.copy(id = "sibling", testId = "tests/test_calc.py::tests.test_calc::test_two", at = exact.at + 100)
-        val episode = openEpisode(named.copy(boundaryHash = "9".repeat(64)))
+        val sibling = exact.copy(id = "sibling", testId = "tests/test_calc.py::tests.test_calc::test_two",
+            failure = "AssertionError|index position out of range", at = exact.at + 100)
+        val episode = openEpisode(named.copy(boundaryHash = "9".repeat(64),
+            failureSummary = "AssertionError|index position out of range"))
         assertEquals(listOf(exact.id, "sibling"), RepairCasePolicy.eligible(listOf(exact, sibling), episode).map { it.id })
         val foreign = exact.copy(id = "foreign", project = RepairCasePolicy.project("elsewhere", "other"))
         assertTrue("FOREIGN_PROJECT_CASE", RepairCasePolicy.eligible(listOf(foreign), episode).isEmpty())
@@ -179,4 +181,25 @@ class RepairCasePolicyTest {
         assertEquals("UNRESOLVED", s.episodes.single().status)
         assertEquals("READ_LIMIT", s.episodes.single().reason)
     }
+
+    @Test fun siblingFailedTestNeedsMeaningfulFailureOverlap() {
+        val generic = namedCase()
+        val unrelated = openEpisode(named.copy(
+            failedTestId = "tests/test_calc.py::tests.test_calc::test_unrelated",
+            failureSummary = "AssertionError|assert 9 == 12"
+        ))
+        assertTrue("SIBLING_DIAGNOSTIC_MISMATCH",
+            RepairCasePolicy.eligible(listOf(generic), unrelated).isEmpty())
+
+        val specific = named.copy(failureSummary = "ValueError|calculation limit exceeded")
+        val case = RepairCasePolicy.derive(listOf(
+            event("python.tests", false, proof = specific), patch(), pass()
+        )).cases.single()
+        val related = openEpisode(specific.copy(
+            failedTestId = "tests/test_calc.py::tests.test_calc::test_other",
+            failureSummary = "ValueError|calculation limit reached"
+        ))
+        assertEquals(listOf(case.id), RepairCasePolicy.eligible(listOf(case), related).map { it.id })
+    }
+
 }
