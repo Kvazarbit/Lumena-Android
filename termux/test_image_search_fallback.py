@@ -60,3 +60,48 @@ class ImageSearchFallbackTests(unittest.TestCase):
         with patch.object(self.bridge, "PUBLIC_HTTPS_OPENER", Opener()):
             with self.assertRaisesRegex(ValueError, "No displayable images"):
                 self.bridge.image_search({"query": "portrait", "limit": 1})
+
+    def test_curated_public_cdn_previews_without_private_or_spoofed_urls(self):
+        thumbnails = [
+            "https://images.unsplash.com/photo-123?auto=format",
+            "https://live.staticflickr.com/123/456.jpg",
+            "https://images.unsplash.com.evil.example/photo.jpg",
+            "http://images.unsplash.com/photo.jpg",
+            "https://127.0.0.1/secret.jpg",
+            "https://user:secret@images.unsplash.com/secret.jpg",
+            "https://images.unsplash.com:8443/private.jpg",
+        ]
+        payload = {"results": [
+            {"id": str(i), "title": "Portrait", "thumbnail": url, "filetype": "jpeg"}
+            for i, url in enumerate(thumbnails)
+        ]}
+
+        class Opener:
+            def open(self, request, timeout):
+                if "commons.wikimedia.org" in request.full_url:
+                    return FakeResponse()
+                return FakeResponse(payload)
+
+        with patch.object(self.bridge, "PUBLIC_HTTPS_OPENER", Opener()):
+            result = self.bridge.image_search({"query": "portrait", "limit": 8})
+        data = json.loads(result["stdout"])
+        self.assertEqual(thumbnails[:2], [item["thumbnail_url"] for item in data["images"]])
+
+    def test_wikimedia_lookalike_domain_cannot_supply_preview(self):
+        payload = {"query": {"pages": [{
+            "title": "File:Portrait.jpg",
+            "imageinfo": [{
+                "thumburl": "https://evilwikimedia.org/private.jpg",
+                "url": "https://evilwikimedia.org/private.jpg",
+                "descriptionurl": "https://evilwikimedia.org/Portrait",
+                "mime": "image/jpeg",
+            }],
+        }]}}
+
+        class Opener:
+            def open(self, request, timeout):
+                return FakeResponse(payload)
+
+        with patch.object(self.bridge, "PUBLIC_HTTPS_OPENER", Opener()):
+            self.assertEqual([], self.bridge._wikimedia_image_search("portrait", 4, 2))
+
