@@ -188,6 +188,14 @@ class ExperienceLoopStorageTest {
         assertTrue(result.ok)
         assertEquals("[\"tests\"]", boundary)
     }
+    @Test fun ggufDigestCacheCannotBreakProjectArchiveExport() = runBlocking {
+        c.getSharedPreferences("lumena_collaboration", Context.MODE_PRIVATE).edit()
+            .putString("repair_lab_gguf", "legacy-key=not-json")
+            .putString("gguf_digest_cache_v1", "new-key=not-json").commit()
+        val exported = export()
+        assertTrue(unzip(exported).containsKey("integrity.json"))
+        assertFalse(unzip(exported).keys.any { it.contains("gguf") })
+    }
     @Test fun labCountersSurviveColdLoadAndExportButNeverReactivateOnImport() = runBlocking {
         val id = java.util.UUID.randomUUID().toString()
         val cfg = RepairLabConfig(id, RepairCasePolicy.scope(p), p.id, "local", "a".repeat(64), "build", "phone", emptyList())

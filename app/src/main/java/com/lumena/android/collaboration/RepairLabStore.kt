@@ -21,6 +21,7 @@ object RepairLabStore {
     private val monitor = Any()
     private val adapter = Moshi.Builder().add(KotlinJsonAdapterFactory()).build().adapter(RepairLabState::class.java).failOnUnknown()
     private val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).callTimeout(8, TimeUnit.SECONDS).build()
+    private const val GGUF_CACHE_KEY = "gguf_digest_cache_v1"
     private fun prefs(c: Context) = c.applicationContext.getSharedPreferences("lumena_collaboration", Context.MODE_PRIVATE)
     private fun key(project: String) = "repair_lab_$project"
     fun load(c: Context, project: String): RepairLabState? = synchronized(monitor) {
@@ -50,12 +51,13 @@ object RepairLabStore {
             null, null, null)?.use { row -> if (row.moveToFirst() && !row.isNull(0)) row.getLong(0) else null }
             ?: c.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length })
         if (size == null || size <= 0L) return null
-        val key = RepairLabPolicy.modelFileKey(path, size)
-        val cached = prefs(c).getString("repair_lab_gguf", null)?.split('=', limit = 2)
+        val key = RepairLabPolicy.modelFileKey(path, size, if (local) file.lastModified() else 0L)
+        val cached = prefs(c).getString(GGUF_CACHE_KEY, null)?.split('=', limit = 2)
         if (!force && cached != null && cached.size == 2 && cached[0] == key && cached[1].matches(Regex("[a-f0-9]{64}"))) return cached[1]
         val digest = (if (local) file.inputStream() else requireNotNull(c.contentResolver.openInputStream(uri)))
             .use(RepairLabPolicy::sha256)
-        check(prefs(c).edit().putString("repair_lab_gguf", "$key=$digest").commit())
+        check(prefs(c).edit().putString(GGUF_CACHE_KEY, "$key=$digest")
+            .remove("repair_lab_gguf").commit())
         return digest
     }
     /** No owner text is sent. Digest is fetched from the attested loopback model service or the local GGUF file. */
@@ -162,7 +164,8 @@ object RepairLabStore {
         save(c, state.copy(rows = state.rows.map { if (it.taskId == task.id) it.copy(ended = true) else it }))
     }
     fun snapshots(c: Context): Map<String, String> = synchronized(monitor) {
-        val current = prefs(c).all.filterKeys { it.startsWith("repair_lab_") }.values.filterIsInstance<String>()
+        val current = prefs(c).all.filterKeys { it.startsWith("repair_lab_") && it != "repair_lab_gguf" }
+            .values.filterIsInstance<String>()
             .mapNotNull { adapter.fromJson(it) }.associate { "lab/current-${it.config.id}.json" to adapter.toJson(it) }
         val past = c.noBackupFilesDir.resolve("repair-lab-history").listFiles().orEmpty().filter { it.extension == "json" }
             .associate { "lab/archive-${it.name}" to it.readText().also { body -> require(body.length <= 256_000) } }

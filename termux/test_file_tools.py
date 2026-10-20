@@ -149,7 +149,7 @@ class FileReadRangeTest(unittest.TestCase):
 
         health = self.b.execute_tool("health", {})
         self.assertIn("read_only_roots=@phone", health["stdout"])
-        self.assertIn("version=0.34", health["stdout"])
+        self.assertIn("version=0.35", health["stdout"])
         self.assertIn("failed_test_id_v1", health["stdout"])
         self.assertIn("file_cas_v1", health["stdout"])
 

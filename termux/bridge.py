@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/python
 """
-Lumena Termux Bridge v0.34
+Lumena Termux Bridge v0.35
 
 Local-only bridge between Lumena Companion and Termux.
 It binds to 127.0.0.1 only, uses a bearer token, constrains write access
@@ -2546,16 +2546,22 @@ def _read_json_response(
         raise ValueError(f"{provider} HTTP {exc.code}: {body[:1000]}") from exc
     except urllib.error.URLError as exc:
         raise ValueError(f"{provider} image search failed: {exc.reason}") from exc
+    except (TimeoutError, OSError) as exc:
+        raise ValueError(f"{provider} image connection failed ({type(exc).__name__}): {exc}") from exc
 
-    with response:
-        raw = response.read(MAX_HTTP_JSON + 1)
-        if len(raw) > MAX_HTTP_JSON:
-            raise ValueError(f"{provider} response exceeds 2 MiB limit")
-        raw = _decode_bounded_http_body(
-            raw,
-            response.headers,
-            label=f"{provider} response",
-        )
+    try:
+        with response:
+            raw = response.read(MAX_HTTP_JSON + 1)
+            if len(raw) > MAX_HTTP_JSON:
+                raise ValueError(f"{provider} response exceeds 2 MiB limit")
+            raw = _decode_bounded_http_body(
+                raw,
+                response.headers,
+                label=f"{provider} response",
+            )
+    except (TimeoutError, OSError) as exc:
+        # Timeout is provider-local: the second public provider is still tried.
+        raise ValueError(f"{provider} image read failed ({type(exc).__name__}): {exc}") from exc
 
     try:
         payload = json.loads(raw.decode("utf-8"))
@@ -4011,7 +4017,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
                 f"workspace={WORKSPACE}\n"
                 f"read_only_roots={','.join('@' + alias for alias, root in READONLY_ALIASES.items() if root.exists()) or '(none)'}\n"
                 f"read_roots_config={READ_ROOTS_FILE}\n"
-                f"version=0.34\n"
+                f"version=0.35\n"
                 f"features=http_get_links_v1,execution_timeout_integral_decimal_v1,search_explicit_constraints_v1,python_clean_env_v1,python_run_sha256_v1,project_workspace_v1,python_fresh_bytecode_v1,file_cas_v1,verification_boundary_v1,failed_test_id_v1\n"
                 f"bridge_run_id={BRIDGE_RUN_ID}\n"
                 f"last_web_search_status={search_diag.get('status') or '(none)'}\n"
@@ -4432,7 +4438,7 @@ def execute_tool(tool: str, args: dict[str, Any], request_id: str | None = None)
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LumenaBridge/0.30"
+    server_version = "LumenaBridge/0.35"
     protocol_version = "HTTP/1.1"
 
     def setup(self) -> None:
@@ -4475,7 +4481,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/":
-            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.27",
+            self._json(200, {"ok": True, "service": "lumena-termux-bridge", "version": "0.35",
                              "bridge_run_id": BRIDGE_RUN_ID})
             return
         self._json(404, {"ok": False, "error": "Not found"})
@@ -4529,7 +4535,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     _mark_interrupted_search_from_previous_run()
-    print("Lumena Termux Bridge v0.34")
+    print("Lumena Termux Bridge v0.35")
     print(f"Listening: http://{HOST}:{PORT}")
     print(f"Workspace: {WORKSPACE}")
     print(f"Token: {TOKEN}")

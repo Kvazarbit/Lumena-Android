@@ -19,7 +19,8 @@ object RepairLabPolicy {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
     /** Cache key of a hashed model file: a different file or size means a fresh hash. */
-    fun modelFileKey(path: String, size: Long): String = CollaborationProtocol.hash("gguf|$size|$path")
+    fun modelFileKey(path: String, size: Long, modified: Long = 0L): String =
+        CollaborationProtocol.hash("gguf|$size|$modified|$path")
     fun arm(experiment: String, episode: String): Boolean =
         CollaborationProtocol.hash("repair-50/50|$experiment|$episode").take(8).toLong(16) % 2L == 0L
 

@@ -94,5 +94,7 @@ class RepairLabPolicyTest {
         assertEquals(expected, RepairLabPolicy.sha256(big.inputStream()))
         assertNotEquals(RepairLabPolicy.modelFileKey("content://m/gemma.gguf", 10), RepairLabPolicy.modelFileKey("content://m/gemma.gguf", 11))
         assertNotEquals(RepairLabPolicy.modelFileKey("content://m/a.gguf", 10), RepairLabPolicy.modelFileKey("content://m/b.gguf", 10))
+        assertNotEquals(RepairLabPolicy.modelFileKey("/models/a.gguf", 10, 100),
+            RepairLabPolicy.modelFileKey("/models/a.gguf", 10, 101))
     }
 }
