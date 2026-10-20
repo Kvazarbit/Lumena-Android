@@ -8,6 +8,8 @@ Android companion / local-agent client built with Kotlin + Jetpack Compose.
 
 The daily-context stage needs Bridge 0.32 (`file_cas_v1`) for Local project writes.
 The verified-experience stage needs Bridge 0.33 (`verification_boundary_v1`) to collect repair cases.
+For the ci2333 phone-stability branch, Android 0.12.35 requires Bridge 0.35; update both together.
+See [phone-stability fixes and remaining limits](docs/ci2333-phone-stability-fixes.uk.md).
 Update the APK and the Termux bridge together. Project context is local by default;
 remote inference requires explicit, device-local owner consent in project settings.
 

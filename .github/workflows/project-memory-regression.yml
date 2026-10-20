@@ -2,7 +2,7 @@ name: Project memory regression
 
 on:
   push:
-    branches: [ "codex/daily-project-memory", "codex/verified-collaboration-handoff", "feature/collaboration-local-state-card", "codex/daily-context-os-v1", "codex/verified-experience-loop", "feature/experience-loop-fixes-v1" ]
+    branches: [ "codex/daily-project-memory", "codex/verified-collaboration-handoff", "feature/collaboration-local-state-card", "codex/daily-context-os-v1", "codex/verified-experience-loop", "feature/experience-loop-fixes-v1", "feature/ci2333-phone-stability-fixes-v1" ]
   workflow_dispatch:
 
 permissions:
@@ -79,7 +79,9 @@ jobs:
           path: app/build/test-results/testDebugUnitTest/TEST-*.xml
           if-no-files-found: error
       - name: Kill collaboration semantic mutants with exact-case oracles
-        if: github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card' || github.ref_name == 'codex/daily-context-os-v1' || github.ref_name == 'codex/verified-experience-loop'
+        if: github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card' || github.ref_name == 'codex/daily-context-os-v1' || github.ref_name == 'codex/verified-experience-loop' || github.ref_name == 'feature/ci2333-phone-stability-fixes-v1'
+        env:
+          LUMENA_MUTANT_ONLY: ${{ github.ref_name == 'feature/ci2333-phone-stability-fixes-v1' && 'generic-message-joins-tests,reads-consume-repair-steps' || '' }}
         run: python scripts/collaboration_probe.py
       - name: Kill file-CAS semantic mutant with an unrelated passing control
         run: python scripts/daily_context_file_probe.py
@@ -108,7 +110,7 @@ jobs:
           print('VERIFIED backup privacy boundaries')
           PY
       - uses: actions/upload-artifact@v4
-        if: always() && (github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card' || github.ref_name == 'codex/daily-context-os-v1' || github.ref_name == 'codex/verified-experience-loop')
+        if: always() && (github.ref_name == 'codex/verified-collaboration-handoff' || github.ref_name == 'feature/collaboration-local-state-card' || github.ref_name == 'codex/daily-context-os-v1' || github.ref_name == 'codex/verified-experience-loop' || github.ref_name == 'feature/ci2333-phone-stability-fixes-v1')
         with:
           name: collaboration-semantic-probe
           path: app/build/collaboration-probe/

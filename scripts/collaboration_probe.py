@@ -102,11 +102,16 @@ def run(selected, label):
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    selected = sorted({m[4] for m in MUTANTS} | {m[6] for m in MUTANTS})
+    requested = {x.strip() for x in os.environ.get("LUMENA_MUTANT_ONLY", "").split(",") if x.strip()}
+    if requested:
+        assert requested <= {m[0] for m in MUTANTS}, "UNKNOWN_MUTANT_FILTER"
+    mutants = [m for m in MUTANTS if not requested or m[0] in requested]
+    assert mutants, "EMPTY_MUTANT_SELECTION"
+    selected = sorted({m[4] for m in mutants} | {m[6] for m in mutants})
     code, baseline = run(selected, "baseline")
     assert code == 0 and set(baseline) == set(selected) and all(not marks for marks in baseline.values()), "INVALID_BASELINE"
     results = []
-    for name, file, old, new, target, reason, control in MUTANTS:
+    for name, file, old, new, target, reason, control in mutants:
         path = BASE / file
         original = path.read_bytes()
         text = original.decode("utf-8")
@@ -121,7 +126,7 @@ def main():
             print("KILLED_EXPECTED", name, flush=True)
         finally:
             path.write_bytes(original)
-    (OUT / "report.json").write_text(json.dumps({"schema": "lumena.collaboration-probe.v1", "source_sha": os.environ.get("GITHUB_SHA", "UNKNOWN"), "baseline": "PASS", "mutants": results}, indent=2), encoding="utf-8")
+    (OUT / "report.json").write_text(json.dumps({"schema": "lumena.collaboration-probe.v1", "source_sha": os.environ.get("GITHUB_SHA", "UNKNOWN"), "baseline": "PASS", "requested_mutants": sorted(requested), "mutants": results}, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":
