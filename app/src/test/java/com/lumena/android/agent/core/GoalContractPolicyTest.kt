@@ -669,4 +669,28 @@ class GoalContractPolicyTest {
     }
 
 
+    @Test fun writeWorkspacePermissionDoesNotDemandMutation() {
+        val goal = "Перевір існуючий код. Не створюй і не змінюй файли. " +
+            "Запусти python.tests з cwd=. та argv=-q. " +
+            "Дозволяю EXECUTE_CODE та WRITE_WORKSPACE для службових файлів pytest."
+        val contract = GoalContractPolicy.initial(TaskIntent.CODE_WORK, emptySet(), false, goal)
+        assertEquals("executable", contract.criteria.first { it.id == "code-action-evidence" }.subject)
+        assertEquals(CriterionStatus.PASSED,
+            recorded(contract, AgentDecision.ToolCall("python.tests", mapOf("cwd" to ".")), true)
+                .first.criteria.first { it.id == "code-action-evidence" }.status)
+    }
+
+    @Test fun requestedRepairStillRequiresMutation() {
+        val goal = "Не змінюй test_repair_probe.py. Виправ repair_probe.py, " +
+            "виконай python.tests. Дозволяю WRITE_WORKSPACE для pytest."
+        val contract = GoalContractPolicy.initial(TaskIntent.CODE_WORK, emptySet(), false, goal)
+        assertEquals("mutating", contract.criteria.first { it.id == "code-action-evidence" }.subject)
+    }
+
+    @Test fun filenameWritePyDoesNotMeanEdit() {
+        val contract = GoalContractPolicy.initial(
+            TaskIntent.CODE_WORK, emptySet(), false, "Запусти тести для write.py"
+        )
+        assertEquals("executable", contract.criteria.first { it.id == "code-action-evidence" }.subject)
+    }
 }

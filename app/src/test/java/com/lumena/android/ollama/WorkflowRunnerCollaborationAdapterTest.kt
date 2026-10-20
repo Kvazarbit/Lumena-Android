@@ -181,4 +181,22 @@ class WorkflowRunnerCollaborationAdapterTest {
         assertTrue(seen.isNotEmpty())
         assertEquals(outcome.toString(), baseline::class, outcome::class)
     }
+    @Test fun privacyDenialStopsWithoutModelRetry() = runBlocking {
+        var calls = 0
+        val model = object : ChatModelClient {
+            override suspend fun chat(model: String, messages: List<OllamaMessage>): Result<String> {
+                calls++
+                return Result.failure(IllegalStateException("PROJECT_CONTEXT_PRIVATE: consent required"))
+            }
+        }
+        val result = WorkflowRunner(model, null, "cloud-fixture").run(
+            listOf(OllamaMessage("user", "Поясни стан.")),
+            TaskState("privacy-check", "project", "Поясни стан.", projectRoot = "demo")
+        )
+        assertEquals("PRIVATE_REFUSAL_RETRIED", 1, calls)
+        assertTrue(result is WorkflowOutcome.Failed)
+        val failure = result as WorkflowOutcome.Failed
+        assertTrue(failure.message.contains("PROJECT_CONTEXT_PRIVATE"))
+        assertEquals(com.lumena.android.agent.core.TaskStatus.PARTIAL, failure.control.task.status)
+    }
 }

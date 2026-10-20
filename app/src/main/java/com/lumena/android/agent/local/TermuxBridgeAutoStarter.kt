@@ -39,9 +39,9 @@ object TermuxBridgeAutoStarter {
     private const val BRIDGE_SCRIPT = "$TERMUX_HOME/.lumena/bridge.py"
 
     private val probeClient = OkHttpClient.Builder()
-        .connectTimeout(450, TimeUnit.MILLISECONDS)
-        .readTimeout(700, TimeUnit.MILLISECONDS)
-        .callTimeout(900, TimeUnit.MILLISECONDS)
+        .connectTimeout(1100, TimeUnit.MILLISECONDS)
+        .readTimeout(1500, TimeUnit.MILLISECONDS)
+        .callTimeout(2000, TimeUnit.MILLISECONDS)
         .build()
 
     suspend fun ensureRunning(context: Context, base: HttpUrl): Result<Unit> = withContext(Dispatchers.IO) {
@@ -50,7 +50,9 @@ object TermuxBridgeAutoStarter {
                 "Bridge auto-start is allowed only for loopback URLs"
             }
 
-            if (isAlive(base)) return@runCatching
+            // A transient mobile stall must not force RUN_COMMAND permission.
+            // Only read-only liveness probes are retried, never a tool action.
+            if (BridgePresencePolicy.reachable({ isAlive(base) }, { delay(200) })) return@runCatching
 
             val app = context.applicationContext
             val installed = runCatching {
@@ -66,7 +68,7 @@ object TermuxBridgeAutoStarter {
                     )
                 }
                 throw IllegalStateException(
-                    "Allow Lumena the 'Run commands in Termux' permission, then retry."
+                    "Bridge unreachable after bounded probes. Grant 'Run commands in Termux' for auto-start, or start Bridge manually and retry."
                 )
             }
 

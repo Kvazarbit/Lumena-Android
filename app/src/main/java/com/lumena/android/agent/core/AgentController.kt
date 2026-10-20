@@ -388,6 +388,11 @@ class AgentController(
         proposed: AgentDecision.ToolCall,
         state: AgentControlState
     ): ControllerInstruction {
+        if (state.task.projectId != null && state.task.projectRoot == null &&
+            ProjectActivationGate.requiresRoot(proposed.tool)) {
+            val message = "PROJECT_SCOPE_NOT_ACTIVE: activate the project in Проєкти before workspace tools."
+            return ControllerInstruction.Stop(message, fail(state, message))
+        }
         val decision = try {
             ProjectToolScope.bind(proposed, state.task.projectRoot)
         } catch (failure: IllegalArgumentException) {

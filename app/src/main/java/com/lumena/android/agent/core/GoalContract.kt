@@ -546,46 +546,41 @@ object GoalContractPolicy {
                 .takeLast(MAX_EVIDENCE_PER_CRITERION)
         )
 
-    private fun codeActionRequirement(
-        goal: String
-    ): String? {
-        val lower = goal.lowercase()
-
-        val mutationTerms = listOf(
-            "створ",
-            "create",
-            "write",
-            "напис",
-            "реаліз",
-            "implement",
-            "виправ",
-            "fix",
-            "редаг",
-            "edit",
-            "patch",
-            "додай",
-            "add "
+    private fun codeActionRequirement(goal: String): String? {
+        // Permission names must never become mutation obligations.
+        val text = goal.replace(
+            Regex("(?iu)(?<![\\p{L}\\p{N}_])(?:ToolCapability\\.)?WRITE_WORKSPACE(?![\\p{L}\\p{N}_])"),
+            " "
         )
-        if (mutationTerms.any { lower.contains(it) }) {
-            return "mutating"
-        }
+        // Recognize whole directive words, not fragments in filenames or
+        // descriptive/permission clauses.
+        val mutate = Regex(
+            "(?iu)\\b(?:створи|створіть|створити|створюй|зміни|змініть|змінити|змінюй|" +
+                "виправ|виправи|виправте|виправити|редагуй|відредагуй|додай|додайте|онови|" +
+                "реалізуй|реалізувати|создай|создать|измени|исправь|редактируй|добавь|" +
+                "обнови|реализуй|create|write|edit|patch|fix|modify|implement|update|add|" +
+                "zmień|zmien|napraw|dodaj|utwórz|utworz)\\b"
+        )
+        val negativeOrPermission = Regex(
+            "(?iu)(?:\\b(?:не|ні|заборонено|дозволяю|дозволено|без|not|don't|never|" +
+                "allow|allowed|permission|nie)\\b\\s*(?:[\\p{L}\\p{N}_-]+\\s+){0,2})$"
+        )
+        if (mutate.findAll(text).any { match ->
+            val start = match.range.first
+            val end = match.range.last + 1
+            val identifier = (start > 0 && text[start - 1] == '.') ||
+                (end < text.length && text[end] == '.')
+            val prefix = text.substring(maxOf(0, start - 100), start)
+                .substringAfterLast(';').substringAfterLast('\n').trimEnd()
+            !identifier && !negativeOrPermission.containsMatchIn(prefix)
+        }) return "mutating"
 
         val executionTerms = listOf(
-            "запуст",
-            "run ",
-            "build",
-            "збір",
-            "компіля",
-            "compile",
-            "pytest",
-            "python.tests",
-            "тест"
+            "запуст", "run ", "build", "збір", "компіля",
+            "compile", "pytest", "python.tests", "тест"
         )
         if (TaskIntentRouter.isExplicitFileExecution(goal) ||
-            executionTerms.any { lower.contains(it) }) {
-            return "executable"
-        }
-
+            executionTerms.any { goal.lowercase().contains(it) }) return "executable"
         return null
     }
 

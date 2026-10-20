@@ -1949,6 +1949,16 @@ fun WorkflowChatScreen(
                     "NONE" ||
                     workResolution.continued
         ) ?: workResolution.projectId
+        // A project name in prose is not authorization to inspect the shared workspace.
+        com.lumena.android.agent.core.ProjectActivationGate.problem(
+            projectId, selectedWorkspace?.id
+        )?.let { problem ->
+            input = text // Keep the owner's draft until the correct project is activated.
+            workspaceError = problem
+            showProjects = true
+            persistSession()
+            return
+        }
         val selectedHistorical =
             HistoricalSessionMemory.select(
                 records =

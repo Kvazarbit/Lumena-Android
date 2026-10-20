@@ -506,6 +506,16 @@ class WorkflowRunner(
                 val error = replyResult.exceptionOrNull()
                 if (error is CancellationException) throw error
                 val failureMessage = error?.message ?: error?.javaClass?.simpleName.orEmpty()
+                // Owner privacy refusal is deterministic; model retries cannot change consent.
+                if (failureMessage.startsWith("PROJECT_CONTEXT_PRIVATE:")) {
+                    val blocked = state.copy(task = state.task.copy(
+                        status = TaskStatus.PARTIAL,
+                        lastResult = failureMessage.take(4000),
+                        errors = (state.task.errors + failureMessage).takeLast(8)
+                    ))
+                    publish(blocked, onState)
+                    return WorkflowOutcome.Failed(failureMessage, current, blocked)
+                }
                 val recovery = if (error is ModelOutputIncompleteException)
                     controller.onIncompleteModelOutput(state, failureMessage, error.outputRecoveryExhausted)
                 else controller.onModelFailure(state, failureMessage)
