@@ -145,8 +145,10 @@ class RepairCasePolicyTest {
 
     @Test fun sameTestRanksAboveSameFileAndOtherProjectsNeverMatch() {
         val exact = namedCase()
-        val sibling = exact.copy(id = "sibling", testId = "tests/test_calc.py::tests.test_calc::test_two", at = exact.at + 100)
-        val episode = openEpisode(named.copy(boundaryHash = "9".repeat(64)))
+        val sibling = exact.copy(id = "sibling", testId = "tests/test_calc.py::tests.test_calc::test_two",
+            failure = "AssertionError|index position out of range", at = exact.at + 100)
+        val episode = openEpisode(named.copy(boundaryHash = "9".repeat(64),
+            failureSummary = "AssertionError|index position out of range"))
         assertEquals(listOf(exact.id, "sibling"), RepairCasePolicy.eligible(listOf(exact, sibling), episode).map { it.id })
         val foreign = exact.copy(id = "foreign", project = RepairCasePolicy.project("elsewhere", "other"))
         assertTrue("FOREIGN_PROJECT_CASE", RepairCasePolicy.eligible(listOf(foreign), episode).isEmpty())

@@ -42,7 +42,8 @@ fun ProjectWorkspacePanel(
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Проєкти · локальний контекст", style = MaterialTheme.typography.titleLarge)
             ContextArchiveRestorePanel(onWorkspaceChanged)
-            Text("Каталог має бути доступний bridge у Termux. Для індексу потрібен bridge 0.30. Windows-папки самі на телефон не копіюються.")
+            Text("Тут реєструється ВЖЕ ІСНУЮЧА папка Termux. Це не Chats / New topic і не Context Genome.")
+            Text("Кнопка «Зберегти й відкрити» не створює папку. Спочатку створи її в Termux, наприклад: mkdir -p ~/lumena-workspace/demo", style = MaterialTheme.typography.bodySmall)
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             OutlinedButton(onClick = { onSelect(null) }) { Text("Звичайний чат") }
             projects.forEach { p ->
@@ -53,7 +54,7 @@ fun ProjectWorkspacePanel(
             TextButton(onClick = { adding = !adding; editingId = null; name = ""; root = ""; goal = ""; constraints = "" }) { Text(if (adding) "Згорнути додавання" else "Додати проєкт") }
             if (adding) {
                 OutlinedTextField(name, { name = it.take(80) }, label = { Text("Назва") }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(root, { root = it.take(360) }, enabled = editingId == null, label = { Text("Каталог у Termux: demo або @repo") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(root, { root = it.take(360) }, enabled = editingId == null, label = { Text("Існуючий каталог відносно lumena-workspace") }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(goal, { goal = it.take(1000) }, label = { Text("Мета проєкту") }, modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(constraints, { constraints = it.take(1400) }, label = { Text("Обмеження — по одному на рядок") }, modifier = Modifier.fillMaxWidth())
                 Text("Перевірка змін:")
