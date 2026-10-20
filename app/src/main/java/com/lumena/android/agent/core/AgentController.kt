@@ -388,7 +388,12 @@ class AgentController(
         proposed: AgentDecision.ToolCall,
         state: AgentControlState
     ): ControllerInstruction {
+        // A legacy unscoped task may use a logical project ID without a
+        // workspace root; it remains valid. Only a project capsule claiming
+        // filesystem context without its physical root is blocked here.
+        // New explicit project requests are gated at the UI selection boundary.
         if (state.task.projectId != null && state.task.projectRoot == null &&
+            state.task.projectContext != null &&
             ProjectActivationGate.requiresRoot(proposed.tool)) {
             val message = "PROJECT_SCOPE_NOT_ACTIVE: activate the project in Проєкти before workspace tools."
             return ControllerInstruction.Stop(message, fail(state, message))
